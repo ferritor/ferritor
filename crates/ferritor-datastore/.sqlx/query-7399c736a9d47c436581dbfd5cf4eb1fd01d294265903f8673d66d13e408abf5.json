@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE namespaces n\n                 SET version_floor = GREATEST(n.version_floor,\n                     (SELECT COALESCE(MAX(p.highest), 0) FROM paths p WHERE p.namespace_id = n.id))\n                 WHERE n.name = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7399c736a9d47c436581dbfd5cf4eb1fd01d294265903f8673d66d13e408abf5"
+}

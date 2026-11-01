@@ -1,0 +1,975 @@
+syntax = "proto3";
+
+package ferritor.v1;
+
+// Seal lifecycle and key management. Operator-facing.
+service SystemService {
+  // One-time initialization: generates the root key, splits it into
+  // `shares` Shamir shares with `threshold` required, and returns them once.
+  // FAILED_PRECONDITION with reason KEYS_DATABASE_MISMATCH if the keys
+  // database doesn't match the data database: the data database already
+  // holds secrets, whose KEKs were in a keys database that's gone.
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Status(StatusRequest) returns (StatusResponse);
+  // Submit one unseal share. The server unseals once `threshold` shares arrive.
+  rpc Unseal(UnsealRequest) returns (UnsealResponse);
+  rpc Seal(SealRequest) returns (SealResponse);
+
+  // Rekey: replace the root key and its shares, in two phases. First
+  // RekeySubmit `threshold` current shares; the last submit returns the new
+  // shares, but nothing is committed yet. Then RekeyVerify the new threshold of
+  // those new shares; only then is the new root key stored.
+  //
+  // Until verification completes the current shares stay valid, so a lost
+  // response means RekeyCancel (or seal) and start again, never a lost root key.
+  rpc RekeyStart(RekeyStartRequest) returns (RekeyStartResponse);
+  rpc RekeySubmit(RekeySubmitRequest) returns (RekeySubmitResponse);
+  rpc RekeyVerify(RekeyVerifyRequest) returns (RekeyVerifyResponse);
+  rpc RekeyCancel(RekeyCancelRequest) returns (RekeyCancelResponse);
+
+  // Rotate: add a new active KEK version to a namespace. Its old versions
+  // stay decrypt-only; other namespaces are untouched. FAILED_PRECONDITION
+  // with reason NO_NAMESPACE for a namespace that doesn't exist, or
+  // KEYS_DATABASE_MISMATCH if the keys database doesn't match the data
+  // database: the namespace's rows use a KEK version it doesn't have
+  // (restored from an older backup), which a rotation would reuse for a
+  // different key.
+  rpc RotateKek(RotateKekRequest) returns (RotateKekResponse);
+
+  // Rewrap: move DEKs still wrapped by older KEK versions of their namespace
+  // to its active one, then retire the versions no row uses any more. One
+  // namespace, or every one. Bounded per call: repeat until `done`. Safe to
+  // repeat or run concurrently.
+  rpc Rewrap(RewrapRequest) returns (RewrapResponse);
+  // Remove deleted secret versions for good once they're past the server's
+  // retention (its purge_deleted_after_days setting; not the caller's
+  // choice). Until then a deleted version can be brought back
+  // (RestoreSecret). Live versions are never touched, and version numbers
+  // are never freed. Bounded per call: repeat until `done`. Safe to repeat or run
+  // concurrently.
+  rpc Purge(PurgeRequest) returns (PurgeResponse);
+  // Destroy a retired KEK version of a namespace: erase its wrapped key for good, so
+  // nothing it wrapped can be decrypted any more, from any copy of the data
+  // database (crypto-shredding). Irreversible. Only a retired version
+  // (Rewrap retires a version once no row uses it); FAILED_PRECONDITION with
+  // reason NOT_RETIRED otherwise, or KEK_IN_USE if a server with an
+  // out-of-date keyring wrote with it since (run Rewrap until done, then
+  // again). First raises the data database's KEK floor past the version,
+  // after which no server can write with it; while it waits for the writes
+  // in flight, writes pause briefly. Safe to repeat: an already destroyed
+  // version answers destroyed = false.
+  rpc DestroyKek(DestroyKekRequest) returns (DestroyKekResponse);
+
+  // Namespaces: every secret belongs to the namespace named by its path's
+  // first segment, and each namespace has its own KEKs. There's no default
+  // namespace: create one before storing anything. All need the namespace
+  // permission.
+  //
+  // Create a namespace (or re-create a deleted one; its KEK numbering then
+  // continues). ALREADY_EXISTS if it's live; FAILED_PRECONDITION with reason
+  // KEYS_DATABASE_MISMATCH if the data database already has rows under the
+  // name (a keys database that lost it: restore that one instead).
+  //
+  // With past_lost_keks, the one way past that refusal, when no backup has
+  // the namespace (a failover lost its creation): only while it isn't live
+  // and the data database has rows under it (INVALID_ARGUMENT if none). Its
+  // first KEK goes one past every version still in use (by its rows, the
+  // floor, the keys database, and the KEKs the answering server still
+  // holds), and the floor is raised to it first, fencing off any server
+  // still writing with a lost KEK (ABORTED if one already did: refresh every
+  // server, then retry). Then rewrap, against a server holding the lost KEKs,
+  // moves the rows onto it. Call it on such a server.
+  rpc CreateNamespace(CreateNamespaceRequest) returns (CreateNamespaceResponse);
+  // Delete a namespace, only when empty: no row under it at all, deleted
+  // ones included (purge them once past the retention). Destroys every KEK
+  // of the namespace, so every data-database backup of it becomes
+  // undecryptable: needs the destroy_kek permission too. FAILED_PRECONDITION
+  // with reason NAMESPACE_NOT_EMPTY otherwise. Safe to repeat.
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
+  rpc GetNamespace(GetNamespaceRequest) returns (GetNamespaceResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  // Change a namespace's labels (merge, as UpdateLabels does for paths).
+  rpc UpdateNamespaceLabels(UpdateNamespaceLabelsRequest) returns (UpdateNamespaceLabelsResponse);
+
+  // Workload identity (the identity permission): the issuing CA that signs
+  // the short-lived client certificates workloads get in exchange for a
+  // platform token. Creates it (version 1): a new key, wrapped by the root
+  // key, and its self-signed certificate. ALREADY_EXISTS once there is one.
+  rpc IdentityInit(IdentityInitRequest) returns (IdentityInitResponse);
+  // Replaces the active issuing key with a new one. The old one's
+  // certificates stay trusted until they expire, unless `revoke`: then
+  // nothing it or any retired key signed is trusted from now on.
+  // FAILED_PRECONDITION without an issuing CA.
+  rpc IdentityRotate(IdentityRotateRequest) returns (IdentityRotateResponse);
+  // Every issuing key, without private parts.
+  rpc IdentityStatus(IdentityStatusRequest) returns (IdentityStatusResponse);
+}
+
+// Workload identity: a short-lived client certificate in exchange for a
+// token from a trusted issuer (a Kubernetes service account token, a CI
+// system's OIDC token). Served on its own listener ([identity]
+// listen_addr): TLS with the server's certificate, no client certificate
+// asked, nothing else served there.
+service IdentityService {
+  // Verifies `token` against the configured issuers, maps its claims to an
+  // identity, and signs a certificate for `csr`'s key: that one
+  // `ferritor://<identity>` URI SAN, client authentication only, valid for the
+  // configured lifetime and never past the token's own expiry. Use it on
+  // the main listener like any client certificate, and exchange again (a
+  // fresh token, a new key) before it expires.
+  // UNAUTHENTICATED with reason TOKEN_REFUSED: the token didn't verify or
+  // no mapping gives it an identity (the message says which).
+  // INVALID_ARGUMENT: the CSR is invalid, or its key type isn't accepted.
+  // FAILED_PRECONDITION with reason SEALED, or without an issuing CA.
+  rpc ExchangeToken(ExchangeTokenRequest) returns (ExchangeTokenResponse);
+}
+
+// Secret CRUD. Every secret path is canonical: segments of ASCII letters,
+// digits, `.`, `_` and `-` joined by `/`, with no leading, trailing or doubled
+// `/` and no `.` or `..` segment; at most 512 bytes. Anything else is rejected
+// with INVALID_ARGUMENT, not normalized.
+// Stored policies: the applications' grants, kept in the keys database and
+// managed here (the operators' rules are in ferritor.toml, read-only here). A
+// stored policy grants secret actions only. Every call needs the `policy`
+// action. Writes and reads of stored policies need the server unsealed
+// (FAILED_PRECONDITION, SEALED); if the stored set doesn't verify (changed in
+// the database behind the server's back, rolled back, its key cleared), a
+// put or delete is refused (UNAVAILABLE, POLICY_UNVERIFIED) and only
+// ApplyPolicies with prune replaces it.
+service PolicyService {
+  // Create or replace one policy. expected_version: 0 only creates; N only
+  // replaces version N (FAILED_PRECONDITION, VERSION_MISMATCH otherwise).
+  rpc PutPolicy(PutPolicyRequest) returns (PutPolicyResponse);
+  // Idempotent: a policy that doesn't exist answers deleted = false.
+  rpc DeletePolicy(DeletePolicyRequest) returns (DeletePolicyResponse);
+  // A stored policy, or a config rule by its `config:` name.
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse);
+  // Config rules and stored policies, by name, paged.
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse);
+  // Make the stored set match the given policies, in one transaction:
+  // create and replace them, and with prune delete every other stored
+  // policy. All or nothing. dry_run reports what would change.
+  rpc ApplyPolicies(ApplyPoliciesRequest) returns (ApplyPoliciesResponse);
+  // Whether an identity may do an action (on a path, for a secret action),
+  // and which rules grant it.
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+}
+
+service SecretsService {
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+  // Make a deleted version live again: undo a delete (or a trim under the
+  // server's max_versions). Only within the server's deletion retention: a
+  // purged version is gone. A write: same permission, same per-path lock
+  // as PutSecret. One version per call: undoing a delete restores the
+  // newest deleted version; older ones stay deleted.
+  rpc RestoreSecret(RestoreSecretRequest) returns (RestoreSecretResponse);
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+  // A secret's history: every version still stored, live or deleted (not
+  // yet purged), newest first, metadata only, to find the version to get
+  // or restore. Needs list permission on the path (it's metadata, like
+  // ListSecrets), not read. NOT_FOUND if nothing of the path is stored.
+  rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse);
+  // A path's metadata as a whole: when it was first and last written, its
+  // current and oldest versions, how many are stored, and its labels. Never
+  // values. Needs list permission on the path. NOT_FOUND for a path with
+  // nothing stored, like ListVersions.
+  rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+  // Changes a path's labels: custom key/value metadata (team=a), plain and
+  // not encrypted, so never a secret. Merged: `set` adds or replaces,
+  // `remove` removes; concurrent changes compose. Needs the label
+  // permission on the path. Keys and values: ASCII letters, digits, `-`,
+  // `_`, `.`, beginning and ending with a letter or digit, 1 to 63
+  // characters; at most 64 per path; at least one to set or remove
+  // (INVALID_ARGUMENT otherwise, nothing changed). NOT_FOUND for a path
+  // with nothing stored (never written, or every version purged: purging
+  // removes the labels too).
+  rpc UpdateLabels(UpdateLabelsRequest) returns (UpdateLabelsResponse);
+  // Streams changes of the live version of the given paths (read
+  // permission on each) and of every path below the given prefixes (list
+  // permission on each), whichever server makes them: what clients that
+  // keep secrets current (the agent, the CSI provider) wait on instead of
+  // polling. Never values: a path and its new live version (0: none, after
+  // a delete). The first message is `ready`: subscribed from then on, so
+  // read what you watch after it, not before, and you miss nothing. A
+  // `resync` means changes may have been missed (the server lost its
+  // database connection, or this stream fell behind): read everything
+  // again. The stream ends (and the client reconnects, then reads again)
+  // when the server shuts down or seals (SEALED), the client certificate
+  // expires or is revoked (UNAUTHENTICATED), a permission is withdrawn
+  // (PERMISSION_DENIED), or the connection is recycled. At most 1024 paths
+  // and prefixes together; RESOURCE_EXHAUSTED when the server has as many
+  // streams open as it serves.
+  rpc WatchSecrets(WatchSecretsRequest) returns (stream WatchSecretsResponse);
+}
+
+message InitRequest {
+  uint32 shares = 1;
+  uint32 threshold = 2;
+}
+
+message InitResponse {
+  repeated bytes shares = 1;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  SealStatus status = 1;
+  // Were the KEK list, the floor and the vanished versions: per namespace
+  // now, behind GetNamespace / ListNamespaces.
+  reserved 2, 3, 4;
+  reserved "keks", "kek_floor", "vanished";
+  // Totals only: namespace names (often customer or team names) and their
+  // KEKs are behind GetNamespace / ListNamespaces, with the namespace
+  // permission. How many live namespaces the keys database has.
+  uint32 namespaces = 5;
+  // How many KEKs *this server* holds that the keys database lost (not
+  // destroyed), kept in its memory for reading only, the last copy. Above 0:
+  // see ListNamespaces for which, rewrap against this server to rescue their
+  // rows, and don't seal or restart it first. 0 while sealed.
+  uint32 vanished_keks = 6;
+}
+
+message KekRef {
+  string namespace = 1;
+  uint32 version = 2;
+}
+
+message NamespaceInfo {
+  string name = 1;
+  // Deleted: its KEKs are destroyed; it can be created again.
+  bool deleted = 2;
+  int64 created_at_unix = 3;
+  optional int64 deleted_at_unix = 4;
+  map<string, string> labels = 5;
+  optional int64 labels_updated_at_unix = 6;
+  // Its KEKs and their states, oldest first.
+  repeated KekVersion keks = 7;
+  // Its KEK floor: no write may use a KEK version of it below this.
+  uint32 kek_floor = 8;
+  // Versions of it the keys database lost that *the answering server*
+  // still holds, for reading only.
+  repeated uint32 vanished = 9;
+}
+
+message CreateNamespaceRequest {
+  string name = 1;
+  map<string, string> labels = 2;
+  // Recovery, for a namespace the keys database lost while rows under it
+  // remain (see CreateNamespace).
+  bool past_lost_keks = 3;
+}
+
+message CreateNamespaceResponse {
+  // Its first KEK's version: 1, or one past the highest it ever had.
+  uint32 kek_version = 1;
+}
+
+message DeleteNamespaceRequest {
+  string name = 1;
+}
+
+message DeleteNamespaceResponse {
+  // False if it was already deleted.
+  bool deleted = 1;
+  // KEK versions destroyed by this call.
+  repeated uint32 destroyed = 2;
+  uint32 kek_floor = 3;
+}
+
+message GetNamespaceRequest {
+  string name = 1;
+}
+
+message GetNamespaceResponse {
+  NamespaceInfo namespace = 1;
+}
+
+message ListNamespacesRequest {}
+
+message ListNamespacesResponse {
+  // Live and deleted, by name.
+  repeated NamespaceInfo namespaces = 1;
+}
+
+message UpdateNamespaceLabelsRequest {
+  string name = 1;
+  map<string, string> set = 2;
+  repeated string remove = 3;
+}
+
+message UpdateNamespaceLabelsResponse {
+  map<string, string> labels = 1;
+}
+
+message KekVersion {
+  uint32 version = 1;
+  KekState state = 2;
+}
+
+enum KekState {
+  KEK_STATE_UNSPECIFIED = 0;
+  // Wraps new DEKs. Exactly one per live namespace.
+  KEK_STATE_ACTIVE = 1;
+  // Superseded by a rotation; still unwraps DEKs not yet rewrapped.
+  KEK_STATE_DECRYPT_ONLY = 2;
+  // No DEK uses it any more (Rewrap retired it): may be destroyed.
+  KEK_STATE_RETIRED = 3;
+  // Its wrapped key is erased; the version is never reused.
+  KEK_STATE_DESTROYED = 4;
+}
+
+message SealStatus {
+  bool initialized = 1;
+  bool sealed = 2;
+  uint32 shares = 3;
+  uint32 threshold = 4;
+  // Shares received so far toward the current unseal attempt.
+  uint32 progress = 5;
+  // Current generation (0 if uninitialized). Every share carries the
+  // generation it was made for; only shares of this one unseal.
+  uint32 generation = 6;
+  // The rekey collecting shares, if any (nonce, phase, progress, required,
+  // and during VERIFYING the new shares' generation; never new_shares), so a
+  // nonce lost with RekeyStart's reply can be recovered. The nonce is empty
+  // unless the caller may rekey: cancel needs nothing but the nonce (plus
+  // that same permission).
+  RekeyProgress rekey = 7;
+  // Auto-unseal and its hold, in Status replies only (unset elsewhere, and
+  // while not initialized).
+  AutoUnsealStatus auto_unseal = 8;
+}
+
+message AutoUnsealStatus {
+  // The provider this server is configured with ("awskms"); empty: none,
+  // the shares alone unseal it.
+  string provider = 1;
+  // The configured key (an ARN), as the last attempt resolved it. Names
+  // the cloud account: empty unless the caller may unseal.
+  string key_id = 2;
+  // Whether the keys database holds a wrap at the current generation.
+  bool wrapped = 3;
+  // The last attempt's result, one of: ok, kms_unavailable, denied,
+  // mismatch, root_commitment, below_floor, no_wrap, held, failed. Empty
+  // before the first.
+  string last_result = 4;
+  // What went wrong, as the service or a database said it (may name
+  // accounts and roles): empty unless the caller may unseal.
+  string last_error = 5;
+  // The hold, as each database has it. Held unless both show
+  // released >= hold; one that couldn't be read counts as held.
+  AutoUnsealHold keys_hold = 6;
+  AutoUnsealHold data_hold = 7;
+  // Held: by either database (one unreadable included), or by this
+  // server's own hold.
+  bool held = 8;
+  // This server's own hold: it was sealed explicitly and hasn't been
+  // unsealed since. It keeps this server's loop from undoing the seal
+  // before (or without) the databases' hold being written.
+  bool held_here = 9;
+}
+
+message AutoUnsealHold {
+  uint64 hold = 1;
+  uint64 released = 2;
+  bool readable = 3;
+}
+
+message UnsealRequest {
+  bytes share = 1;
+  // Discard shares submitted so far and start over.
+  bool reset = 2;
+  // If no root commitment in the data database matches the root key the
+  // shares reconstruct (a data database restored from before a rekey, a
+  // failover that lost the write), store one, once a stored secret version
+  // opens under the key: proof it's the one the data was written under.
+  // Only the call completing the threshold needs it. Audited as an alarm.
+  bool recommit = 3;
+  // Auto-unseal: release the hold an explicit seal set (in both databases),
+  // then unseal this server through the configured key management service.
+  // No share. Refused on a server configured for the shares alone. On an
+  // unsealed server it only releases the hold.
+  bool auto = 4;
+  // Once this call has the server unsealed (with the share completing the
+  // threshold, or on a server already unsealed), release the auto-unseal
+  // hold. A plain unseal with shares doesn't. Like `auto`, it takes the
+  // unseal permission, not shares as such.
+  bool release_hold = 5;
+}
+
+message UnsealResponse {
+  SealStatus status = 1;
+}
+
+message SealRequest {}
+
+// A SealResponse always means the server is sealed: once permitted, Seal never
+// fails (a caller without the permission gets PERMISSION_DENIED, and nothing
+// happens). `status` is absent if the keys database couldn't be
+// read afterwards.
+message SealResponse {
+  SealStatus status = 1;
+  // What happened to a rekey in progress. Clients should warn loudly on
+  // COMMITTED and UNKNOWN.
+  PendingRekey pending_rekey = 2;
+  // Whether the auto-unseal hold (which stops every server's next
+  // auto-unseal) landed in both databases. False: this server is sealed,
+  // but a restart could unseal it; the server retries the write. Clients
+  // should warn loudly.
+  bool hold_set = 3;
+}
+
+enum PendingRekey {
+  PENDING_REKEY_UNSPECIFIED = 0;
+  // Nothing was pending.
+  PENDING_REKEY_NONE = 1;
+  // Dropped; the current shares still work.
+  PENDING_REKEY_DISCARDED = 2;
+  // It was stored: only the NEW shares unseal now.
+  PENDING_REKEY_COMMITTED = 3;
+  // Couldn't confirm: keep both sets until an unseal succeeds.
+  PENDING_REKEY_UNKNOWN = 4;
+}
+
+message RekeyStartRequest {
+  uint32 shares = 1;
+  uint32 threshold = 2;
+  // How the root key is protected after the rekey, for every server: its
+  // commit stores the answering server's KMS wrap (or none) and deletes
+  // every other. Empty: keep it as it is (refused if the answering
+  // server's config would change it). "shamir": the shares alone (the
+  // server must be configured so). "awskms": wrapped by the server's
+  // configured KMS key too. Recorded in the audit entry.
+  string seal = 3;
+}
+
+message RekeyStartResponse {
+  RekeyProgress progress = 1;
+}
+
+message RekeySubmitRequest {
+  // Identifies the rekey attempt returned by RekeyStart; guards against
+  // shares being applied to a different attempt.
+  string nonce = 1;
+  // A current share.
+  bytes share = 2;
+}
+
+message RekeySubmitResponse {
+  RekeyProgress progress = 1;
+}
+
+message RekeyVerifyRequest {
+  string nonce = 1;
+  // One of the new shares returned by the last RekeySubmit.
+  bytes share = 2;
+}
+
+message RekeyVerifyResponse {
+  RekeyProgress progress = 1;
+}
+
+message RekeyCancelRequest {
+  string nonce = 1;
+}
+
+message RekeyCancelResponse {
+  RekeyProgress progress = 1;
+}
+
+message RekeyProgress {
+  reserved 2;
+  reserved "started";
+
+  string nonce = 1;
+  RekeyPhase phase = 6;
+  // Shares submitted toward the current phase, and how many it needs.
+  uint32 progress = 3;
+  uint32 required = 4;
+  // Populated only on the RekeySubmit that ends the authorizing phase.
+  repeated bytes new_shares = 5;
+  // The new generation: set when `phase` is COMPLETE (the rekey is stored and
+  // only shares of this generation unseal; part of the reply so a client
+  // needs no follow-up call, which could fail after the commit succeeded),
+  // and during VERIFYING (the generation the new shares carry). In a status
+  // during VERIFYING, a SealStatus.generation equal to this one means the new
+  // key is already stored: the commit landed but wasn't confirmed.
+  uint32 generation = 7;
+}
+
+enum RekeyPhase {
+  REKEY_PHASE_UNSPECIFIED = 0;
+  // Collecting current shares (RekeySubmit).
+  REKEY_PHASE_AUTHORIZING = 1;
+  // New shares issued; collecting them back (RekeyVerify). Nothing committed.
+  REKEY_PHASE_VERIFYING = 2;
+  // The new root key is stored; the old shares no longer work.
+  REKEY_PHASE_COMPLETE = 3;
+  REKEY_PHASE_CANCELLED = 4;
+}
+
+message RotateKekRequest {
+  string namespace = 1;
+}
+
+message RewrapRequest {
+  // Rows to process in this call; 0 means the server's default.
+  uint32 max_rows = 1;
+  // Only this namespace; empty: every namespace.
+  string namespace = 2;
+}
+
+message RewrapResponse {
+  // Rows moved to the active KEK in this call.
+  uint64 rewrapped = 1;
+  // Rows whose DEK didn't unwrap (corrupted or tampered); left as they are
+  // and logged by the server. They keep their KEK version from being
+  // retired, like any row still using it.
+  uint64 failed = 2;
+  // Every older version was drained in this call.
+  bool done = 3;
+  // Were the retired and released versions, before namespaces.
+  reserved 4, 5;
+  reserved "retired", "released";
+  // KEKs retired in this call.
+  repeated KekRef retired_keks = 6;
+  // Vanished KEKs (lost by the keys database, kept in this server's memory
+  // for reading only) dropped in this call: no row uses them any more, so
+  // their rows were rescued.
+  repeated KekRef released_keks = 7;
+}
+
+message RotateKekResponse {
+  uint32 version = 1;
+}
+
+message PurgeRequest {
+  // Rows to remove in this call; 0 means the server's default.
+  uint32 max_rows = 1;
+}
+
+message PurgeResponse {
+  // Deleted versions removed for good in this call.
+  uint64 purged = 1;
+  // Nothing past its retention is left.
+  bool done = 2;
+}
+
+message DestroyKekRequest {
+  uint32 version = 1;
+  string namespace = 2;
+}
+
+message DestroyKekResponse {
+  // False if it was already destroyed (by an earlier call, say).
+  bool destroyed = 1;
+  // The namespace's KEK floor now: no write may use a KEK version of it
+  // below this.
+  uint32 kek_floor = 2;
+}
+
+message GetSecretRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  // 0 means latest.
+  uint32 version = 2;
+}
+
+message GetSecretResponse {
+  Secret secret = 1;
+}
+
+message PutSecretRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  bytes value = 2;
+  // Check-and-set: store only if the path's latest live version is still
+  // this one (as read before deciding what to write), so concurrent writers
+  // can't silently overwrite each other. 0 means "only if there is no live
+  // version": create, never overwrite. Unset: write unconditionally. A
+  // mismatch (someone else wrote or deleted it since) is FAILED_PRECONDITION
+  // and stores nothing: read it again, then decide.
+  optional uint32 expected_version = 3;
+  // Labels to set on the path with this put (merged with its labels, in the
+  // same transaction): see UpdateLabels. Needs the label permission too.
+  map<string, string> labels = 4;
+}
+
+message PutSecretResponse {
+  SecretMetadata metadata = 1;
+}
+
+message DeleteSecretRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+}
+
+message DeleteSecretResponse {}
+
+message RestoreSecretRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  // The deleted version to restore, alongside any live one. 0 undoes a
+  // delete: it restores the newest deleted version, only while the path has
+  // no live version (else FAILED_PRECONDITION with reason LIVE_VERSION and
+  // nothing restored: name the version to bring back an older or trimmed
+  // one). Nothing to restore (live, purged, never stored) is NOT_FOUND.
+  uint32 version = 2;
+}
+
+message RestoreSecretResponse {
+  // The version made live again.
+  SecretMetadata metadata = 1;
+}
+
+// The latest version of each secret, in path order (byte order), one page at
+// a time. Pages aren't a snapshot: a secret created or deleted meanwhile may
+// or may not appear, but no path appears twice.
+message ListSecretsRequest {
+  // Empty lists everything. Otherwise a secret path, matched by
+  // whole segments: `a/b` lists `a/b/c` but not `a/bc` or `a/b` itself.
+  string prefix = 1;
+  // At most this many secrets. 0 means the server's default (100); above
+  // the server's maximum (1000), the maximum.
+  uint32 page_size = 2;
+  // Empty for the first page; then the previous reply's next_page_token,
+  // with the same prefix. Opaque: don't build or parse one.
+  string page_token = 3;
+  // Only paths whose labels include every one of these (empty: no filter).
+  // Keep the same filter for every page.
+  map<string, string> labels = 4;
+}
+
+message ListSecretsResponse {
+  repeated SecretMetadata secrets = 1;
+  // Empty on the last page. A page can be shorter than page_size without
+  // being the last, so only this says whether more follow.
+  string next_page_token = 2;
+}
+
+message ListVersionsRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  // As in ListSecretsRequest: 0 means the server's default (100); above the
+  // server's maximum (1000), the maximum.
+  uint32 page_size = 2;
+  // Empty for the first page; then the previous reply's next_page_token,
+  // for the same path. Opaque: don't build or parse one.
+  string page_token = 3;
+}
+
+message ListVersionsResponse {
+  // Newest first. Purged versions are gone, so numbers can have gaps;
+  // numbers are never reused.
+  repeated SecretVersion versions = 1;
+  // Empty on the last page.
+  string next_page_token = 2;
+}
+
+message SecretVersion {
+  SecretMetadata metadata = 1;
+  // When it was deleted (by a delete, or trimmed under the server's
+  // max_versions); unset while live. Deleted versions can be restored
+  // (RestoreSecret) until purged.
+  optional int64 deleted_at_unix = 2;
+}
+
+message GetMetadataRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+}
+
+message GetMetadataResponse {
+  PathMetadata metadata = 1;
+}
+
+message PathMetadata {
+  string path = 1;
+  // When the path was first written.
+  int64 created_at_unix = 2;
+  // When it was last written by a put (a new version, e.g. a rotation).
+  int64 updated_at_unix = 3;
+  // The latest live version; unset if every version is deleted.
+  optional uint32 current_version = 4;
+  // The oldest version still stored (live or deleted, not purged); unset
+  // if none is.
+  optional uint32 oldest_version = 5;
+  // How many versions are stored, live and deleted.
+  uint64 versions = 6;
+  map<string, string> labels = 7;
+  // When the labels last changed; unset without labels.
+  optional int64 labels_updated_at_unix = 8;
+}
+
+message UpdateLabelsRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  // Labels to add or replace.
+  map<string, string> set = 2;
+  // Label keys to remove (absent ones are fine). Not also in `set`.
+  repeated string remove = 3;
+}
+
+message UpdateLabelsResponse {
+  // The path's labels after the change.
+  map<string, string> labels = 1;
+}
+
+message SecretMetadata {
+  string path = 1;
+  uint32 version = 2;
+  int64 created_at_unix = 3;
+}
+
+message Secret {
+  SecretMetadata metadata = 1;
+  bytes value = 2;
+}
+
+// What a stored policy may grant.
+enum SecretAction {
+  SECRET_ACTION_UNSPECIFIED = 0;
+  SECRET_ACTION_READ = 1;
+  SECRET_ACTION_WRITE = 2;
+  SECRET_ACTION_DELETE = 3;
+  SECRET_ACTION_LIST = 4;
+  SECRET_ACTION_LABEL = 5;
+}
+
+// A stored policy as written.
+message PolicySpec {
+  // Secret-path rules, e.g. apps/billing-read (never `config:…`).
+  string name = 1;
+  // The `<name>` of a `ferritor://<name>` client certificate identity.
+  string identity = 2;
+  repeated SecretAction actions = 3;
+  // Path prefixes (whole segments); exactly one of paths and all_paths.
+  repeated string paths = 4;
+  bool all_paths = 5;
+  // Printable ASCII, newlines and tabs; at most 1 KiB.
+  string description = 6;
+}
+
+enum PolicySource {
+  POLICY_SOURCE_UNSPECIFIED = 0;
+  // `[[policy]]` in ferritor.toml: read-only here.
+  POLICY_SOURCE_CONFIG = 1;
+  POLICY_SOURCE_STORED = 2;
+}
+
+// A rule as listed.
+message PolicyEntry {
+  // Stored: its name. Config: `config:<name>`, or `config:<n>` by position.
+  string name = 1;
+  PolicySource source = 2;
+  string identity = 3;
+  // Action names (a config rule may hold admin actions too).
+  repeated string actions = 4;
+  repeated string paths = 5;
+  bool all_paths = 6;
+  string description = 7;
+  // Stored policies only.
+  optional uint32 version = 8;
+  optional int64 created_at_unix = 9;
+  optional int64 updated_at_unix = 10;
+}
+
+message PutPolicyRequest {
+  PolicySpec policy = 1;
+  optional uint32 expected_version = 2;
+}
+
+message PutPolicyResponse {
+  uint32 version = 1;
+  // The stored set's revision now.
+  uint64 revision = 2;
+  // False: it replaced an existing policy.
+  bool created = 3;
+}
+
+message DeletePolicyRequest {
+  string name = 1;
+  optional uint32 expected_version = 2;
+}
+
+message DeletePolicyResponse {
+  bool deleted = 1;
+  uint64 revision = 2;
+}
+
+message GetPolicyRequest {
+  string name = 1;
+}
+
+message GetPolicyResponse {
+  PolicyEntry policy = 1;
+}
+
+message ListPoliciesRequest {
+  // Only this identity's rules; empty: all.
+  string identity = 1;
+  // 0: the default (100); capped at 1000.
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+// Whether the stored policies are in force (listed) on this server.
+enum StoredPolicyState {
+  STORED_POLICY_STATE_UNSPECIFIED = 0;
+  STORED_POLICY_STATE_LOADED = 1;
+  // Not in force while sealed: only config rules are listed.
+  STORED_POLICY_STATE_SEALED = 2;
+  // The stored set doesn't verify: only config rules are listed.
+  STORED_POLICY_STATE_UNVERIFIED = 3;
+}
+
+message ListPoliciesResponse {
+  repeated PolicyEntry policies = 1;
+  // Empty when there's no next page.
+  string next_page_token = 2;
+  StoredPolicyState stored = 3;
+  // The stored set's revision, when loaded.
+  uint64 revision = 4;
+}
+
+message ApplyPoliciesRequest {
+  // At most 1000.
+  repeated PolicySpec policies = 1;
+  // Only if the stored set is still at this revision.
+  optional uint64 expected_revision = 2;
+  // Delete every stored policy not listed. The only write allowed over a
+  // stored set that doesn't verify (the repair).
+  bool prune = 3;
+  // Report what would change; write nothing.
+  bool dry_run = 4;
+}
+
+message ApplyPoliciesResponse {
+  repeated string created = 1;
+  repeated string updated = 2;
+  repeated string deleted = 3;
+  repeated string unchanged = 4;
+  // The revision now (for a dry run: what it would be).
+  uint64 revision = 5;
+  bool dry_run = 6;
+  // It replaced a stored set that didn't verify.
+  bool replaced_unverified = 7;
+  // It created a new policy key (the old one was missing or didn't open).
+  bool new_policy_key = 8;
+}
+
+message CheckAccessRequest {
+  string identity = 1;
+  // An action name (`read`, `rotate`, …).
+  string action = 2;
+  // For a secret action: the secret or prefix; empty: every secret.
+  string path = 3;
+}
+
+message CheckAccessResponse {
+  bool allowed = 1;
+  // The rules that grant it, by name (config rules as `config:…`).
+  repeated string granted_by = 2;
+  // False in dev mode: everyone may do everything there, whatever the
+  // rules say.
+  bool enforced = 3;
+  // Why the stored policies couldn't answer: "sealed", "unverified"; empty
+  // when they did.
+  string undecided = 4;
+}
+
+enum IssuingKeyState {
+  ISSUING_KEY_STATE_UNSPECIFIED = 0;
+  // Signs; its certificates are trusted.
+  ISSUING_KEY_STATE_ACTIVE = 1;
+  // Replaced; its certificates stay trusted until they expire.
+  ISSUING_KEY_STATE_RETIRED = 2;
+  // Replaced and cut off: nothing it signed is trusted.
+  ISSUING_KEY_STATE_REVOKED = 3;
+}
+
+// A workload-identity issuing key, without its private part.
+message IssuingKey {
+  uint32 version = 1;
+  IssuingKeyState state = 2;
+  // The CA certificate, DER.
+  bytes certificate = 3;
+  // SHA-256 of the certificate, lowercase hex.
+  string fingerprint = 4;
+  int64 created_at_unix = 5;
+  optional int64 retired_at_unix = 6;
+  // When the CA certificate expires.
+  int64 not_after_unix = 7;
+}
+
+message IdentityInitRequest {}
+
+message IdentityInitResponse {
+  IssuingKey key = 1;
+}
+
+message IdentityRotateRequest {
+  // Cut the old key off at once (it may be compromised), with every
+  // retired one: nothing they signed is trusted from now on.
+  bool revoke = 1;
+}
+
+message IdentityRotateResponse {
+  // The new active key.
+  IssuingKey key = 1;
+}
+
+message IdentityStatusRequest {}
+
+message IdentityStatusResponse {
+  repeated IssuingKey keys = 1;
+}
+
+message ExchangeTokenRequest {
+  // A JWT (JWS compact form) from a configured issuer, with its audience
+  // for ferritor.
+  string token = 1;
+  // A PKCS#10 certificate signing request (DER) for the key the
+  // certificate is for: P-256, Ed25519, or RSA of 3072 bits or more. Only
+  // its public key is used; the names and extensions it asks for are
+  // ignored.
+  bytes csr = 2;
+}
+
+message ExchangeTokenResponse {
+  // The client certificate, DER.
+  bytes certificate = 1;
+  // The identity it names (`ferritor://<identity>`).
+  string identity = 2;
+  int64 not_after_unix = 3;
+}
+
+message WatchSecretsRequest {
+  // Exact paths: needs read permission on each.
+  repeated string paths = 1;
+  // Every path below each (by whole segments): needs list permission on
+  // each.
+  repeated string prefixes = 2;
+}
+
+message WatchSecretsResponse {
+  oneof event {
+    WatchReady ready = 1;
+    SecretChanged changed = 2;
+    WatchResync resync = 3;
+  }
+}
+
+// Subscribed: every change from now on is sent.
+message WatchReady {}
+
+// Changes may have been missed: read everything watched again.
+message WatchResync {}
+
+message SecretChanged {
+  string path = 1;
+  // The live version now; 0: none (deleted).
+  uint32 version = 2;
+}

@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE seal_config\n                 SET shares = $1, threshold = $2, root_check = $3,\n                     generation = generation + 1, rekeyed_at = now()\n                 RETURNING generation",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "generation",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "641fc079af2d6703e5b6d7029a1fdcf8159847c79e75de91cfdc82ef654c30b5"
+}

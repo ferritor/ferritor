@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO keks (namespace, version, wrapped_key, state)\n                 VALUES ($1, $2, $3, 'active')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eb4b35493fed7856f10eeb3790d00b2171e3c2e580c23a6b155d89b952ec0df2"
+}

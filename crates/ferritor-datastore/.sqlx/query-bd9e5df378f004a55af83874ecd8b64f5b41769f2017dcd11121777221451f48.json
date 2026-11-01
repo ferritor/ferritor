@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE paths\n           SET labels = (labels || $2::jsonb) - $3::text[],\n               labels_updated_at = CASE WHEN (labels || $2::jsonb) - $3::text[] = '{}'\n                                        THEN NULL ELSE now() END\n           WHERE id = $1\n           RETURNING labels AS \"labels: Json<Labels>\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "labels: Json<Labels>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "labels"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bd9e5df378f004a55af83874ecd8b64f5b41769f2017dcd11121777221451f48"
+}

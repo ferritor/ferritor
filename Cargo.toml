@@ -1,0 +1,107 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.9.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+# Never on crates.io: releases are git tags and images (release-plz.toml).
+publish = false
+
+[workspace.dependencies]
+ferritor-client = { path = "crates/ferritor-client" }
+ferritor-core = { path = "crates/ferritor-core" }
+ferritor-datastore = { path = "crates/ferritor-datastore" }
+ferritor-keystore = { path = "crates/ferritor-keystore" }
+# Only a dev-dependency of the CLI (its end-to-end tests run a server in
+# process); the CLI itself must talk to the server over gRPC only.
+ferritor-server = { path = "crates/ferritor-server" }
+ferritor-testkit = { path = "crates/ferritor-testkit" }
+
+aes-gcm = { version = "0.11.1", features = ["zeroize"] }
+# Auto-unseal with AWS KMS (ferritor-server's `aws-kms` feature). The SDK's
+# own HTTPS client would bring aws-lc-rs (a C build); this one is rustls on
+# ring, as the rest of ferritor.
+aws-config = { version = "1.13.0", default-features = false, features = ["rt-tokio", "sso", "credentials-process"] }
+aws-sdk-kms = { version = "1.127.0", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http-client = { version = "1.5.2", default-features = false, features = ["rustls-ring", "rt-tokio"] }
+anyhow = "1.0.104"
+axum = "0.8.9"
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+config = "0.15.27"
+dotenvy = "0.15.7"
+# PKCS#8 PEM keys (`pem`) for the audit log's signing key and the verifier's
+# public key.
+ed25519-dalek = { version = "3.0.0", features = ["pem"] }
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
+# HMAC-SHA256 for stored policies' integrity (the same sha2 as everywhere).
+hmac = "0.13.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+# The public CA roots for fetching a token issuer's keys (identity), unless a
+# private CA is configured; the same crate the metrics exporter uses.
+webpki-roots = "1.0.10"
+proptest = "1.12.0"
+# The allocator of the static (musl) builds in the images (Dockerfile):
+# musl's own made reads 2.8 times slower.
+mimalloc = { version = "0.1.52", default-features = false }
+# Metrics only, pushed over OTLP/gRPC with the same tonic as the server;
+# internal-logs reports export failures through `tracing`.
+opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["grpc-tonic", "metrics", "internal-logs", "tls-ring", "tls-webpki-roots"] }
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic", "metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "internal-logs"] }
+prost = "0.14.4"
+rcgen = "0.14.10"
+# Verifying workload tokens' signatures (RS256, ES256, EdDSA; see
+# ferritor-server `identity`): the ring rustls already brings, no JWT crate.
+ring = "0.17.14"
+rpassword = "7.5.4"
+# PR_SET_DUMPABLE through a safe wrapper (the workspace forbids unsafe code):
+# see ferritor-server `forbid_memory_access`; `fs` for the agent's tmpfs check
+# (statfs).
+rustix = { version = "1.1.5", features = ["fs", "process"] }
+secrecy = { version = "0.10.3", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# Query strings with a repeated parameter (`?label=…&label=…`).
+serde_urlencoded = "0.7.1"
+sha2 = "0.11.1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "sqlx-toml", "uuid", "time", "json"] }
+thiserror = "2.0.21"
+time = "0.3.55"
+tokio = { version = "1.54.1", features = ["full"] }
+# The same crate and crypto provider tonic uses (ring), so its connection info
+# works on the TLS streams the server accepts itself (see ferritor-server `tls`).
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["logging", "tls12", "ring"] }
+tokio-stream = { version = "0.1.19", features = ["net"] }
+# TaskTracker, for the requests tls::serve detaches from their connections.
+tokio-util = { version = "0.7.20", features = ["rt"] }
+toml = "1.1.8"
+tonic = { version = "0.14.6", features = ["tls-ring"] }
+tonic-health = "0.14.6"
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
+tonic-types = "0.14.6"
+tower = "0.5.3"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+vsss-rs = { version = "6.0.1", default-features = false, features = ["std", "zeroize"] }
+x509-parser = "0.18.1"
+# The JSON API's OpenAPI description, derived from the handlers and the
+# types serde uses (see ferritor-server `http::openapi`). Not `non_strict_integers`:
+# it writes `u-int32`, which no generator knows; `int32` with `minimum: 0` is
+# exact anyway (versions are Postgres INTEGERs; page sizes are capped at 1000).
+utoipa = { version = "6.0.0", features = ["macros"] }
+zeroize = { version = "1.9.1", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+allow_attributes = "deny"

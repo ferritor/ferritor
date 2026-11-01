@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE policy_state SET revision = $1, mac = $2, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d5e008ff3fbbe1f3ca93baec38b7ef4cb102c4ee9fae500dbb792b880034096d"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM paths\n                 WHERE id IN (\n                     SELECT id FROM paths\n                     WHERE namespace_id = (SELECT id FROM namespaces WHERE name = $1)\n                     FOR UPDATE SKIP LOCKED)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3add2cfcde247e9076aa3717ca6bcd0d37e67dc50917a906f65ef5f93fa65966"
+}

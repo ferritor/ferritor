@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO secret_versions\n                     (path_id, namespace_id, version, ciphertext, wrapped_dek, kek_version)\n                 VALUES ($1, $2, $3, $4, $5, $6)\n                 RETURNING created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Bytea",
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e2f3947c522fe5e81c5f5506ede6719a66f300b30f1df19899ae7c7e73c36898"
+}

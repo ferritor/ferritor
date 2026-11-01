@@ -1,0 +1,134 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT name, identity, actions, paths, all_paths, description, version, mac,\n                created_at, updated_at\n         FROM policies ORDER BY name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "identity",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "identity"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "actions",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "actions"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "paths",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "paths"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "all_paths",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "all_paths"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "mac",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "mac"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "policies",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f34750665dbfbfff83f70dbed44dd5d6775e3756b3500c3c0a5b602d91a742ea"
+}

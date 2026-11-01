@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE paths SET current_version = NULL\n                 WHERE path = $1 AND current_version IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c4ded0d8fa9ae7727359056c4168962a36e82fa904e21a5ec4dbe8e8152fa6f"
+}

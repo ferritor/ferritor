@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT revision, tag FROM issuing_set",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "issuing_set",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "tag",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "issuing_set",
+            "name": "tag"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0dfeaec7d072b8ed483b0ec80e15d035386ea4c7a7e44d67cd103e06777d55c1"
+}

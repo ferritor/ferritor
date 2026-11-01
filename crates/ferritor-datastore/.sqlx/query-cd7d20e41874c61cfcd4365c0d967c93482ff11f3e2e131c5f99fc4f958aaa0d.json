@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM secret_versions WHERE ctid = ANY (ARRAY(\n                     SELECT ctid FROM secret_versions\n                     WHERE deleted_at < now() - make_interval(secs => $1)\n                     ORDER BY deleted_at\n                     LIMIT $2\n                     FOR UPDATE SKIP LOCKED\n                 ))\n                 RETURNING path_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "path_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cd7d20e41874c61cfcd4365c0d967c93482ff11f3e2e131c5f99fc4f958aaa0d"
+}

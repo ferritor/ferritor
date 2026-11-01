@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO policies\n                         (name, identity, actions, paths, all_paths, description, version, mac)\n                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n                     ON CONFLICT (name) DO UPDATE SET\n                         identity = EXCLUDED.identity, actions = EXCLUDED.actions,\n                         paths = EXCLUDED.paths, all_paths = EXCLUDED.all_paths,\n                         description = EXCLUDED.description, version = EXCLUDED.version,\n                         mac = EXCLUDED.mac, updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "TextArray",
+        "TextArray",
+        "Bool",
+        "Text",
+        "Int4",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee250929a5a32df21e8e440927be4e41046d066e96a50784b9a26ded64b519e6"
+}

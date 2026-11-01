@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE keks SET state = 'retired'\n                 WHERE namespace = $1 AND version = $2 AND state = 'decrypt_only'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3aa791ca0fe4eb9fbe32f3de1ba924ac4e180117b8d098a2c84a32bbcd5e804a"
+}

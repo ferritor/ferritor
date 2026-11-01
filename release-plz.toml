@@ -1,0 +1,89 @@
+# release-plz (https://release-plz.dev): versions, changelogs, git tags and
+# GitHub releases, through a release pull request
+# (.github/workflows/release-plz.yml; docs/src/content/docs/contributing/development.md,
+# "Releases"). Nothing goes to crates.io.
+#
+# One version for every crate (version.workspace, and one version_group).
+# Each crate has its CHANGELOG.md beside its Cargo.toml; the server's is the
+# root CHANGELOG.md, the product's: it includes every other released crate's
+# commits too. The server's tag (v0.2.0) and GitHub release are the
+# product's; the other crates are tagged (ferritor-core-v0.2.0) because git-only
+# mode finds a crate's last release by its tag.
+
+[workspace]
+git_only = true             # versions from git tags, never a registry
+# Release only the merge of a release pull request (its branch starts with
+# release-plz-), never any other push: with git_only, "released" means
+# "tagged", so otherwise the first push would tag whatever is untagged.
+release_always = false
+semver_check = false        # needs a published baseline
+dependencies_update = false # Cargo.lock changes on purpose, not at a release
+git_release_enable = false  # the server's only (below)
+git_release_body = """
+{{ changelog }}
+{% if remote.contributors %}
+### Contributors
+{% for contributor in remote.contributors %}
+* @{{ contributor.username }}
+{% endfor %}
+{% endif %}
+"""
+
+# A conventional prefix only: `fix:`, `fix(agent):`, `feat!:`, never
+# "fixture…" or "performance…".
+[changelog]
+commit_parsers = [
+    { message = "^feat[(:!]", group = "added" },
+    { message = "^changed[(:!]", group = "changed" },
+    { message = "^deprecated[(:!]", group = "deprecated" },
+    { message = "^removed[(:!]", group = "removed" },
+    { message = "^fix[(:!]", group = "fixed" },
+    { message = "^perf[(:!]", group = "performance" },
+    { message = "^security[(:!]", group = "security" },
+    { message = ".*", group = "other" },
+]
+
+[[package]]
+name = "ferritor-server"
+changelog_path = "./CHANGELOG.md"
+changelog_include = [
+    "ferritor-core",
+    "ferritor-keystore",
+    "ferritor-datastore",
+    "ferritor-client",
+    "ferritor-cli",
+    "ferritor-agent",
+]
+version_group = "ferritor"
+git_tag_name = "v{{ version }}"
+git_release_enable = true
+git_release_name = "ferritor v{{ version }}"
+
+[[package]]
+name = "ferritor-core"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-keystore"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-datastore"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-client"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-cli"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-agent"
+version_group = "ferritor"
+
+# Test helpers only, in no binary and no image: never released.
+[[package]]
+name = "ferritor-testkit"
+release = false

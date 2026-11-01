@@ -1,0 +1,1528 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ferritor HTTP API",
+    "description": "Secrets and stored policies over JSON, on the same port as gRPC. Authentication is mutual TLS only: the caller is the one `ferritor://<name>` URI SAN of its client certificate, and the policy decides what it may do (https://ferritor.dev/reference/http-api, https://ferritor.dev/guides/policy). Every response carries `Cache-Control: no-store`, none carries CORS headers. Errors are `{\"error\": {\"code\", \"message\"}}`: match on `code`. Unknown body fields (422) and query parameters (400) are refused.",
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "1"
+  },
+  "servers": [
+    {
+      "url": "https://ferritor.example.internal:7070",
+      "description": "Secured mode (mutual TLS)."
+    },
+    {
+      "url": "http://localhost:7070",
+      "description": "Dev mode: plaintext, loopback only, everyone allowed."
+    }
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Whether this server should get traffic now.",
+        "description": "For load balancers that only speak HTTP: 200 when ready, 503 otherwise\n(`sealed` says whether that's why; not sealed means it's shutting down;\nuninitialized counts as sealed). The same as gRPC's health service\nreports for `ferritor.v1.SecretsService`. No authorization and not audited;\nin secured mode the TLS handshake still needs a client certificate.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Ready.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready: sealed, or shutting down.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/v1/metadata/{path}": {
+      "get": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "A secret's metadata and labels (`list`).",
+        "operationId": "getMetadata",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PathMetadataBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Change a secret's labels (`label`).",
+        "operationId": "updateLabels",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The labels now.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelsReply"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/policies": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "List the config rules and the stored policies (`policy`).",
+        "operationId": "listPolicies",
+        "parameters": [
+          {
+            "name": "identity",
+            "in": "query",
+            "description": "Only this identity's rules.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "0 or absent: 100; capped at 1000.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "The previous page's `next_page_token`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyListBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/policies/{name}": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Get one rule: a stored policy or a config rule (`policy`).",
+        "description": "A config rule by its `config:` name.",
+        "operationId": "getPolicy",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "A stored policy's name (secret-path rules, may contain `/`), or `config:…` for a config rule.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Create or replace a stored policy (`policy`).",
+        "operationId": "putPolicy",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "A stored policy's name (secret-path rules, may contain `/`), or `config:…` for a config rule.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutPolicyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WrittenBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Delete a stored policy (`policy`; idempotent).",
+        "operationId": "deletePolicy",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "A stored policy's name (secret-path rules, may contain `/`), or `config:…` for a config rule.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expected_version",
+            "in": "query",
+            "description": "Only if it's still at this version.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted, or there was none.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/policy-apply": {
+      "post": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Make the stored set match a list, atomically (`policy`).",
+        "description": "Creates and replaces what's listed, and with `prune` deletes every other\nstored policy. One invalid policy refuses the whole call.",
+        "operationId": "applyPolicies",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What changed (or would).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppliedBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/policy-check": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Whether an identity may do an action (`policy`).",
+        "description": "With the rules that grant it.",
+        "operationId": "checkAccess",
+        "parameters": [
+          {
+            "name": "identity",
+            "in": "query",
+            "description": "The `<name>` of a `ferritor://<name>` identity.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Any action name (`read`, `rotate`, …).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "For a secret action: the secret or prefix; absent: every secret.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The verdict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckedBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/restore/{path}": {
+      "post": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Bring a deleted version back (`write`).",
+        "description": "`{}` undoes a delete (the newest deleted version, only while none is\nlive; 409 `live_version` otherwise); `{\"version\": N}` restores that one.",
+        "operationId": "restoreSecret",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The version restored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Metadata"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/secrets": {
+      "get": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "List the latest secret versions below a prefix (`list`).",
+        "description": "Needs `list` on the prefix, or on every path without one.",
+        "operationId": "listSecrets",
+        "parameters": [
+          {
+            "name": "prefix",
+            "in": "query",
+            "description": "Whole segments; empty or absent lists everything.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "`key=value`; repeatable, every one must match.",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "0 or absent: 100; capped at 1000.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "The previous page's `next_page_token`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/secrets/{path}": {
+      "get": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Read a secret (`read`).",
+        "description": "The latest version, or the one asked for. Deleted versions aren't\nreadable: restore one first.",
+        "operationId": "getSecret",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "A specific version (from 1); leave it out for the latest.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Store a new version (`write`; `label` too with labels).",
+        "operationId": "putSecret",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The version stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Metadata"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Delete every version (`delete`).",
+        "description": "Deleted versions are restorable until purged.",
+        "operationId": "deleteSecret",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/versions/{path}": {
+      "get": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "A secret's history, newest first (`list`).",
+        "description": "Every version still stored, deleted ones included; metadata only.",
+        "operationId": "listVersions",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "0 or absent: 100; capped at 1000.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "The previous page's `next_page_token`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionsBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AppliedBody": {
+        "type": "object",
+        "required": [
+          "created",
+          "updated",
+          "deleted",
+          "unchanged",
+          "revision",
+          "dry_run",
+          "replaced_unverified",
+          "new_policy_key"
+        ],
+        "properties": {
+          "created": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deleted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "new_policy_key": {
+            "type": "boolean",
+            "description": "It created a new policy key (the old one was missing or didn't open)."
+          },
+          "replaced_unverified": {
+            "type": "boolean",
+            "description": "It replaced a stored set that didn't verify."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The revision now (for a dry run: what it would be).",
+            "minimum": 0
+          },
+          "unchanged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updated": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ApplyBody": {
+        "type": "object",
+        "description": "The stored set as it should be.",
+        "required": [
+          "policies"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Report what would change; write nothing."
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Only if the stored set is still at this revision.",
+            "minimum": 0
+          },
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApplyPolicy"
+            },
+            "description": "As many as may be stored, so the whole set fits in one apply (at most\n16 MiB in all).",
+            "maxItems": 10000
+          },
+          "prune": {
+            "type": "boolean",
+            "description": "Delete every stored policy not listed. The only write allowed over a\nstored set that doesn't verify (the repair)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApplyPolicy": {
+        "type": "object",
+        "description": "One policy in an apply.",
+        "required": [
+          "name",
+          "identity",
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretActionName"
+            },
+            "minItems": 1
+          },
+          "all_paths": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "description": "What it's for (printable ASCII, newlines and tabs; at most 1 KiB)."
+          },
+          "identity": {
+            "type": "string",
+            "description": "The `<name>` of a `ferritor://<name>` identity."
+          },
+          "name": {
+            "type": "string",
+            "description": "Secret-path rules, e.g. `apps/billing-read` (never `config:…`)."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Path prefixes, whole segments; exactly one of `paths` and\n`all_paths`.",
+            "maxItems": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "CheckedBody": {
+        "type": "object",
+        "required": [
+          "allowed",
+          "granted_by",
+          "enforced"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "enforced": {
+            "type": "boolean",
+            "description": "False in dev mode: everyone may do everything there, whatever the\nrules say."
+          },
+          "granted_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rules that grant it, by name (config rules as `config:…`)."
+          },
+          "undecided": {
+            "$ref": "#/components/schemas/Undecided"
+          }
+        }
+      },
+      "DeletedBody": {
+        "type": "object",
+        "required": [
+          "deleted",
+          "revision"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "description": "False: there was no such policy."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Every error's body.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "What went wrong, for programs to match on: the same condition always has\nthe same code (the message is for people, and may change). New codes may\nbe added; treat an unknown one by its HTTP status.",
+        "enum": [
+          "invalid_argument",
+          "unauthenticated",
+          "permission_denied",
+          "not_found",
+          "method_not_allowed",
+          "version_mismatch",
+          "live_version",
+          "no_namespace",
+          "busy",
+          "aborted",
+          "misdirected_request",
+          "sealed",
+          "unaudited",
+          "unknown_kek",
+          "policy_unverified",
+          "rate_limited",
+          "unavailable",
+          "failed_precondition",
+          "internal"
+        ]
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode",
+            "description": "Match on this, never on the message."
+          },
+          "message": {
+            "type": "string",
+            "description": "For people; may change."
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "ready",
+          "sealed"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "sealed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LabelsBody": {
+        "type": "object",
+        "description": "A change to a secret's labels.",
+        "properties": {
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Label keys to remove (absent ones are fine)."
+          },
+          "set": {
+            "type": "object",
+            "description": "Added, or replacing a label's value.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "LabelsReply": {
+        "type": "object",
+        "required": [
+          "labels"
+        ],
+        "properties": {
+          "labels": {
+            "type": "object",
+            "description": "The labels now.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ListBody": {
+        "type": "object",
+        "required": [
+          "secrets",
+          "next_page_token"
+        ],
+        "properties": {
+          "next_page_token": {
+            "type": "string",
+            "description": "Empty when there's no next page."
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Metadata"
+            },
+            "description": "The latest version of each secret."
+          }
+        }
+      },
+      "Metadata": {
+        "type": "object",
+        "description": "One version of a secret, without its value.",
+        "required": [
+          "path",
+          "version",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1
+          }
+        }
+      },
+      "PathMetadataBody": {
+        "type": "object",
+        "description": "A secret as a whole: never its value.",
+        "required": [
+          "path",
+          "created_at",
+          "updated_at",
+          "current_version",
+          "oldest_version",
+          "versions",
+          "labels",
+          "labels_updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The latest live version; null when every version is deleted.",
+            "minimum": 0
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "labels_updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the labels last changed; null if they never did."
+          },
+          "oldest_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The oldest version still stored; null when every version was purged.",
+            "minimum": 0
+          },
+          "path": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many versions are stored, deleted ones included.",
+            "minimum": 0
+          }
+        }
+      },
+      "PolicyBody": {
+        "type": "object",
+        "description": "A rule as listed or read.",
+        "required": [
+          "name",
+          "source",
+          "identity",
+          "actions",
+          "paths",
+          "all_paths",
+          "description"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Action names (a config rule may hold admin actions)."
+          },
+          "all_paths": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string",
+            "description": "The `<name>` of a `ferritor://<name>` identity."
+          },
+          "name": {
+            "type": "string",
+            "description": "Stored: its name. Config: `config:<name>`, or `config:<n>` by\nposition."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "$ref": "#/components/schemas/PolicySource"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Stored policies only.",
+            "minimum": 0
+          }
+        }
+      },
+      "PolicyListBody": {
+        "type": "object",
+        "required": [
+          "policies",
+          "next_page_token",
+          "stored"
+        ],
+        "properties": {
+          "next_page_token": {
+            "type": "string",
+            "description": "Empty when there's no next page."
+          },
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyBody"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The stored set's revision, when loaded.",
+            "minimum": 0
+          },
+          "stored": {
+            "$ref": "#/components/schemas/StoredState"
+          }
+        }
+      },
+      "PolicySource": {
+        "type": "string",
+        "description": "Where a rule comes from.",
+        "enum": [
+          "config",
+          "stored"
+        ]
+      },
+      "PutPolicyBody": {
+        "type": "object",
+        "description": "A stored policy to create or replace; its name is the path's.",
+        "required": [
+          "identity",
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretActionName"
+            },
+            "minItems": 1
+          },
+          "all_paths": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "description": "What it's for (printable ASCII, newlines and tabs; at most 1 KiB)."
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Check-and-set: 0 only creates; N only replaces version N.",
+            "minimum": 0
+          },
+          "identity": {
+            "type": "string",
+            "description": "The `<name>` of a `ferritor://<name>` identity."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Path prefixes, whole segments; exactly one of `paths` and\n`all_paths`.",
+            "maxItems": 64
+          }
+        },
+        "additionalProperties": false
+      },
+      "RestoreBody": {
+        "type": "object",
+        "description": "Which deleted version to bring back.",
+        "properties": {
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "That version, alongside any live one. Left out (`{}`): undo a delete,\nrestoring the newest deleted version, only while none is live.",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "SecretActionName": {
+        "type": "string",
+        "description": "What a stored policy may grant (an admin action is refused, 422).",
+        "enum": [
+          "read",
+          "write",
+          "delete",
+          "list",
+          "label"
+        ]
+      },
+      "SecretBody": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Metadata"
+          },
+          {
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "The value, standard base64 with padding.",
+                "contentEncoding": "base64"
+              }
+            }
+          }
+        ]
+      },
+      "StoredState": {
+        "type": "string",
+        "description": "Whether the stored policies are in force (listed) on this server.",
+        "enum": [
+          "loaded",
+          "sealed",
+          "unverified"
+        ]
+      },
+      "Undecided": {
+        "type": "string",
+        "description": "Why the stored policies couldn't answer.",
+        "enum": [
+          "sealed",
+          "unverified"
+        ]
+      },
+      "Version": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Metadata"
+          },
+          {
+            "type": "object",
+            "required": [
+              "deleted_at"
+            ],
+            "properties": {
+              "deleted_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When it was deleted (restorable until purged); null while live."
+              }
+            }
+          }
+        ]
+      },
+      "VersionsBody": {
+        "type": "object",
+        "required": [
+          "versions",
+          "next_page_token"
+        ],
+        "properties": {
+          "next_page_token": {
+            "type": "string",
+            "description": "Empty when there's no next page."
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Version"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "WriteBody": {
+        "type": "object",
+        "description": "A new version of a secret.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Check-and-set: store only if the latest version is still this one;\n0: only if the secret doesn't exist yet.",
+            "minimum": 0
+          },
+          "labels": {
+            "type": "object",
+            "description": "Labels to set with this put (needs the `label` action too): plain\nmetadata, not encrypted.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "value": {
+            "type": "string",
+            "description": "The value, standard base64 with padding (at most 1 MiB decoded).",
+            "contentEncoding": "base64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WrittenBody": {
+        "type": "object",
+        "required": [
+          "version",
+          "revision",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False: it replaced an existing policy."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The stored set's revision now.",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "client_certificate": {
+        "type": "mutualTLS",
+        "description": "A client certificate from the server's client CA with one `ferritor://<name>` URI SAN and the clientAuth extended key usage."
+      }
+    }
+  },
+  "security": [
+    {
+      "client_certificate": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "Readiness, for load balancers."
+    },
+    {
+      "name": "secrets",
+      "description": "Secrets: versions, history, metadata and labels."
+    },
+    {
+      "name": "policies",
+      "description": "Stored policies: the applications' grants."
+    }
+  ]
+}

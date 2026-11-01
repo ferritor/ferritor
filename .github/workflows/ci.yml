@@ -1,0 +1,319 @@
+# Everything a change must pass (docs/src/content/docs/contributing/development.md, "CI"). Actions are
+# pinned by commit, the tag in a comment, and the tools by version: a secret
+# manager's build mustn't run whatever a moved tag points at, and a new
+# release mustn't fail main with nothing changed here. Checkouts keep no
+# token: nothing here pushes, and every build script and proc-macro in the
+# dependency tree runs in these jobs.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # New RUSTSEC advisories land without a change here, and fuzzing finds
+  # more the longer it runs: only `advisories` and `fuzz` (longer) run on
+  # the schedule.
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt, clippy, docs, offline build
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # From the committed .sqlx/ caches, without databases: how a release
+      # builds.
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      # Pinned, so a new stable's lints can't fail main without a change here
+      # (clippy runs with -D warnings). The branch's commit already defaults
+      # to its version; `toolchain` says it. Bump both jobs together,
+      # deliberately, and the local toolchain with them.
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          toolchain: 1.99.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo fmt --all --check
+      # The load-test and cluster scripts (shellcheck comes with the runner
+      # image).
+      - run: shellcheck bench/*.sh e2e/*.sh
+      - name: Offline build
+        run: cargo build --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The third-party notices the images carry must match Cargo.lock:
+      # regenerated offline (from the downloaded crates alone, so the same
+      # everywhere) and compared. Every platform's crates are fetched first,
+      # the images' musl-only ones included.
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-about@0.9.0
+      - name: THIRD-PARTY-LICENSES.txt up to date
+        run: |
+          cargo fetch --locked
+          cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt
+          git diff --exit-code THIRD-PARTY-LICENSES.txt \
+            || { echo "::error::THIRD-PARTY-LICENSES.txt is stale: run cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt"; exit 1; }
+
+  proto:
+    name: buf lint, format, breaking
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # `buf breaking` reads the base commit from the history.
+          fetch-depth: 0
+      - uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0
+        with:
+          setup_only: true
+          version: 1.73.0
+      - run: buf lint
+      - run: buf format --diff --exit-code
+      - name: buf breaking
+        env:
+          # A pull request: against its base. A push: against the commit
+          # before it (none for a new branch, all zeros; gone from the
+          # history after a force-push, then the parent).
+          AGAINST: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$AGAINST" ] || [ "$AGAINST" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base commit to compare with"
+            exit 0
+          fi
+          if ! git cat-file -e "$AGAINST^{commit}" 2>/dev/null; then
+            echo "$AGAINST isn't in the history (a force-push?): comparing with the parent"
+            AGAINST=$(git rev-parse HEAD~1)
+          fi
+          buf breaking --against ".git#ref=$AGAINST"
+
+  test:
+    name: sqlx check, tests
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # As compose.yaml: two separate servers, on the ports .env.example uses.
+    services:
+      keys-db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: ferritor
+          POSTGRES_PASSWORD: ferritor
+          POSTGRES_DB: ferritor_keys
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ferritor" --health-interval 2s
+          --health-timeout 5s --health-retries 30
+      data-db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: ferritor
+          POSTGRES_PASSWORD: ferritor
+          POSTGRES_DB: ferritor_data
+        ports: ["5434:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ferritor" --health-interval 2s
+          --health-timeout 5s --health-retries 30
+    env:
+      KEYS_DATABASE_URL: postgres://ferritor:ferritor@localhost:5433/ferritor_keys
+      DATA_DATABASE_URL: postgres://ferritor:ferritor@localhost:5434/ferritor_data
+      SQLX_CLI_VERSION: "0.9.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Cached with ~/.cargo/bin; a no-op when this version is there.
+      - name: Install sqlx-cli
+        run: >-
+          cargo install sqlx-cli --locked --version "$SQLX_CLI_VERSION"
+          --no-default-features --features rustls,postgres,sqlx-toml
+      # The query! macros check against these databases at compile time.
+      - name: Migrate
+        run: |
+          (cd crates/ferritor-keystore && sqlx migrate run)
+          (cd crates/ferritor-datastore && sqlx migrate run)
+      - name: sqlx prepare --check
+        run: |
+          (cd crates/ferritor-keystore && cargo sqlx prepare --check)
+          (cd crates/ferritor-datastore && cargo sqlx prepare --check)
+      - run: cargo test --workspace --locked
+
+  # The CSI provider with the real Secrets Store CSI Driver and kubelet, in
+  # k3s through k3d (e2e/cluster.sh): what its in-process tests stand in
+  # for. kubectl, helm and docker come with the runner image; k3d is pinned
+  # and checked, the k3s image and the driver's chart pinned in the script.
+  cluster:
+    name: CSI provider in a cluster (k3d)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      SQLX_OFFLINE: "true"
+      K3D_VERSION: v5.9.0
+      K3D_SHA256: 06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The CLI runs on the runner; the server and the provider run from the
+      # images e2e/cluster.sh builds with the Dockerfile.
+      - name: Build the CLI
+        run: cargo build --release --locked -p ferritor-cli
+      - name: Install k3d
+        run: |
+          curl -fsSL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/k3d-linux-amd64"
+          echo "$K3D_SHA256  /tmp/k3d" | sha256sum -c -
+          sudo install -m 0755 /tmp/k3d /usr/local/bin/k3d
+      - run: e2e/cluster.sh
+      # The images the cluster doesn't run, so they can't break unnoticed:
+      # seconds, on the build stage the script's left in the cache.
+      - name: Build the agent and CLI images
+        run: |
+          docker build -q --target agent .
+          docker build -q --target cli .
+
+  fuzz:
+    name: fuzz (cargo-fuzz)
+    runs-on: ubuntu-24.04
+    # 7 targets: 30 s each on a change, 5 min each daily, plus a cold
+    # instrumented build: room for a few more targets.
+    timeout-minutes: 90
+    env:
+      SQLX_OFFLINE: "true"
+      FUZZ_SECONDS: ${{ github.event_name == 'schedule' && '300' || '30' }}
+      # The kept corpus only grows: daily, shrink it to the inputs that add
+      # coverage before fuzzing on.
+      MINIMIZE: ${{ github.event_name == 'schedule' }}
+      CARGO_FUZZ_VERSION: "0.13.2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      # libFuzzer needs nightly; pinned like the stable toolchain.
+      - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
+        with:
+          toolchain: nightly-2026-10-21
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      - run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
+      # The fuzz lockfile may only add crates: one both build must be the
+      # version the server ships (a `cargo update` in the root needs one in
+      # fuzz/ too).
+      - name: fuzz/Cargo.lock matches Cargo.lock
+        run: |
+          python3 - <<'PY'
+          import sys, tomllib
+          def versions(path):
+              with open(path, "rb") as f:
+                  return {(p["name"], p["version"]) for p in tomllib.load(f)["package"]}
+          main, fuzz = versions("Cargo.lock"), versions("fuzz/Cargo.lock")
+          names = {name for name, _ in main}
+          drift = sorted(p for p in fuzz - main if p[0] in names)
+          for name, version in drift:
+              print(f"::error::fuzz/Cargo.lock has {name} {version}, not Cargo.lock's")
+          sys.exit(1 if drift else 0)
+          PY
+      - name: Build the targets
+        run: |
+          cargo fuzz build
+          git diff --exit-code fuzz/Cargo.lock
+      # The corpus each run grows, carried over to the next (a new cache
+      # entry per run, restored from the latest), so fuzzing builds on what
+      # came before instead of starting from the seeds every time.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      # Every target runs, even after one crashes; the step fails at the end.
+      - name: Run each target
+        run: |
+          failed=()
+          for target in $(cargo fuzz list); do
+            echo "::group::$target"
+            # libFuzzer refuses a corpus directory that doesn't exist.
+            mkdir -p "fuzz/corpus/$target"
+            if [ "$MINIMIZE" = "true" ] && [ -n "$(ls -A "fuzz/corpus/$target")" ]; then
+              cargo fuzz cmin "$target" "fuzz/corpus/$target"
+            fi
+            seeds=()
+            if [ -d "fuzz/seeds/$target" ]; then seeds=("fuzz/seeds/$target"); fi
+            if ! cargo fuzz run "$target" "fuzz/corpus/$target" "${seeds[@]}" -- \
+              -max_total_time="$FUZZ_SECONDS"; then
+              failed+=("$target")
+              echo "::error::fuzz target $target failed"
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "failed: ${failed[*]}"
+            exit 1
+          fi
+      - name: Keep what crashed
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  advisories:
+    name: cargo deny (advisories, sources, licenses)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories sources licenses
+      # The fuzz crate's own lockfile (libFuzzer and its dependencies): never
+      # distributed, so no license check.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories sources
+          manifest-path: ./fuzz/Cargo.toml

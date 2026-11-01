@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"total!\",\n                          count(*) FILTER (WHERE deleted_at IS NOT NULL) AS \"deleted!\"\n                   FROM secret_versions\n                   WHERE namespace_id = (SELECT id FROM namespaces WHERE name = $1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "deleted!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "7f0fdb3651bd736df676669cac73850dda0e7bf001ad653e9619a00a5c4ec17c"
+}

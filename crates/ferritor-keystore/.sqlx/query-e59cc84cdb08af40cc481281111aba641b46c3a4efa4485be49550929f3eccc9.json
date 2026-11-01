@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT generation FROM seal_config FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "generation",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e59cc84cdb08af40cc481281111aba641b46c3a4efa4485be49550929f3eccc9"
+}

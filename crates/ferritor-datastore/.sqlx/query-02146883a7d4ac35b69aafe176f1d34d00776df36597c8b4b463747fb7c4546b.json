@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT MAX(version) FROM secret_versions\n                         WHERE path_id = (SELECT id FROM paths WHERE path = $1)\n                           AND deleted_at IS NULL",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "max",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "02146883a7d4ac35b69aafe176f1d34d00776df36597c8b4b463747fb7c4546b"
+}

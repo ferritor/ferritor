@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pg_current_snapshot()::text AS \"snapshot!\",\n                          pg_postmaster_start_time()::text AS \"server!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "snapshot!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "server!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "16581dacd5673fafd72c96646828d4083726fab5f7e9516556a4b2ea63f40d8b"
+}

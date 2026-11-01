@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT v.version, v.ciphertext, v.wrapped_dek, v.kek_version, v.created_at\n                 FROM paths p JOIN secret_versions v ON v.path_id = p.id\n                 WHERE p.path = $1 AND v.deleted_at IS NULL\n                   AND ($2::int4 IS NULL OR v.version = $2)\n                 ORDER BY v.version DESC\n                 LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "ciphertext",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "ciphertext"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "wrapped_dek",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "wrapped_dek"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "kek_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "kek_version"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e97a2f74a8d0d390b75342879d16dde9469236ccf0e3478788d5b64cd65a9cb4"
+}

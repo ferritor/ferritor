@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE keks SET state = 'destroyed', wrapped_key = NULL, destroyed_at = now()\n                 WHERE namespace = $1 AND state <> 'destroyed'\n                 RETURNING version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "keks",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d36422ad10be9045a856cb5be17c263355e31aa5a62b4b22921145f6aacd73ad"
+}

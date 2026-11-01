@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE policy_revision_floor SET revision = GREATEST(revision, $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cdf564ce220b5dc0032dec3b6335555f18906c465e3ceec03ead5173411598f8"
+}

@@ -1,0 +1,30 @@
+[package]
+name = "ferritor-core"
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+hmac.workspace = true
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+vsss-rs.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+
+[lints]
+workspace = true

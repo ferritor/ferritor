@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT mac FROM root_commitments WHERE generation = $1 ORDER BY created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mac",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "root_commitments",
+            "name": "mac"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f9ec5c64d66af5e719cdd5a6c94ed8269b82824740628caa35ceec55bfa24402"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE secret_versions SET deleted_at = now()\n                 WHERE path_id = (SELECT id FROM paths WHERE path = $1) AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53923febcde3395cf620a88d5f083bb006d84a312ebd832888585480e8759f63"
+}

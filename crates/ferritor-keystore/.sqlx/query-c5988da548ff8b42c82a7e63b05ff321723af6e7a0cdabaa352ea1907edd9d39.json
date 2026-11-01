@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE keks SET state = 'destroyed', wrapped_key = NULL, destroyed_at = now()\n                 WHERE namespace = $1 AND version = $2 AND state = 'retired'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c5988da548ff8b42c82a7e63b05ff321723af6e7a0cdabaa352ea1907edd9d39"
+}

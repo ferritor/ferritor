@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE namespaces\n                   SET labels = (labels || $2::jsonb) - $3::text[], labels_updated_at = now()\n                   WHERE name = $1 AND state = 'active'\n                   RETURNING labels AS \"labels: Json<Labels>\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "labels: Json<Labels>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "namespaces",
+            "name": "labels"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9898f5f9db56bd148e8bb2f7afc11e2c4a054cb5d5de0a613dad057a836f45dc"
+}

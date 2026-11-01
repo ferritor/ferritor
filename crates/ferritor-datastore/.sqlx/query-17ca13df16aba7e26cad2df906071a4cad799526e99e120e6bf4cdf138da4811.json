@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE used(namespace_id, version) AS (\n                       (SELECT namespace_id, kek_version FROM secret_versions\n                        ORDER BY namespace_id, kek_version LIMIT 1)\n                       UNION ALL\n                       SELECT next.namespace_id, next.kek_version\n                       FROM used, LATERAL (\n                           SELECT namespace_id, kek_version FROM secret_versions\n                           WHERE (namespace_id, kek_version) > (used.namespace_id, used.version)\n                           ORDER BY namespace_id, kek_version LIMIT 1\n                       ) next\n                   )\n                   SELECT n.name AS \"namespace!\", used.version AS \"version!\"\n                   FROM used JOIN namespaces n ON n.id = used.namespace_id\n                   ORDER BY n.name, used.version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "namespace!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "namespaces",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "version!",
+        "type_info": "Int4",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "17ca13df16aba7e26cad2df906071a4cad799526e99e120e6bf4cdf138da4811"
+}

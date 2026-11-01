@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.created_at, p.updated_at, p.current_version,\n                       (SELECT min(version) FROM secret_versions\n                        WHERE path_id = p.id) AS oldest_version,\n                       (SELECT count(*) FROM secret_versions WHERE path_id = p.id) AS \"versions!\",\n                       p.labels AS \"labels: Json<Labels>\",\n                       p.labels_updated_at\n                   FROM paths p\n                   WHERE p.path = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "current_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "current_version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "oldest_version",
+        "type_info": "Int4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "versions!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "labels: Json<Labels>",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "labels"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "labels_updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "labels_updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      null,
+      null,
+      false,
+      true
+    ]
+  },
+  "hash": "e0cb34dc143a3adf42c68787da2ea604be7000eee8bc510356143adb496e8fec"
+}

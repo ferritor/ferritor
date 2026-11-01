@@ -1,0 +1,47 @@
+[package]
+name = "ferritor-agent"
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+edition.workspace = true
+
+# Keeps an application's secrets current as files: `ferritor-agent` next to
+# an application (`docs/src/content/docs/guides/agent.md`), `ferritor-csi-provider` once per
+# Kubernetes node for every pod on it (`docs/src/content/docs/guides/csi.md`).
+[dependencies]
+ferritor-client.workspace = true
+ferritor-core.workspace = true
+clap.workspace = true
+prost.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["formatting", "parsing"] }
+tokio.workspace = true
+tokio-stream.workspace = true
+toml.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zeroize.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+
+# The server crates are for the end-to-end tests only (a server in process).
+# Never make them normal dependencies: the agent talks to the server over
+# gRPC only.
+[dev-dependencies]
+# The CSI tests call the provider over its Unix socket, as the driver does.
+hyper-util.workspace = true
+tower.workspace = true
+ferritor-datastore.workspace = true
+ferritor-keystore.workspace = true
+ferritor-server.workspace = true
+ferritor-testkit.workspace = true
+
+[lints]
+workspace = true

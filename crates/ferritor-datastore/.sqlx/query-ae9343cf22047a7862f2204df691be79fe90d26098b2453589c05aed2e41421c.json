@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE root_generation_floor SET generation = GREATEST(generation, $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ae9343cf22047a7862f2204df691be79fe90d26098b2453589c05aed2e41421c"
+}

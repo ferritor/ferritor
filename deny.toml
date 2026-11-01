@@ -1,0 +1,54 @@
+# cargo-deny: advisories, sources and licenses (`cargo deny check
+# advisories sources licenses`, run by CI on every change and daily, since a
+# new RUSTSEC advisory lands without one). A secret manager's build fails on
+# a vulnerability in its dependencies (rustls, aes-gcm, tonic, …), an
+# unmaintained crate, a yanked version, a crate from anywhere but crates.io,
+# or a license not on the list below.
+
+[graph]
+# Where the server runs, and what the images are built for (musl, which
+# brings mimalloc): an advisory for a Windows- or macOS-only crate doesn't
+# fail the build.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+]
+all-features = true
+
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+# Each entry needs a reason and a date to look at it again, e.g.
+# { id = "RUSTSEC-0000-0000", reason = "only reachable via X, which ferritor never calls; recheck 2027-01" }
+ignore = [
+    { id = "RUSTSEC-2026-0385", reason = "ctutils 0.4.3 (non-constant-time mask generation and u128 comparisons) comes in through aes-gcm, digest and hmac, not as a direct dependency; fixed in 0.4.4, taken with the planned aes-gcm and hmac upgrade. Not judged unreachable: the constant-time comparisons of GCM tags and MACs go through it. Recheck 2026-11" },
+]
+
+[sources]
+# crates.io only: no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[licenses]
+# What ferritor (MIT OR Apache-2.0) may depend on: permissive licenses whose
+# notices the images carry (THIRD-PARTY-LICENSES.txt). Anything else, a
+# copyleft license above all, fails the build: add it here only after
+# deciding it can be distributed in the images.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0", # webpki-roots: the Mozilla root CA list, as data
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.93

@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH stored AS (\n             SELECT COALESCE(MAX(version), 0) AS highest FROM secret_versions\n             WHERE path_id = (SELECT id FROM paths WHERE path = $1)\n         )\n         INSERT INTO paths (namespace_id, path, highest, current_version)\n         SELECT n.id, $1, GREATEST(stored.highest, n.version_floor) + 1,\n                GREATEST(stored.highest, n.version_floor) + 1\n         FROM namespaces n, stored\n         WHERE n.name = $2 AND GREATEST(stored.highest, n.version_floor) < 2147483647\n         ON CONFLICT (path) DO UPDATE\n             SET highest = GREATEST(paths.highest, EXCLUDED.highest - 1) + 1,\n                 current_version = GREATEST(paths.highest, EXCLUDED.highest - 1) + 1,\n                 updated_at = now()\n             WHERE GREATEST(paths.highest, EXCLUDED.highest - 1) < 2147483647\n         RETURNING id, namespace_id, highest",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "namespace_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "namespace_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "highest",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "highest"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "91cdb0b2c2c3905b15d77e63b17cdf7d6760ea8cf66a967586dc170ec34d1033"
+}

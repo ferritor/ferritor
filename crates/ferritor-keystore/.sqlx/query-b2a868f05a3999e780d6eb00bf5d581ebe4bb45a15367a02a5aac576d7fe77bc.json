@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE issuing_keys SET wrapped_key = $1 WHERE version = $2 AND state = 'active'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b2a868f05a3999e780d6eb00bf5d581ebe4bb45a15367a02a5aac576d7fe77bc"
+}

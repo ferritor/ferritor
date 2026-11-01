@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT hold, released FROM auto_unseal_hold",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "hold",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "auto_unseal_hold",
+            "name": "hold"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "released",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "auto_unseal_hold",
+            "name": "released"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2322fefc41f87c494f43c2c270ab7f088949753991808c1adc998bb9b4771ef2"
+}

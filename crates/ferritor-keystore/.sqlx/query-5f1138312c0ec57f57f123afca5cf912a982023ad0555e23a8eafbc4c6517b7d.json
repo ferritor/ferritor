@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT generation, wrapped_policy_key FROM seal_config",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "generation",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "generation"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "wrapped_policy_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "wrapped_policy_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "5f1138312c0ec57f57f123afca5cf912a982023ad0555e23a8eafbc4c6517b7d"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE namespaces\n                         SET state = 'active', created_at = now(), deleted_at = NULL,\n                             labels = $2, labels_updated_at = CASE WHEN $2 = '{}'::jsonb\n                                 THEN NULL ELSE now() END\n                         WHERE name = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6a8c92568c3095261bdcb1e35fbbc4f34dd2131312ec760da85ec2d5e1b4ff99"
+}

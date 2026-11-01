@@ -1,0 +1,11 @@
+# An allowlist: the build sees the workspace's sources and nothing else (no
+# target/, no .env, no certificates or keys lying around).
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+!proto/
+!LICENSE-MIT
+!LICENSE-APACHE
+!THIRD-PARTY-LICENSES.txt
+crates/*/tests/

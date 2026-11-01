@@ -1,0 +1,81 @@
+# Coverage-guided fuzzing (cargo-fuzz, libFuzzer, nightly): see
+# docs/src/content/docs/contributing/development.md, "Fuzzing". Its own workspace, so the main one's
+# builds, lints and lockfile never see libFuzzer or the nightly flags.
+[package]
+name = "ferritor-fuzz"
+version = "0.0.0"
+publish = false
+license = "MIT OR Apache-2.0"
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+arbitrary = { version = "1.5.0", features = ["derive"] }
+base64 = "0.23.1"
+ed25519-dalek = "3.0.0"
+libfuzzer-sys = "0.4.13"
+rustls-pki-types = "1.15.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
+ferritor-core = { path = "../crates/ferritor-core" }
+ferritor-server = { path = "../crates/ferritor-server" }
+
+[dev-dependencies]
+# For the seeds example only (a throwaway CA for the CRL seeds).
+time = "0.3.55"
+ferritor-testkit = { path = "../crates/ferritor-testkit" }
+
+[[bin]]
+name = "secret_path"
+path = "fuzz_targets/secret_path.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "labels"
+path = "fuzz_targets/labels.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_spec"
+path = "fuzz_targets/policy_spec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_encoding"
+path = "fuzz_targets/policy_encoding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "audit_verify"
+path = "fuzz_targets/audit_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "audit_tamper"
+path = "fuzz_targets/audit_tamper.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crl_parse"
+path = "fuzz_targets/crl_parse.rs"
+test = false
+doc = false
+bench = false

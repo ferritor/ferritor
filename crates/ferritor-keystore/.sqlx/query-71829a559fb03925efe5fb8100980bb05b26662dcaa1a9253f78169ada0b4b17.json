@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO issuing_keys (version, certificate, state, wrapped_key)\n                 VALUES ($1, $2, 'active', $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "71829a559fb03925efe5fb8100980bb05b26662dcaa1a9253f78169ada0b4b17"
+}

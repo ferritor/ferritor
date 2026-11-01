@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO issuing_set (revision, tag) VALUES ($1, $2)\n         ON CONFLICT (singleton) DO UPDATE SET revision = $1, tag = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e86b48bb1cd5ee07d4bac21e717fd1611bfb5e8244ff529e581befa11fd4cfab"
+}

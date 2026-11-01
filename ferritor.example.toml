@@ -1,0 +1,199 @@
+# ferritor-server configuration: copy to `ferritor.toml` in the server's working
+# directory (it's gitignored: a real one may hold database passwords).
+#
+# Every setting can also come from an environment variable, which overrides
+# this file: FERRITOR_ and the key in capitals, nested keys joined with `__`
+# (`listen_addr` -> FERRITOR_LISTEN_ADDR, `[tls] cert` -> FERRITOR_TLS__CERT).
+# The [[policy]] entries can only come from this file.
+#
+# A misspelled key here refuses to start; a misspelled FERRITOR_ variable is
+# silently ignored. Settings, defaults and modes: https://ferritor.dev/reference/configuration.
+#
+# As shipped, this is dev mode: no [tls], no [[policy]]. Plaintext, everyone
+# may do everything, loopback only: for trying ferritor out, never for real
+# secrets. Uncomment [tls], the [[policy]] entries and audit_signing_key
+# together for secured mode; anything in between refuses to start.
+
+# Where gRPC and the JSON API listen (one port). Dev mode: loopback only;
+# secured mode usually listens beyond it, e.g. "0.0.0.0:7070".
+listen_addr = "127.0.0.1:7070"
+
+# The two databases (see compose.yaml for the local ones). Keep them
+# separate: each alone yields wrapped keys, never usable ones. In production
+# prefer FERRITOR_KEYS_DATABASE_URL / FERRITOR_DATA_DATABASE_URL from a secret
+# store over passwords in this file.
+keys_database_url = "postgres://ferritor:ferritor@localhost:5433/ferritor_keys"
+data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
+
+# The most connections each pool opens, at least 1. A put holds a data
+# database connection for its whole transaction, so this caps the writes in
+# flight; past it, requests wait (up to database_timeout_ms). Keep the sum
+# over all servers below Postgres's max_connections (default 100).
+#keys_database_max_connections = 10
+#data_database_max_connections = 10
+
+# Upper bound on any one database call (client side, plus the pool's
+# acquire timeout and Postgres's statement_timeout), in milliseconds.
+#database_timeout_ms = 5000
+
+# How long to wait for a lock another transaction holds (a put to the same
+# path, an unconfirmed rekey commit, a KEK floor raise), in milliseconds.
+# Above 0 and below database_timeout_ms.
+#lock_timeout_ms = 2000
+
+# Days a deleted secret version can still be restored (`ferritor restore`)
+# before `ferritor purge` may remove it for good. 0 makes every deletion
+# purgeable at once (warned about at startup).
+#purge_deleted_after_days = 30
+
+# Live versions kept per secret: each put marks the older ones deleted
+# (restorable until purged). 0 keeps every version. Not reloaded on SIGHUP.
+#max_versions = 10
+
+# How often an unsealed server reloads its KEKs, to follow rotations by
+# other servers sharing the databases, in seconds. 0 turns it off (reads and
+# SIGHUP still refresh).
+#keyring_refresh_secs = 60
+
+# How often an unsealed server checks whether the stored policies (managed
+# with `ferritor policy`, see https://ferritor.dev/guides/policy) changed, reloading them if so, in
+# seconds: the longest a revocation takes to reach this server. One tiny
+# read. 0 turns the poll off (SIGHUP, unseal and writes through this server
+# still reload).
+#policy_refresh_secs = 5
+
+# On the first SIGTERM/SIGINT, how long to keep serving while reporting not
+# ready before draining, in seconds (at most 300): on Kubernetes a few
+# seconds, so load balancers stop routing here first. 0 drains at once.
+#shutdown_delay_secs = 0
+
+# The Ed25519 key (PKCS#8 PEM) that signs the audit log's checkpoints.
+# Required in secured mode; optional in dev mode (the log is then chained but
+# unsigned). Keep it readable by the server's user only:
+#   openssl genpkey -algorithm ed25519 -out audit-key.pem && chmod 600 audit-key.pem
+#   openssl pkey -in audit-key.pem -pubout -out audit.pub.pem   # for `ferritor audit verify`
+#audit_signing_key = "/etc/ferritor/audit-key.pem"
+
+# TLS with client certificates (secured mode). Reloaded on SIGHUP: the
+# server certificate and key, and the CRL; the client CA needs a restart.
+#[tls]
+# The server's certificate chain (leaf first) and key, PEM. Refused if not
+# valid now.
+#cert = "/etc/ferritor/server.pem"
+#key = "/etc/ferritor/server-key.pem"
+# The CAs whose client certificates are accepted, PEM. List only the CAs
+# that *issue* client certificates (with a CRL, each needs one of its own).
+# A client's identity is its certificate's one `ferritor://<name>` URI SAN.
+#client_ca = "/etc/ferritor/client-ca.pem"
+# Optional: one CRL (PEM) from each client CA. Without it, no client
+# certificate can be revoked: keep them short-lived. See https://ferritor.dev/guides/tls.
+#crl = "/etc/ferritor/client-ca.crl"
+# Connections are recycled after this long, plus a grace period for calls in
+# flight, in seconds. Hygiene only: expiry and revocation are checked on
+# every request regardless.
+#max_connection_age_secs = 3600
+#connection_age_grace_secs = 30
+
+# Who may do what (secured mode; at least one). Each entry grants one
+# identity (`ferritor://<name>`) a list of actions, and for the secret actions
+# (read, write, delete, list, label) the path prefixes they apply to, as whole
+# segments (`billing` covers billing/db, not billing2), or all_paths = true.
+# No paths means no secret access. Admin actions: status, init, unseal, seal,
+# rekey, rotate, rewrap, purge, destroy_kek, namespace, policy. Reloaded on SIGHUP.
+# See https://ferritor.dev/guides/policy.
+#
+# These are the config rules: keep them to the operators (and anything that
+# must work while sealed, like a monitoring identity's status). The
+# applications' grants are stored policies, managed with `ferritor policy`
+# (https://ferritor.dev/guides/policy). A rule may have a `name`, shown as config:<name>.
+#
+# An operator with every admin action, init, namespace and policy included
+# (a fresh deployment needs someone allowed to init, to create a namespace
+# and to manage policies). destroy_kek is irreversible (and deleting a
+# namespace needs it too), and policy can grant any application any data
+# access: grant them more narrowly if you like.
+#[[policy]]
+#name = "ops-admin"
+#identity = "ops/alice"
+#actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity"]
+#
+#[[policy]]
+#identity = "apps/billing"
+#actions = ["read", "write", "list"]
+#paths = ["billing"]
+#
+#[[policy]]
+#identity = "apps/dashboard"
+#actions = ["list"]          # metadata only, never values
+#all_paths = true
+
+# Rate limits: calls in flight per identity and server-wide, and an optional
+# request rate per identity (https://ferritor.dev/reference/configuration). Without this section: each
+# identity may have a quarter of the server-wide cap in flight, the cap is
+# twice data_database_max_connections plus 16, and there's no rate limit.
+# Admin calls the config rules allow (seal above all) are never limited.
+# Reloaded on SIGHUP, but for server_max_in_flight (at restart).
+#[rate_limit]
+#server_max_in_flight = 36
+#max_in_flight = 9          # per identity; 0: no limit
+#requests_per_second = 0    # per identity; 0: no rate limit (burst: twice the rate)
+#max_watch_streams = 256    # watch streams open per identity; 0: only the server's 4096
+#
+# An identity's own limits, taking priority over the default: exact, or a
+# prefix by whole segments (the most specific wins; each identity under a
+# prefix has its own counters). A field left out is the default's.
+#[[rate_limit.identity]]
+#identity = "apps/batch"
+#max_in_flight = 18
+#requests_per_second = 500
+#burst = 1000
+
+# Workload identity: short-lived client certificates (an hour by default)
+# in exchange for a token from an issuer trusted here: a Kubernetes
+# cluster's service account tokens, a CI system's OIDC tokens. Secured mode
+# only; see https://ferritor.dev/guides/workload-identity. Each issuer's name is the first segment of
+# every identity it maps to (`k8s-prod/billing/api`), reserved for it: no
+# config rule may name an identity under it. Reloaded on SIGHUP but for
+# listen_addr and lifetime_secs.
+#[identity]
+#listen_addr = "0.0.0.0:7071"   # the exchange's own listener: TLS, no client certificate asked
+#lifetime_secs = 3600           # 60 to 86400; never past the token's own exp
+#
+#[[identity.issuer]]
+#name = "k8s-prod"
+#issuer = "https://kubernetes.default.svc.cluster.local"   # the tokens' iss, exactly
+#audience = "ferritor"                                        # their aud must contain it
+#jwks_file = "/etc/ferritor/k8s-prod-jwks.json"               # or jwks_url = "https://…" (fetched every 10 min)
+# With jwks_url only: jwks_ca = "/etc/ferritor/issuer-ca.pem", a private CA to
+# verify it with (default: the public web PKI roots).
+#not_before = "2026-10-24T12:00:00Z"                       # emergency: refuse its certificates issued before
+#max_token_age_secs = 86400                                # the oldest token (by iat)
+#exchange_burst = 10                                       # exchanges per identity at once, then one a second
+#
+# The first mapping whose requirements hold decides; each claim fills a
+# whole path segment (`/` or the end on both sides: never `{a}-{b}`).
+#[[identity.issuer.map]]
+#identity = "k8s-prod/{kubernetes.io.namespace}/{kubernetes.io.serviceaccount.name}"
+#require = [{ claim = "kubernetes.io.namespace", one_of = ["billing", "shop"] }]
+#
+# Emergency: refuse one identity's certificates issued before a time.
+#[[identity.revoke]]
+#identity = "k8s-prod/billing/api"
+#not_before = "2026-10-24T12:00:00Z"
+
+# How the root key is opened at start (https://ferritor.dev/operations/key-management).
+# Without this section (or with provider = "shamir"), the operators' shares
+# unseal every server after every start. With "awskms" a server unseals
+# itself through AWS KMS, credentials from the AWS SDK's usual chain
+# (AWS_PROFILE, EKS Pod Identity, an instance profile), and the shares stay
+# the recovery path. Read at startup only; switching providers is a rekey.
+#[seal]
+#provider = "awskms"
+#
+#[seal.awskms]
+#key_id = "arn:aws:kms:ap-southeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+#region = "ap-southeast-1"    # default: the key ARN's
+# Default: the region's KMS endpoint (with a VPC endpoint's private DNS on, the
+# same name reaches it from inside the VPC). Set only for an endpoint without
+# private DNS, or a local test double (http only on loopback).
+#endpoint = "https://vpce-0123456789abcdef0-abcdefgh.kms.ap-southeast-1.vpce.amazonaws.com"

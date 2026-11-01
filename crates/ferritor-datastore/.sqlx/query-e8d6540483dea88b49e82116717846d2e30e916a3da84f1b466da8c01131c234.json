@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH p AS (SELECT id FROM paths WHERE path = $1)\n                             UPDATE secret_versions SET deleted_at = NULL\n                             WHERE path_id = (SELECT id FROM p) AND deleted_at IS NOT NULL\n                               AND version = (\n                                   SELECT MAX(version) FROM secret_versions\n                                   WHERE path_id = (SELECT id FROM p) AND deleted_at IS NOT NULL\n                               )\n                             RETURNING version, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e8d6540483dea88b49e82116717846d2e30e916a3da84f1b466da8c01131c234"
+}

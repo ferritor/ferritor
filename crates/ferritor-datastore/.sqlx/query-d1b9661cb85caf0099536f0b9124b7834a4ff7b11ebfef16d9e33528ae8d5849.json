@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE paths SET labels = '{}', labels_updated_at = NULL\n                 WHERE id = ANY ($1) AND labels <> '{}'\n                   AND NOT EXISTS (SELECT 1 FROM secret_versions WHERE path_id = paths.id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d1b9661cb85caf0099536f0b9124b7834a4ff7b11ebfef16d9e33528ae8d5849"
+}

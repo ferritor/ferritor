@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT revision, mac FROM policy_state FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "policy_state",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "mac",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "policy_state",
+            "name": "mac"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "e700be13f5113837b7c4c5109852abad1ee9434c21253d60fc769e1732d0d931"
+}

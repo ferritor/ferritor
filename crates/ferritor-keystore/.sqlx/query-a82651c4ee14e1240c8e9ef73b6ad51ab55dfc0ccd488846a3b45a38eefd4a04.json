@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT version, wrapped_key AS \"wrapped_key!\" FROM issuing_keys\n                   WHERE state = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "wrapped_key!",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "wrapped_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "a82651c4ee14e1240c8e9ef73b6ad51ab55dfc0ccd488846a3b45a38eefd4a04"
+}

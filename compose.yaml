@@ -1,0 +1,25 @@
+# Local development databases. The two must stay separate: compromising one
+# alone yields either wrapped KEKs or wrapped DEKs, never usable keys.
+name: ferritor
+services:
+  keys-db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ferritor
+      POSTGRES_PASSWORD: ferritor
+      POSTGRES_DB: ferritor_keys
+    ports: ["5433:5432"]
+    volumes: [keys-data:/var/lib/postgresql]
+
+  data-db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ferritor
+      POSTGRES_PASSWORD: ferritor
+      POSTGRES_DB: ferritor_data
+    ports: ["5434:5432"]
+    volumes: [data-data:/var/lib/postgresql]
+
+volumes:
+  keys-data:
+  data-data:

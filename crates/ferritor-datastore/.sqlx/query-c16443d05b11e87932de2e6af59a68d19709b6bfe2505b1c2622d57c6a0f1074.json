@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH RECURSIVE used(namespace_id, version) AS (\n                       (SELECT namespace_id, kek_version FROM secret_versions\n                        ORDER BY namespace_id, kek_version LIMIT 1)\n                       UNION ALL\n                       SELECT next.namespace_id, next.kek_version\n                       FROM used, LATERAL (\n                           SELECT namespace_id, kek_version FROM secret_versions\n                           WHERE (namespace_id, kek_version) > (used.namespace_id, used.version)\n                           ORDER BY namespace_id, kek_version LIMIT 1\n                       ) next\n                   )\n                   SELECT p.path AS \"path!\", one.version AS \"version!\",\n                          one.kek_version AS \"kek_version!\",\n                          one.ciphertext AS \"ciphertext!\", one.wrapped_dek AS \"wrapped_dek!\"\n                   FROM used\n                   CROSS JOIN LATERAL (\n                       SELECT path_id, version, kek_version, ciphertext, wrapped_dek\n                       FROM secret_versions\n                       WHERE namespace_id = used.namespace_id AND kek_version = used.version\n                       LIMIT 1\n                   ) one\n                   JOIN paths p ON p.id = one.path_id\n                   ORDER BY p.path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "paths",
+            "name": "path"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "version!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "kek_version!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "kek_version"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "ciphertext!",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "ciphertext"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "wrapped_dek!",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "secret_versions",
+            "name": "wrapped_dek"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c16443d05b11e87932de2e6af59a68d19709b6bfe2505b1c2622d57c6a0f1074"
+}

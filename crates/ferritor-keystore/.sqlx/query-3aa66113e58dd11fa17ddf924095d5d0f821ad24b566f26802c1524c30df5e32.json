@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE issuing_set SET tag = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3aa66113e58dd11fa17ddf924095d5d0f821ad24b566f26802c1524c30df5e32"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE paths SET current_version = GREATEST(current_version, $2)\n                     WHERE path = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f05e37e30d5599831a39aa70387d1f601760c2a654f126e730e81c341cb1068d"
+}

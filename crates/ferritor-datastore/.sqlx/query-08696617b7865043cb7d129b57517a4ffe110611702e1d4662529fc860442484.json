@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (SELECT 1 FROM secret_versions) AS \"any!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "any!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "08696617b7865043cb7d129b57517a4ffe110611702e1d4662529fc860442484"
+}

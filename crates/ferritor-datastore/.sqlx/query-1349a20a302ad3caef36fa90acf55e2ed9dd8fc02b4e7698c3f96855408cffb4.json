@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO root_commitments (generation, mac) VALUES ($1, $2)\n                 ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1349a20a302ad3caef36fa90acf55e2ed9dd8fc02b4e7698c3f96855408cffb4"
+}

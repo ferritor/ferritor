@@ -1,0 +1,3 @@
+# Read by the sqlx query macros and by sqlx-cli (run from this directory).
+[common]
+database-url-var = "KEYS_DATABASE_URL"

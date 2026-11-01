@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT kek_floor FROM namespaces WHERE name = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kek_floor",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "namespaces",
+            "name": "kek_floor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "192983b321bbaa786890750d8d4bd470180e0d2878ef3b8446cb39190252e344"
+}

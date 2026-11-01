@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO seal_config (shares, threshold, root_check, generation)\n                 VALUES ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Bytea",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c72e2e72396f8e214a60a3a16e472a2c9c1057537724c94fc39ddf6dcd54d8e8"
+}

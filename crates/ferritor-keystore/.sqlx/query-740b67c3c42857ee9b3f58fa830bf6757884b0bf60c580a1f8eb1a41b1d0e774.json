@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT shares, threshold, root_check, generation FROM seal_config FOR SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "shares",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "shares"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "threshold",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "threshold"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "root_check",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "root_check"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "generation",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "740b67c3c42857ee9b3f58fa830bf6757884b0bf60c580a1f8eb1a41b1d0e774"
+}

@@ -1,0 +1,24 @@
+{
+  "name": "docs",
+  "type": "module",
+  "version": "0.0.1",
+  "packageManager": "pnpm@12.9.0",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.7",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "astro": "^7.2.10",
+    "sharp": "^0.35.3",
+    "starlight-github-alerts": "^0.5.0",
+    "starlight-links-validator": "^0.27.0",
+    "starlight-openapi": "^0.27.0",
+    "starlight-seo": "^1.0.0"
+  }
+}

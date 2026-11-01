@@ -1,0 +1,19 @@
+[package]
+name = "ferritor-datastore"
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+ferritor-core.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+ferritor-testkit.workspace = true
+
+[lints]
+workspace = true

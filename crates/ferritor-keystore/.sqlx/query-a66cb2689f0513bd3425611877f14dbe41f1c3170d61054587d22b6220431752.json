@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE issuing_keys\n                     SET state = $2, wrapped_key = NULL, retired_at = $3\n                     WHERE version = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a66cb2689f0513bd3425611877f14dbe41f1c3170d61054587d22b6220431752"
+}

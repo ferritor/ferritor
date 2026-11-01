@@ -1,0 +1,62 @@
+---
+title: ferritor
+description: 'A secret management service built on envelope encryption: Shamir or KMS unsealing, signed policies, a tamper-evident audit log, secrets delivered as files.'
+template: splash
+seo:
+  title: 'ferritor: secret management built on envelope encryption'
+hero:
+  image:
+    file: ../../assets/brand/ferritor-mark.svg
+    alt: ''
+  tagline: Secrets stored encrypted in Postgres, opened only by keys that live in the memory of an unsealed server.
+  actions:
+    - text: Quick start
+      link: /getting-started/quick-start/
+      icon: right-arrow
+    - text: Production deployment
+      link: /getting-started/production/
+      variant: secondary
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## What it does
+
+<CardGrid>
+	<Card title="Envelope encryption" icon="seti:lock">
+		Every secret version has its own data key, wrapped by a versioned key-encryption
+		key, wrapped in turn by a root key that is never stored. Keys and ciphertexts live
+		in two separate databases: either alone opens nothing.
+	</Card>
+	<Card title="Unsealing" icon="approve-check">
+		A threshold of operators' Shamir shares rebuilds the root key in memory; or a
+		server unseals itself through AWS KMS, with the shares kept for recovery. Sealing
+		is the emergency stop.
+	</Card>
+	<Card title="Identity and policy" icon="setting">
+		Every caller presents a client certificate naming it. Operators' rules live in the
+		config; applications' grants are stored policies, signed so that writing the
+		database grants no one anything.
+	</Card>
+	<Card title="Tamper-evident audit log" icon="document">
+		One JSON line per decision and per change, hash-chained and signed with Ed25519,
+		verified offline with `ferritor audit verify`.
+	</Card>
+	<Card title="Secrets as files" icon="laptop">
+		`ferritor-agent` keeps an application's secrets current as files; in Kubernetes,
+		the CSI provider does it for every pod on a node. Both hear of a change at once.
+	</Card>
+	<Card title="Workload identity" icon="random">
+		Workloads trade the token their platform gives them (a Kubernetes service
+		account's, a CI job's) for a short-lived certificate: none to issue by hand.
+	</Card>
+</CardGrid>
+
+## Where to go next
+
+<CardGrid>
+	<LinkCard title="Quick start" description="Dev mode on your machine in about ten minutes." href="/getting-started/quick-start/" />
+	<LinkCard title="Production deployment" description="A secured server, step by step." href="/getting-started/production/" />
+	<LinkCard title="Kubernetes" description="ferritor and the CSI provider in a cluster." href="/getting-started/kubernetes/" />
+	<LinkCard title="Security model" description="What ferritor defends against, and what it doesn't." href="/concepts/security/" />
+</CardGrid>

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT generation FROM seal_config FOR SHARE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "generation",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "generation"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "07a0378e90f6c5b445e490992dbdb47d6e0a65fccf69c84e4ef968f97b1741e5"
+}

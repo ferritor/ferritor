@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT wrapped_policy_key FROM seal_config",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "wrapped_policy_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "seal_config",
+            "name": "wrapped_policy_key"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "eb81fe6c133d78f8dc70f4ac70bfa96887f7dd70f3d670168b11032a86e9c7d8"
+}

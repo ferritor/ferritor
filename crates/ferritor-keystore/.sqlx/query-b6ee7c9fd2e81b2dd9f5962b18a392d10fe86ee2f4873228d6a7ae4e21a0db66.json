@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT version, certificate, state, wrapped_key, created_at, retired_at\n         FROM issuing_keys ORDER BY version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "certificate",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "certificate"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "wrapped_key",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "wrapped_key"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "retired_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "issuing_keys",
+            "name": "retired_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "b6ee7c9fd2e81b2dd9f5962b18a392d10fe86ee2f4873228d6a7ae4e21a0db66"
+}

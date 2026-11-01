@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE namespaces\n                     SET state = 'deleted', deleted_at = now(), labels = '{}',\n                         labels_updated_at = NULL\n                     WHERE name = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e8934980b170b1a385e5b5292e615d2af6ccd9f1c27b36bdd27800aa09063a06"
+}

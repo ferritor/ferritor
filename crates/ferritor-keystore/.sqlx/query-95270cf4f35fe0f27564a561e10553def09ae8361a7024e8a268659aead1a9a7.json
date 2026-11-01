@@ -1,0 +1,38 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT namespace, version FROM keks WHERE state <> 'destroyed'\n                 ORDER BY namespace, version",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "namespace",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "keks",
+            "name": "namespace"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "keks",
+            "name": "version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "95270cf4f35fe0f27564a561e10553def09ae8361a7024e8a268659aead1a9a7"
+}

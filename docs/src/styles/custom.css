@@ -1,0 +1,62 @@
+/*
+ * The ferritor brand ("Iron Oxide") as Starlight's theme: crab red for the
+ * accent, verdigris for success, a green-tinted neutral ramp between the
+ * brand's ground (#17191B) and paper (#F5F6F4).
+ */
+
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+:root {
+	--sl-font: 'Inter Variable', 'Inter';
+	--sl-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono';
+}
+
+/* Dark mode, Starlight's default. */
+:root,
+::backdrop {
+	--sl-color-white: #f5f6f4; /* paper */
+	--sl-color-gray-1: #e6e9e6;
+	--sl-color-gray-2: #bcc2be;
+	--sl-color-gray-3: #9ba39e; /* neutral */
+	--sl-color-gray-4: #5d6460;
+	--sl-color-gray-5: #34393a;
+	--sl-color-gray-6: #202326; /* surface */
+	--sl-color-black: #17191b; /* ground */
+
+	--sl-color-accent-low: #3d1c14;
+	--sl-color-accent: #c9472e; /* crab */
+	--sl-color-accent-high: #f2b8a8;
+	--sl-color-text-accent: #d9573c; /* crab on dark text */
+
+	--sl-color-green-low: #173a2b;
+	--sl-color-green: #7cc9a3; /* verdigris */
+	--sl-color-green-high: #c7ebd8;
+}
+
+:root[data-theme='light'],
+[data-theme='light'] ::backdrop {
+	--sl-color-white: #2b302d; /* ink */
+	--sl-color-gray-1: #343a36;
+	--sl-color-gray-2: #444a46;
+	--sl-color-gray-3: #646b67;
+	--sl-color-gray-4: #8f9692;
+	--sl-color-gray-5: #c5cac6;
+	--sl-color-gray-6: #e8ebe7;
+	--sl-color-gray-7: #eff1ee;
+	--sl-color-black: #f5f6f4; /* paper */
+
+	--sl-color-accent-low: #f6d9d0;
+	--sl-color-accent: #b43e27; /* crab on light text */
+	--sl-color-accent-high: #6e2516;
+	--sl-color-text-accent: #b43e27;
+
+	--sl-color-green-low: #d3eee0;
+	--sl-color-green: #2e7d5b; /* verdigris on light */
+	--sl-color-green-high: #1f5a41;
+}
+
+/* The splash page's mark: the kit asks for clear space around it. */
+.hero > img {
+	padding: 1rem;
+}

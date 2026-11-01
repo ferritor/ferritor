@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE seal_config SET wrapped_policy_key = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "86bfe3e13bafcc3e39bae34a83ff814aca165271db7db31bebff11e7483f5788"
+}

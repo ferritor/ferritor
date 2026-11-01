@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE keks SET wrapped_key = u.wrapped_key\n                 FROM UNNEST($1::text[], $2::int4[], $3::bytea[]) AS u(namespace, version, wrapped_key)\n                 WHERE keks.namespace = u.namespace AND keks.version = u.version\n                   AND keks.state <> 'destroyed'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int4Array",
+        "ByteaArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "63d9d98e5a32cd251d72f0930f355a4c13075865969ede341ca1259760b01881"
+}

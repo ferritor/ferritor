@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO namespaces (name, kek_floor) VALUES ($1, $2)\n                 ON CONFLICT (name) DO UPDATE\n                     SET kek_floor = GREATEST(namespaces.kek_floor, EXCLUDED.kek_floor)\n                 RETURNING kek_floor",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kek_floor",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "namespaces",
+            "name": "kek_floor"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ad1652e30192b9e21d484bf76cf3f3b0db6f1f971daa32f5cb70b9048fc28326"
+}

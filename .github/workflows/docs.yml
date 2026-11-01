@@ -1,0 +1,63 @@
+# The docs site (docs/, Astro and Starlight): built on every change, and
+# published to GitHub Pages (https://ferritor.dev) from main
+# (docs/src/content/docs/contributing/development.md, "CI"). The build fails
+# on a broken internal link (starlight-links-validator), an SEO audit error
+# (starlight-seo) or a page that doesn't render. Pinned like ci.yml: actions
+# by commit, the tag in a comment; Node here, pnpm by `packageManager` in
+# docs/package.json. On every change, not only docs/: a workflow skipped by
+# a path filter never reports, so it couldn't be a required check, and the
+# build takes about a minute.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build the docs site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Astro's own action: pnpm (the version in docs/package.json), Node,
+      # the install (frozen, as pnpm does in CI), the build, and the site
+      # uploaded as the Pages artifact. Every action it runs is pinned by
+      # commit too.
+      - uses: withastro/action@a8b97df764791eb61fbf3338ef713b0e61ae05c5 # v6.1.4
+        with:
+          path: docs
+          node-version: "24.21.0"
+
+  # Only from main: a pull request's build is checked, never published.
+  deploy:
+    name: publish to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The one job that may publish: its own permissions, nothing else's.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # One deploy at a time, and none cut short by the next.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

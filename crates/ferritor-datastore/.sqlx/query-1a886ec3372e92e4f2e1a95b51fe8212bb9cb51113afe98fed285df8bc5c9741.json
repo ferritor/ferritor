@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE auto_unseal_hold SET hold = GREATEST(hold, $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a886ec3372e92e4f2e1a95b51fe8212bb9cb51113afe98fed285df8bc5c9741"
+}
