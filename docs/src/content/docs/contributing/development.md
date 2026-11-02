@@ -245,6 +245,12 @@ cargo fetch --locked   # every platform's crates, the musl-only ones too
 cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt
 ```
 
+A crate holding two texts of one license (a Rust wrapper's and the C
+library's it compiles in, say) is named in `about.toml` with a `clarify`
+section, each file by checksum: otherwise which text cargo-about picks
+depends on the order the filesystem lists them in, and the file differs
+between machines (`libmimalloc-sys` did, CI against a laptop).
+
 A new license (a dependency under one neither list has) goes into both
 `deny.toml` and `about.toml`'s `accepted`, after deciding it can be
 distributed in the images: a copyleft one can't, without changing what

@@ -24,3 +24,22 @@ accepted = [
     "CC0-1.0",
     "Unlicense",
 ]
+
+# libmimalloc-sys (the images' allocator) holds two licenses: its own, and
+# the mimalloc C library's it compiles in (Microsoft's, which matters most),
+# in two identical copies (v2, v3; v3 is built). Unclarified, which one
+# cargo-about picked depended on the order the filesystem listed them in.
+# Named here, by checksum: a new version that changes one fails the
+# generation instead of quietly changing the notice.
+[libmimalloc-sys.clarify]
+license = "MIT"
+
+[[libmimalloc-sys.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "a08554fab028af3af047e8588d32d019662c1b1bf07959a195a2f75fe340726b"
+
+[[libmimalloc-sys.clarify.files]]
+path = "c_src/mimalloc/v3/LICENSE"
+license = "MIT"
+checksum = "82ade5d7d9b029044b5fbbc326207fc47c2d44ee4dd71e8a559c36d728217de9"
