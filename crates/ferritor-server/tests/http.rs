@@ -21,7 +21,7 @@ use ferritor_server::health::{Readiness, SECRETS_SERVICE};
 use ferritor_server::namespaces::Namespaces;
 use ferritor_server::policies::Policies;
 use ferritor_server::policy::{Policy, Rule};
-use ferritor_server::ratelimit::{Limits, QUIET, Quota, Rate};
+use ferritor_server::ratelimit::{Clock, Limits, QUIET, Quota, Rate, SystemClock};
 use ferritor_server::seal::Seal;
 use ferritor_server::secrets::{MAX_VALUE_SIZE, Secrets};
 use ferritor_server::{grpc, http, tls};
@@ -62,7 +62,7 @@ impl Env {
         tls_config: Option<tls::ServerTls>,
         authz: Arc<dyn Authorizer>,
     ) -> TestResult<Self> {
-        Self::start_limited(bind, tls_config, authz, None).await
+        Self::start_limited(bind, tls_config, authz, None, Arc::new(SystemClock)).await
     }
 
     async fn start_limited(
@@ -70,6 +70,7 @@ impl Env {
         tls_config: Option<tls::ServerTls>,
         authz: Arc<dyn Authorizer>,
         limits: Option<Limits>,
+        clock: Arc<dyn Clock>,
     ) -> TestResult<Self> {
         let keys = TestDatabase::new(
             "KEYS_DATABASE_URL",
@@ -98,9 +99,10 @@ impl Env {
             namespaces.create(name, &Labels::new()).await?;
         }
         let audit = Captured::default();
-        let gate = Arc::new(Gate::new(
+        let gate = Arc::new(Gate::with_clock(
             authz,
             AuditLog::new(audit.clone(), Duration::from_secs(5))?,
+            clock,
         ));
         if let Some(limits) = limits {
             gate.use_limits(limits, Duration::from_secs(10));
@@ -150,6 +152,21 @@ impl Env {
 
     /// [`Env::secured`], with rate limits.
     async fn limited(ca: &Ca, policy: &[Rule], limits: Limits) -> TestResult<Self> {
+        Self::limited_on(ca, policy, limits, Arc::new(SystemClock)).await
+    }
+
+    /// [`Env::limited`] with the limiter's clock stopped: no budget or
+    /// bucket refills while the test runs, however slow the machine.
+    async fn limited_frozen(ca: &Ca, policy: &[Rule], limits: Limits) -> TestResult<Self> {
+        Self::limited_on(ca, policy, limits, Arc::new(Frozen(Instant::now()))).await
+    }
+
+    async fn limited_on(
+        ca: &Ca,
+        policy: &[Rule],
+        limits: Limits,
+        clock: Arc<dyn Clock>,
+    ) -> TestResult<Self> {
         let pem = ca.server()?;
         let tls_config = tls::server_tls(
             pem.cert.as_bytes(),
@@ -162,6 +179,7 @@ impl Env {
             Some(tls_config),
             Arc::new(Policy::new(policy)?),
             Some(limits),
+            clock,
         )
         .await
     }
@@ -2150,7 +2168,8 @@ fn put_request(path: &str) -> pb::PutSecretRequest {
 }
 
 /// The JSON API answers a rate limit as gRPC does, in its own terms: 429
-/// `rate_limited`, with `Retry-After` in whole seconds.
+/// `rate_limited`, with `Retry-After` in whole seconds. On a stopped clock:
+/// a second between the two requests would let the second through.
 #[tokio::test]
 async fn the_json_api_answers_a_rate_limit_with_429_and_retry_after() {
     let ca = Ca::new().unwrap();
@@ -2164,7 +2183,9 @@ async fn the_json_api_answers_a_rate_limit_with_429_and_retry_after() {
         },
         Vec::new(),
     );
-    let env = Env::limited(&ca, &billing_policy(), limits).await.unwrap();
+    let env = Env::limited_frozen(&ca, &billing_policy(), limits)
+        .await
+        .unwrap();
     let billing = Client::tls(&ca, Some(&ca.client("apps/billing").unwrap()), b"h2").unwrap();
 
     let (status, _, _) = billing
@@ -2189,11 +2210,12 @@ async fn the_json_api_answers_a_rate_limit_with_429_and_retry_after() {
 /// granted, one call at a time, gets 50 denials audited, then is refused
 /// before any decision (`limit: denied`) without an audit entry, its
 /// allowed requests too for the moment; the episode is reported once, and
-/// its end with the count.
+/// its end with the count. On a stopped clock: the budget refills 10 a
+/// second, so on a slow machine the real time let a few more through.
 #[tokio::test]
 async fn denials_are_budgeted_so_they_cannot_flood_the_audit_log() {
     let ca = Ca::new().unwrap();
-    let env = Env::limited(&ca, &billing_policy(), limits(36, 9).unwrap())
+    let env = Env::limited_frozen(&ca, &billing_policy(), limits(36, 9).unwrap())
         .await
         .unwrap();
     let billing = ca.client("apps/billing").unwrap();
@@ -2419,11 +2441,13 @@ async fn undecided_requests_charge_no_denials() {
 }
 
 /// A certificate naming no caller is answered 401 and audited, but only as
-/// often as its fingerprint's limit allows: the rest is one episode.
+/// often as its fingerprint's limit allows: the rest is one episode. On a
+/// stopped clock: the limit refills once a second, and a slow machine's
+/// time would let more be audited.
 #[tokio::test]
 async fn a_nameless_certificate_cannot_flood_the_audit_log() {
     let ca = Ca::new().unwrap();
-    let env = Env::limited(&ca, &billing_policy(), limits(36, 9).unwrap())
+    let env = Env::limited_frozen(&ca, &billing_policy(), limits(36, 9).unwrap())
         .await
         .unwrap();
     let nameless = ca
@@ -2449,4 +2473,13 @@ async fn a_nameless_certificate_cannot_flood_the_audit_log() {
     assert!(episode[0]["certificate"].is_string());
     assert_eq!(audited(&env, "authentication", 5).await.len(), 5);
     env.destroy().await.unwrap();
+}
+
+/// The limiter's clock, stopped (see [`Env::limited_frozen`]).
+struct Frozen(Instant);
+
+impl Clock for Frozen {
+    fn now(&self) -> Instant {
+        self.0
+    }
 }

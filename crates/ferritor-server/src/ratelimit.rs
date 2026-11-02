@@ -47,6 +47,13 @@ impl Clock for SystemClock {
     }
 }
 
+/// A shared clock, as [`audit::Gate`](crate::audit::Gate) holds one.
+impl<C: Clock + ?Sized> Clock for Arc<C> {
+    fn now(&self) -> Instant {
+        (**self).now()
+    }
+}
+
 /// The highest rate a setting may give: one request a microsecond. Far
 /// beyond what one server serves, and well within the GCRA interval's
 /// precision (above 10⁹ the interval would round to zero, no limit at all).

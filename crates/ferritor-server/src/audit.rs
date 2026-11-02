@@ -115,7 +115,7 @@ use crate::authz::{Action, Authorizer, Caller, Denied, Stored, StoredPolicies, T
 use crate::crl::CrlInfo;
 use crate::metrics::metrics;
 use crate::policy::PolicyInfo;
-use crate::ratelimit::{self, Admission, Episodes, Limiter, Limits, Quota, SystemClock};
+use crate::ratelimit::{self, Admission, Clock, Episodes, Limiter, Limits, Quota, SystemClock};
 use crate::seal::{PolicyRefresh, Refreshed};
 use crate::tls::IdentityError;
 use ferritor_core::path::{Namespace, SecretPath};
@@ -367,11 +367,11 @@ pub struct Gate {
     /// The rate limits in force (see `ratelimit`); unset, nothing is
     /// limited.
     limits: RwLock<Option<Arc<Limits>>>,
-    limiter: Limiter<SecretPath>,
+    limiter: Limiter<SecretPath, Arc<dyn Clock>>,
     /// Certificates that name no caller, by fingerprint.
-    unauthenticated: Limiter<String>,
+    unauthenticated: Limiter<String, Arc<dyn Clock>>,
     /// Token exchanges, by the identity they map to.
-    exchanges: Limiter<String>,
+    exchanges: Limiter<String, Arc<dyn Clock>>,
     /// The server-wide cap on calls in flight, and how long a call waits
     /// for a slot under it. Set once: it takes effect at startup.
     server_cap: OnceLock<(Arc<Semaphore>, Duration)>,
@@ -404,15 +404,21 @@ impl Decision {
 
 impl Gate {
     pub fn new(authz: Arc<dyn Authorizer>, log: AuditLog) -> Self {
+        Self::with_clock(authz, log, Arc::new(SystemClock))
+    }
+
+    /// [`Gate::new`], its rate limits on `clock`: the real time, or a test's,
+    /// which a limit's outcome mustn't depend on the machine's speed.
+    pub fn with_clock(authz: Arc<dyn Authorizer>, log: AuditLog, clock: Arc<dyn Clock>) -> Self {
         Self {
             authz: RwLock::new(authz),
             stored: OnceLock::new(),
             stored_failure: Mutex::new(None),
             log,
             limits: RwLock::new(None),
-            limiter: Limiter::new(SystemClock),
-            unauthenticated: Limiter::new(SystemClock),
-            exchanges: Limiter::new(SystemClock),
+            limiter: Limiter::new(Arc::clone(&clock)),
+            unauthenticated: Limiter::new(Arc::clone(&clock)),
+            exchanges: Limiter::new(clock),
             server_cap: OnceLock::new(),
             episodes: Episodes::default(),
         }
