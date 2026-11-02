@@ -11,9 +11,9 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use ferritor_server::crl::Crls;
 use libfuzzer_sys::fuzz_target;
 use rustls_pki_types::CertificateDer;
-use ferritor_server::crl::Crls;
 
 const CA: &[u8] = include_bytes!("../fixtures/ca.der");
 const CRL: &[u8] = include_bytes!("../fixtures/crl.der");

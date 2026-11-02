@@ -7,9 +7,9 @@
 
 use arbitrary::Arbitrary;
 use ed25519_dalek::SigningKey;
-use libfuzzer_sys::fuzz_target;
 use ferritor_core::audit_chain::{Chain, ChainState, Seal, verify};
 use ferritor_fuzz::{AUDIT_KEY, assert_proven_only_if_genuine, chains};
+use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]
 struct Plan {

@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 
 use arbitrary::Arbitrary;
-use libfuzzer_sys::fuzz_target;
 use ferritor_core::labels::{
     self, LabelError, MAX_KEY_LEN, MAX_LABELS, MAX_VALUE_LEN, check_change, check_key, check_value,
     parse_pair,
 };
+use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]
 struct Input {

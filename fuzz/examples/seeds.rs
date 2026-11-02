@@ -10,11 +10,11 @@ use std::fs;
 use std::path::Path;
 
 use ed25519_dalek::SigningKey;
-use rustls_pki_types::pem::PemObject;
-use rustls_pki_types::{CertificateDer, CertificateRevocationListDer};
 use ferritor_core::audit_chain::{Chain, Seal};
 use ferritor_fuzz::AUDIT_KEY;
 use ferritor_testkit::pki::Ca;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, CertificateRevocationListDer};
 
 type Result<T = ()> = ferritor_testkit::TestResult<T>;
 

@@ -7,9 +7,9 @@
 use std::sync::LazyLock;
 
 use ed25519_dalek::SigningKey;
-use libfuzzer_sys::fuzz_target;
 use ferritor_core::audit_chain::verify;
 use ferritor_fuzz::{AUDIT_KEY, assert_proven_only_if_genuine, chains};
+use libfuzzer_sys::fuzz_target;
 
 static GENUINE: LazyLock<Vec<Vec<Vec<u8>>>> = LazyLock::new(|| {
     [

@@ -1,7 +1,7 @@
 //! What the fuzz targets share: the audit verifier's oracle.
 
-use serde::Deserialize;
 use ferritor_core::audit_chain::{MAX_LINE, Report, Verdict};
+use serde::Deserialize;
 
 /// The fixed test key the genuine logs are signed with (seeds included).
 /// Public, but the fuzzer can't compute Ed25519 signatures with it: every

@@ -5,8 +5,8 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use libfuzzer_sys::fuzz_target;
 use ferritor_core::policy::{RowFields, SetEntry, row_message, set_message};
+use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug, PartialEq, Eq)]
 struct Row {

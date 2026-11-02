@@ -5,10 +5,10 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use libfuzzer_sys::fuzz_target;
-use serde::Deserialize;
 use ferritor_core::path::SecretPath;
 use ferritor_core::policy::{MAX_DESCRIPTION, MAX_PATHS, PolicySpec, Scope, SecretAction};
+use libfuzzer_sys::fuzz_target;
+use serde::Deserialize;
 
 /// The JSON API's apply body and `ferritor policy apply -f x.json`.
 #[derive(Deserialize)]

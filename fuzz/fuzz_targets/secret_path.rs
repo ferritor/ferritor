@@ -3,8 +3,8 @@
 //! of that path; and the listing range must hold exactly the paths below.
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use ferritor_core::path::{MAX_LEN, Namespace, SecretPath};
+use libfuzzer_sys::fuzz_target;
 
 /// The rule, restated from the module docs, independently of the parser.
 fn canonical(s: &str) -> bool {
