@@ -3912,7 +3912,7 @@ THE SOFTWARE.
 MIT License
 
 Used by:
-- ctutils 0.4.3
+- ctutils 0.4.8
 
 Copyright (c) 2025-2026 The RustCrypto Project Developers
 

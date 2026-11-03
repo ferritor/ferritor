@@ -22,9 +22,7 @@ unmaintained = "all"
 yanked = "deny"
 # Each entry needs a reason and a date to look at it again, e.g.
 # { id = "RUSTSEC-0000-0000", reason = "only reachable via X, which ferritor never calls; recheck 2027-01" }
-ignore = [
-    { id = "RUSTSEC-2026-0385", reason = "ctutils 0.4.3 (non-constant-time mask generation and u128 comparisons) comes in through aes-gcm, digest and hmac, not as a direct dependency; fixed in 0.4.4, taken with the planned aes-gcm and hmac upgrade. Not judged unreachable: the constant-time comparisons of GCM tags and MACs go through it. Recheck 2026-11" },
-]
+ignore = []
 
 [sources]
 # crates.io only: no git dependencies, no other registries.
