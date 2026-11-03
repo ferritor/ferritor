@@ -447,8 +447,11 @@ come from git tags (`git_only`).
   (`actions/create-github-app-token`: an hour at most, this repository,
   contents and pull requests), from the private key in the `release-plz`
   environment's secret `RELEASE_PLZ_APP_PRIVATE_KEY`, which only `main`
-  may use, and the variable `RELEASE_PLZ_APP_CLIENT_ID`. `release` keeps
-  `GITHUB_TOKEN`: the tags and the GitHub release.
+  may use, and the variable `RELEASE_PLZ_APP_CLIENT_ID`. `release` runs
+  as the App too, with contents write and pull requests read: a tag
+  ruleset lets only the App create release tags (`v*`, `ferritor-*-v*`),
+  since `GITHUB_TOKEN` can't bypass a ruleset. The image jobs keep
+  `GITHUB_TOKEN`, for ghcr.io.
 - **A merge whose `CI` fails** is never released; fix it on a branch whose
   name starts with `release-plz-`, whose merge release-plz releases once
   `CI` passes.

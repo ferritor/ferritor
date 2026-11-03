@@ -2,7 +2,8 @@
 # docs/src/content/docs/contributing/development.md, "Releases"). On every
 # push to main, `release-pr` opens or updates the release pull request (the
 # next version, the changelogs), as the ferritor-release GitHub App, so its
-# checks run like any pull request's. `release` runs once CI has passed on a push
+# checks run like any pull request's; `release`, as the App too, tags and
+# creates the GitHub release (the tag ruleset lets only it). `release` runs once CI has passed on a push
 # to main, on the very commit CI checked, and releases it only if it's the
 # merge of a release pull request (release_always = false): it tags it and
 # creates the GitHub release. So nothing is tagged that CI didn't pass.
@@ -29,7 +30,11 @@ env:
 jobs:
   # Tags and releases what a merged release pull request versioned, once CI
   # passed on it: only a push's run (not the daily schedule's), only a
-  # success.
+  # success. As the ferritor-release App, like release-pr: the tag ruleset
+  # restricts creating release tags to it (GITHUB_TOKEN can't bypass a
+  # ruleset). Its token is minted here, from the `release-plz`
+  # environment's key, which only main may use (this job runs on the
+  # default branch: workflow_run).
   release:
     name: release
     if: >-
@@ -39,9 +44,10 @@ jobs:
       && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: release-plz
+    # GITHUB_TOKEN writes nothing here: the App's token tags and releases.
     permissions:
-      contents: write      # push the tags, create the release
-      pull-requests: read  # find the release pull request and its commits
+      contents: read
     concurrency:
       group: release-plz-release
       cancel-in-progress: false
@@ -49,6 +55,13 @@ jobs:
       # The product's version (the server's), if this run released it.
       version: ${{ steps.released.outputs.version }}
     steps:
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write # push the tags, create the release
+          permission-pull-requests: read # find the release pull request and its commits
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The commit CI passed, not whatever main is now: release-plz
@@ -63,7 +76,7 @@ jobs:
           command: release
           version: "0.4.2"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
       - id: released
         env:
           RELEASES: ${{ steps.release-plz.outputs.releases }}
