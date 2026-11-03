@@ -440,17 +440,18 @@ come from git tags (`git_only`).
   [conventional commits](https://www.conventionalcommits.org/) the start
   also chooses the version: `fix` a patch, `feat` a minor (a patch while
   below 1.0), a breaking change (`feat!:`) a major (a minor below 1.0).
-- **Settings it needs**: under Settings, Actions, "Allow GitHub Actions to
-  create and approve pull requests".
-- **Known gap: the release pull request isn't checked before it merges.**
-  It's opened with the workflow's own token, and a pull request opened
-  with that token starts no other workflow, so `CI` and `Docs` don't run
-  on it (and, as required checks, would block it). Its merge is checked:
-  nothing is tagged until `CI` passes on the merge commit. If that fails,
-  nothing is released; fix it on a branch whose name starts with
-  `release-plz-`, whose merge release-plz releases once `CI` passes. To
-  check the pull request itself, give `release-pr` a GitHub App's token
-  (or a fine-grained personal one) as `GITHUB_TOKEN`.
+- **The release pull request is opened by a GitHub App**,
+  `ferritor-release`, not with the workflow's own token: a pull request
+  opened with `GITHUB_TOKEN` starts no other workflow, so `CI` and `Docs`
+  wouldn't run on it. `release-pr` mints the App's token for itself
+  (`actions/create-github-app-token`: an hour at most, this repository,
+  contents and pull requests), from the private key in the `release-plz`
+  environment's secret `RELEASE_PLZ_APP_PRIVATE_KEY`, which only `main`
+  may use, and the variable `RELEASE_PLZ_APP_CLIENT_ID`. `release` keeps
+  `GITHUB_TOKEN`: the tags and the GitHub release.
+- **A merge whose `CI` fails** is never released; fix it on a branch whose
+  name starts with `release-plz-`, whose merge release-plz releases once
+  `CI` passes.
 
 To see what the next release would write, in a throwaway worktree of
 `HEAD`. Preview only what's committed: the worktree has only the

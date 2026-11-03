@@ -217,6 +217,7 @@ CI (`.github/workflows/ci.yml`, and `docs.yml`, which also publishes the docs si
 
 - Commit subjects start with a conventional prefix the changelog groups by (`release-plz.toml`'s `commit_parsers`): `feat`, `fix`, `perf`, `security`, `changed`, `deprecated`, `removed`, followed by `:`, a `(scope)` or `!` (e.g. `feat: watch streams for the agent`, `fix(agent): …`, `feat!: …`); anything else, "fixture…" included, is listed under Other. `fix` and `feat` also choose the next version, `!` marks a breaking change.
 - Only the merge of a release pull request is released, once `CI` passes on it (`release_always = false`, `release-plz.yml`); a fix for a failed one goes on a branch starting with `release-plz-`.
+- `release-pr` runs as the `ferritor-release` GitHub App (its token minted in the job from the `release-plz` environment's key, which only `main` may use), so the release pull request's checks run; `release` keeps `GITHUB_TOKEN`, which the tag ruleset lets push `v*` and `ferritor-*-v*` tags. Don't swap them: the App mustn't get tag or release rights, and `GITHUB_TOKEN` can't start the pull request's checks.
 - The `CHANGELOG.md` files are release-plz's: it writes each release's section in the release pull request, where it may be edited before merging. Don't edit a released section afterwards, and don't add one by hand. The root one is the server's (the product's, with every released crate's commits); each other released crate has its own beside its `Cargo.toml`.
 
 ## Coding conventions

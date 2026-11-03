@@ -1,7 +1,8 @@
 # Releases with release-plz (release-plz.toml;
 # docs/src/content/docs/contributing/development.md, "Releases"). On every
 # push to main, `release-pr` opens or updates the release pull request (the
-# next version, the changelogs). `release` runs once CI has passed on a push
+# next version, the changelogs), as the ferritor-release GitHub App, so its
+# checks run like any pull request's. `release` runs once CI has passed on a push
 # to main, on the very commit CI checked, and releases it only if it's the
 # merge of a release pull request (release_always = false): it tags it and
 # creates the GitHub release. So nothing is tagged that CI didn't pass.
@@ -70,21 +71,35 @@ jobs:
           version=$(jq -r '.[]? | select(.package_name == "ferritor-server") | .version' <<<"${RELEASES:-[]}")
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
-  # Opens or updates the release pull request.
+  # Opens or updates the release pull request, as the ferritor-release
+  # GitHub App: a pull request opened with GITHUB_TOKEN starts no workflow,
+  # so CI and Docs wouldn't run on it. The App's token is minted here for
+  # this job only (an hour at most, this repository, contents and pull
+  # requests), from its private key in the `release-plz` environment, which
+  # only main may use.
   release-pr:
     name: release pull request
     if: github.repository_owner == 'ferritor' && github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    environment: release-plz
+    # GITHUB_TOKEN writes nothing here: the App's token pushes the branch
+    # and opens the pull request.
     permissions:
-      contents: write      # push the release branch
-      pull-requests: write # open and update the pull request
+      contents: read
     # One at a time, and never cut short: a cancelled run can leave the
     # branch and the pull request half updated.
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
     steps:
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_PLZ_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -95,7 +110,7 @@ jobs:
           command: release-pr
           version: "0.4.2"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   # The container images of a release: the Dockerfile's four targets, built
   # on a runner of each architecture (natively: Rust under emulation takes
