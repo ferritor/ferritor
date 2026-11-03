@@ -106,6 +106,7 @@ struct Env {
     provider: Arc<Provider>,
     config: ProviderConfig,
     serving: Vec<JoinHandle<()>>,
+    gate: Arc<Gate>,
 }
 
 impl Env {
@@ -253,6 +254,7 @@ impl Env {
             provider: Arc::new(Provider::new(config.clone())),
             config,
             serving,
+            gate,
         })
     }
 
@@ -318,7 +320,19 @@ impl Env {
             .count()
     }
 
-    fn exchanges(&self) -> usize {
+    /// The exchanges audited. Their entries are queued, not waited for, so
+    /// it first waits for one decision that is (a check no test makes): the
+    /// writer takes entries in order, so every exchange audited before it
+    /// is written too, however slow the machine.
+    async fn exchanges(&self) -> usize {
+        if let Ok(barrier) = SecretPath::parse("test/audit-barrier") {
+            let caller = Caller::Identity(barrier.clone());
+            // Allowed or not, the decision is recorded before this returns.
+            self.gate
+                .check(&caller, Action::Read, Target::Path(&barrier))
+                .await
+                .ok();
+        }
         self.audit
             .lines()
             .iter()
@@ -393,7 +407,7 @@ async fn a_prefix_volume_holds_every_secret_below_it() {
         ]
     );
     assert_eq!(env.decisions(API, "read"), 2);
-    assert_eq!(env.exchanges(), 1);
+    assert_eq!(env.exchanges().await, 1);
 
     // A refresh past the shared window, nothing changed: one listing, no
     // read, no new exchange (the token's mapping is remembered).
@@ -401,7 +415,7 @@ async fn a_prefix_volume_holds_every_secret_below_it() {
     env.provider.mount_at(&request, later).await.unwrap();
     assert_eq!(env.decisions(API, "read"), 2);
     assert_eq!(env.decisions(API, "list"), 2);
-    assert_eq!(env.exchanges(), 1);
+    assert_eq!(env.exchanges().await, 1);
 
     env.put("billing/api/db-password", "bar").await.unwrap();
     let refreshed = env
@@ -504,13 +518,13 @@ async fn a_refused_token_is_remembered() {
             "{refused:?}"
         );
     }
-    let refusals = env.exchanges();
+    let refusals = env.exchanges().await;
     assert_eq!(refusals, 1);
     env.provider
         .mount_at(&request, t0 + Duration::from_secs(61))
         .await
         .unwrap_err();
-    assert_eq!(env.exchanges(), 2);
+    assert_eq!(env.exchanges().await, 2);
     env.destroy().await.unwrap();
 }
 
@@ -762,7 +776,7 @@ async fn concurrent_mounts_with_one_token_exchange_it_once() {
     );
     a.unwrap();
     b.unwrap();
-    assert_eq!(env.exchanges(), 1);
+    assert_eq!(env.exchanges().await, 1);
     env.destroy().await.unwrap();
 }
 
