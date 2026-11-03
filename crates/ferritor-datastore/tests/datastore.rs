@@ -450,10 +450,20 @@ async fn an_exhausted_pool_is_a_timeout() {
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .acquire_timeout(Duration::from_millis(100))
-        .connect_with((*db.db.pool().connect_options()).clone())
-        .await
-        .unwrap();
-    let only_connection = pool.acquire().await.unwrap();
+        .connect_lazy_with((*db.db.pool().connect_options()).clone());
+    // Opening the one connection falls under the same 100 ms, which a busy
+    // machine can take longer than (CI did): retried until it opens. The
+    // timeout under test is the next acquire's, with it held.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let only_connection = loop {
+        match pool.acquire().await {
+            Ok(connection) => break connection,
+            Err(e) if std::time::Instant::now() > deadline => {
+                panic!("no connection within 10 s: {e}")
+            }
+            Err(_) => {}
+        }
+    };
     // The client-side bound is far away: the pool's timeout fires first.
     let store = Datastore::new(pool.clone()).with_timeout(Duration::from_secs(5));
     assert!(matches!(
