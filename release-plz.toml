@@ -12,7 +12,10 @@
 # the product's; the other packages are tagged (ferritor-core-v0.9.1,
 # ferritor-workspace-v0.9.1) because git-only mode finds a package's last
 # release by its tag.
-
+#
+# The GitHub release is created as a draft: the repository's releases are
+# immutable once published, so release-plz.yml attaches the binaries, their
+# checksums and signatures and the images' digests first, then publishes.
 
 [workspace]
 git_only = true             # versions from git tags, never a registry
@@ -62,6 +65,7 @@ changelog_include = [
 version_group = "ferritor"
 git_tag_name = "v{{ version }}"
 git_release_enable = true
+git_release_draft = true
 git_release_name = "ferritor v{{ version }}"
 
 # The workspace root's package: no code, only the files outside crates/, so

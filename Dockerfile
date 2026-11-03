@@ -11,7 +11,8 @@
 #
 # Each release publishes them, for amd64 and arm64, as
 # ghcr.io/ferritor/ferritor-<target>:<version> and :latest, signed with
-# cosign (.github/workflows/release-plz.yml).
+# cosign, and the same binaries as archives on the GitHub release
+# (`binaries`, below; .github/workflows/release-plz.yml).
 #
 # Each image also carries ferritor's licenses and the third-party notices
 # its binary needs (THIRD-PARTY-LICENSES.txt, from cargo-about) under
@@ -45,6 +46,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && mkdir /out \
  && cd "target/$(cat /target)/release" \
  && cp ferritor-server ferritor-csi-provider ferritor-agent ferritor /out/
+
+# The four binaries alone, for a release's archives:
+#   docker buildx build --target binaries --output type=local,dest=out .
+FROM scratch AS binaries
+COPY --from=build /out/ /
 
 FROM scratch AS server
 # For the AWS KMS client, which trusts the system's CAs.

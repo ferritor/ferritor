@@ -45,6 +45,22 @@ database. A release build never reads a `.env` file (see
 repository's `Dockerfile` builds an image per binary
 ([development](/contributing/development#images)).
 
+Or take a release's binaries: each [GitHub
+release](https://github.com/ferritor/ferritor/releases) has an archive per
+architecture (`ferritor-<version>-x86_64-unknown-linux-musl.tar.gz`, and
+`aarch64`), static, so they run on any Linux. Verify it before you
+unpack it: its cosign bundle must name the release workflow, and its
+checksum must match.
+
+```sh
+f=ferritor-0.9.1-x86_64-unknown-linux-musl.tar.gz
+cosign verify-blob "$f" --bundle "$f.sigstore.json" \
+  --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf "$f"   # ferritor-server, ferritor-csi-provider, ferritor-agent, ferritor
+```
+
 ## 2. Databases
 
 One database and one login role per side; the role owns its database,

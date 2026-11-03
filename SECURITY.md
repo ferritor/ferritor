@@ -50,6 +50,11 @@ ferritor is before 1.0: fixes go into the next release only, built from
 
 ## Verifying a release
 
-The released images are signed with cosign, keyless, by the release
-workflow: see the [Kubernetes guide](https://ferritor.dev/getting-started/kubernetes#what-you-need)
-for the `cosign verify` command, and deploy by the digest that verified.
+The released images and the release archives are signed with cosign,
+keyless, by the release workflow. Each release's notes have the commands:
+`cosign verify` for an image (see the [Kubernetes
+guide](https://ferritor.dev/getting-started/kubernetes#what-you-need); deploy by
+the digest that verified), `cosign verify-blob` with the archive's
+`.sigstore.json` bundle for a binary (see the [production
+guide](https://ferritor.dev/getting-started/production#1-build)). Both must name
+`https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main`.

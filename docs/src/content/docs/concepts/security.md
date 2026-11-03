@@ -178,8 +178,11 @@ is recorded in Sigstore's public transparency log. Verifying it
 ([Kubernetes](/getting-started/kubernetes#what-you-need)) proves an image is
 one that workflow built and pushed, not that its code is sound: whoever
 can merge to `main` (a release pull request included) can have an image
-signed, and GitHub and Sigstore are trusted for the identity. Nothing else
-is signed: the GitHub releases carry no binaries.
+signed, and GitHub and Sigstore are trusted for the identity. The release
+archives (the same static binaries, for x86_64 and aarch64 Linux) are
+signed the same way, each with a cosign bundle beside it, and `SHA256SUMS`
+lists their checksums; a published release is immutable, so its assets
+can't be swapped afterwards.
 
 ## What it doesn't defend against
 

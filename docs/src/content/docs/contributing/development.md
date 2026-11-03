@@ -411,8 +411,23 @@ come from git tags (`git_only`).
   edited there before merging. Merging it releases, and nothing else does
   (`release_always = false`): once `CI` has passed on the merge commit,
   `release` tags that very commit and creates the GitHub release from the
-  root changelog. A push that isn't a release pull request's merge is
-  never released, and a merge whose `CI` fails isn't either.
+  root changelog, as a **draft**. A push that isn't a release pull
+  request's merge is never released, and a merge whose `CI` fails isn't
+  either.
+- **Draft, then published**: the repository's releases are immutable once
+  published (no asset can be added after), so the workflow completes the
+  draft first. `release-assets` attaches the binaries, `SHA256SUMS` and a
+  cosign bundle (`.sigstore.json`) for each file, appends the images'
+  digests and how to verify to the notes, and only then publishes. If it
+  fails the release stays a draft, and re-running the job completes it.
+- **Binaries**: `ferritor-<version>-x86_64-unknown-linux-musl.tar.gz` and
+  the `aarch64` one, each the four static binaries (`ferritor-server`,
+  `ferritor-csi-provider`, `ferritor-agent`, `ferritor`) with
+  `LICENSE-MIT`, `LICENSE-APACHE` and `THIRD-PARTY-LICENSES.txt`: the same
+  build as the images (the Dockerfile's `binaries` target), packed
+  reproducibly (sorted, the commit's time, no owners, no gzip timestamp).
+  Each is signed keyless with cosign, as the images are, so `cosign
+  verify-blob` with the same identity checks it.
 - **Images**: a release then builds the [images](#images) from the
   released commit, each architecture on its own runner (`images`, amd64 on
   `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`: natively, since Rust under
