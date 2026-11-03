@@ -199,7 +199,7 @@ docker build --target cli          -t ferritor-cli .
 
 Each release publishes the four on ghcr.io, for amd64 and arm64:
 `ghcr.io/ferritor/ferritor-server`, `ferritor-csi-provider`,
-`ferritor-agent` and `ferritor-cli`, tagged with the version (`0.9.0`)
+`ferritor-agent` and `ferritor-cli`, tagged with the version (`0.9.1`)
 and `latest` (see [Releases](#releases)).
 
 - One build stage compiles all four, statically linked against musl
