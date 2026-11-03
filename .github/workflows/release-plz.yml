@@ -142,18 +142,24 @@ jobs:
           git fetch --quiet origin "$branch"
           git checkout --quiet --detach FETCH_HEAD
           cp Cargo.lock fuzz/Cargo.lock
-          cargo fetch --manifest-path fuzz/Cargo.toml
+          cargo fetch --quiet --manifest-path fuzz/Cargo.toml
           if git diff --quiet -- fuzz/Cargo.lock; then
             echo "fuzz/Cargo.lock already has the release's versions"
             exit 0
           fi
           git diff --stat -- fuzz/Cargo.lock
+          # The request in a file: the file, base64, is longer than one
+          # command-line argument may be (128 KiB).
+          base64 -w0 fuzz/Cargo.lock >"$RUNNER_TEMP/content"
+          jq -n \
+            --arg message "chore: fuzz/Cargo.lock for the release's versions" \
+            --arg branch "$branch" \
+            --arg sha "$(git rev-parse FETCH_HEAD:fuzz/Cargo.lock)" \
+            --rawfile content "$RUNNER_TEMP/content" \
+            '{message: $message, branch: $branch, sha: $sha, content: $content}' \
+            >"$RUNNER_TEMP/request.json"
           gh api --method PUT "repos/$GH_REPO/contents/fuzz/Cargo.lock" \
-            -f message="chore: fuzz/Cargo.lock for the release's versions" \
-            -f branch="$branch" \
-            -f sha="$(git rev-parse FETCH_HEAD:fuzz/Cargo.lock)" \
-            -f content="$(base64 -w0 fuzz/Cargo.lock)" \
-            --jq '.commit.html_url'
+            --input "$RUNNER_TEMP/request.json" --jq '.commit.html_url'
 
   # The container images of a release: the Dockerfile's four targets, built
   # on a runner of each architecture (natively: Rust under emulation takes
