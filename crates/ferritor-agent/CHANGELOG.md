@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/ferritor/ferritor/compare/ferritor-agent-v0.9.0...ferritor-agent-v0.9.1) - 2026-11-03
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.9.0](https://github.com/ferritor/ferritor/releases/tag/ferritor-agent-v0.9.0) - 2026-11-03
 
 ### Added
