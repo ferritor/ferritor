@@ -118,12 +118,42 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
-      - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
+      - id: release-plz
+        uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
         with:
           command: release-pr
           version: "0.4.2"
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      # release-plz bumps the versions in Cargo.lock, not in fuzz/Cargo.lock:
+      # the fuzz crate is a workspace of its own, whose lockfile records the
+      # ferritor crates' versions too, and CI builds it --locked. So the
+      # release pull request carries that update as well, committed through
+      # the API (a commit GitHub signs, as the App). release-plz rebuilds the
+      # branch at every push to main; this adds it back each time.
+      - name: fuzz/Cargo.lock for the release's versions
+        if: steps.release-plz.outputs.pr != '' && steps.release-plz.outputs.pr != '{}'
+        env:
+          PR: ${{ steps.release-plz.outputs.pr }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          branch=$(jq -er .head_branch <<<"$PR")
+          git fetch --quiet origin "$branch"
+          git checkout --quiet --detach FETCH_HEAD
+          cp Cargo.lock fuzz/Cargo.lock
+          cargo fetch --manifest-path fuzz/Cargo.toml
+          if git diff --quiet -- fuzz/Cargo.lock; then
+            echo "fuzz/Cargo.lock already has the release's versions"
+            exit 0
+          fi
+          git diff --stat -- fuzz/Cargo.lock
+          gh api --method PUT "repos/$GH_REPO/contents/fuzz/Cargo.lock" \
+            -f message="chore: fuzz/Cargo.lock for the release's versions" \
+            -f branch="$branch" \
+            -f sha="$(git rev-parse FETCH_HEAD:fuzz/Cargo.lock)" \
+            -f content="$(base64 -w0 fuzz/Cargo.lock)" \
+            --jq '.commit.html_url'
 
   # The container images of a release: the Dockerfile's four targets, built
   # on a runner of each architecture (natively: Rust under emulation takes

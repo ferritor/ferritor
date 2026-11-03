@@ -408,7 +408,10 @@ come from git tags (`git_only`).
 
 - **The release pull request.** Every push to `main` opens or updates
   it: the next version and the changelogs' new section, which can be
-  edited there before merging. Merging it releases, and nothing else does
+  edited there before merging. release-plz bumps the versions in
+  `Cargo.lock` only, so `release-pr` adds a commit of its own with
+  `fuzz/Cargo.lock` brought in line (the fuzz crate's lockfile records the
+  ferritor crates' versions too, and CI builds it `--locked`). Merging it releases, and nothing else does
   (`release_always = false`): once `CI` has passed on the merge commit,
   `release` tags that very commit and creates the GitHub release from the
   root changelog, as a **draft**. A push that isn't a release pull
