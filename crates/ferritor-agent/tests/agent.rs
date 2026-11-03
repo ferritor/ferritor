@@ -848,7 +848,14 @@ async fn a_refusal_ending_is_no_change() {
 /// valid.
 #[tokio::test]
 async fn a_token_is_exchanged_and_the_certificate_renewed() {
-    let env = Env::start(Some(Duration::from_secs(3))).await.unwrap();
+    // Real certificates, checked on the real clock: each step waits until
+    // a renewal is due (two thirds of LIFETIME), and the refused renewal
+    // must still find the current certificate valid, which leaves a third
+    // of LIFETIME for the work in between. 3 s gave too little on a busy
+    // runner (CI); 9 s leaves 3.
+    const LIFETIME: Duration = Duration::from_secs(9);
+    let due = LIFETIME * 2 / 3 + Duration::from_millis(100);
+    let env = Env::start(Some(LIFETIME)).await.unwrap();
     env.grants
         .allow("ci/acme/agent", Action::Read, "billing/app");
     env.grants
@@ -870,9 +877,9 @@ async fn a_token_is_exchanged_and_the_certificate_renewed() {
     agent.poll(t0 + INTERVAL).await;
     assert_eq!(env.exchanged(), ["ci/acme/agent"]);
 
-    // Two thirds in (2 s of 3): exchanged again, with the new token.
+    // Two thirds in: exchanged again, with the new token.
     env.token("other").unwrap();
-    tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(due).await;
     env.put("billing/app/db", "v2").await.unwrap();
     agent.poll(t0 + INTERVAL * 2).await;
     assert_eq!(env.exchanged(), ["ci/acme/agent", "ci/other/agent"]);
@@ -882,7 +889,7 @@ async fn a_token_is_exchanged_and_the_certificate_renewed() {
 
     // A token the exchange refuses: the current certificate stays in use.
     std::fs::write(env.dir.join("token"), "not a token").unwrap();
-    tokio::time::sleep(Duration::from_millis(2100)).await;
+    tokio::time::sleep(due).await;
     agent.poll(t0 + INTERVAL * 3).await;
     assert_eq!(env.exchanged().len(), 2);
     let status = status(&out).unwrap();
