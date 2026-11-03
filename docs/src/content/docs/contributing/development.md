@@ -345,7 +345,9 @@ Pinned, so a new release can't fail `main` with nothing changed here; bump
 each deliberately, and fix what the new version finds in the same change:
 
 - **The Rust toolchain**: `dtolnay/rust-toolchain`'s commit for the
-  version's branch, plus `toolchain:`, in both jobs (`1.99.1`), and the
+  version's branch (`1.99.1`, in the comment beside it: the branch's
+  action has the version built in, and takes no `toolchain:` input), in
+  every job that uses it, and the
   `rust` image in the `Dockerfile` (its tag, `1.99.1-slim-trixie`, and its
   digest). Use the same version locally, or local clippy and CI's can
   disagree.
