@@ -228,7 +228,7 @@ in `[workspace.package]`, inherited by every crate, like `publish = false`:
 nothing goes to crates.io). Its dependencies' licenses are held to a list,
 twice:
 
-- `cargo deny check licenses` fails on a dependency under any license not
+- `cargo deny --workspace check licenses` fails on a dependency under any license not
   in `deny.toml`'s `[licenses] allow` (CI's `advisories` job).
 - `THIRD-PARTY-LICENSES.txt` holds the notices the binaries' dependencies
   require (each crate's license text and copyright lines; MIT for a crate
@@ -242,7 +242,7 @@ twice:
 
 ```sh
 cargo fetch --locked   # every platform's crates, the musl-only ones too
-cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt
+cargo about generate --frozen --workspace about.hbs -o THIRD-PARTY-LICENSES.txt
 ```
 
 A crate holding two texts of one license (a Rust wrapper's and the C
@@ -308,7 +308,7 @@ or in dev mode.
 | `test` | the two Postgres servers as in `compose.yaml`; the migrations; `cargo sqlx prepare --check` in both store crates; `cargo test --workspace` |
 | `fuzz` | the fuzz crate's fmt and clippy; that `fuzz/Cargo.lock` has Cargo.lock's version of every crate both name; then every target (see "Fuzzing") for 30 s, daily 5 minutes, from its seeds and the corpus the previous run left (cached). Every target runs even after one crashes; a crash's input is kept as the run's `fuzz-artifacts` |
 | `cluster` | `e2e/cluster.sh` (above), after a release build of the CLI: the server's and the provider's images built, the CSI provider with the real driver and kubelet in k3s, k3d pinned and its download checked; then the agent's and the CLI's images, so every target builds |
-| `advisories` | `cargo deny check advisories sources` (`deny.toml`), for both lockfiles: a RUSTSEC vulnerability, an unmaintained crate, a yanked version, or a crate from anywhere but crates.io fails the build. Also daily, since new advisories land without a change here. For the main lockfile `licenses` too: a dependency under a license not in `deny.toml`'s list fails it (the fuzz crate is never distributed) |
+| `advisories` | `cargo deny check advisories sources` (`deny.toml`; `--workspace` for the main one, whose root is a package), for both lockfiles: a RUSTSEC vulnerability, an unmaintained crate, a yanked version, or a crate from anywhere but crates.io fails the build. Also daily, since new advisories land without a change here. For the main lockfile `licenses` too: a dependency under a license not in `deny.toml`'s list fails it (the fuzz crate is never distributed) |
 
 `.github/workflows/docs.yml` builds the docs site on the same events
 (`build`, with Astro's own action: install, build, and the site uploaded
@@ -335,8 +335,8 @@ buf lint && buf format --diff --exit-code && buf breaking --against '.git#branch
 (cd crates/ferritor-keystore && cargo sqlx prepare --check)
 (cd crates/ferritor-datastore && cargo sqlx prepare --check)
 cargo test --workspace --locked
-cargo deny check advisories sources licenses
-cargo fetch --locked && cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt && git diff --exit-code THIRD-PARTY-LICENSES.txt
+cargo deny --workspace check advisories sources licenses
+cargo fetch --locked && cargo about generate --frozen --workspace about.hbs -o THIRD-PARTY-LICENSES.txt && git diff --exit-code THIRD-PARTY-LICENSES.txt
 cargo deny --manifest-path fuzz/Cargo.toml check advisories sources
 (cd docs && pnpm install --frozen-lockfile && pnpm build)
 ```
@@ -427,13 +427,20 @@ come from git tags (`git_only`).
 - **One version for every crate** (`version.workspace`, one
   `version_group`), so a release bumps them all.
 - **Changelogs**: each crate's `CHANGELOG.md` beside its `Cargo.toml`,
-  with the commits that touched its directory. The server's is the root
-  `CHANGELOG.md`, the product's: its commits and every other released
-  crate's. A commit that touches no crate (docs, CI) is in none.
-  `ferritor-testkit` isn't released.
-- **Tags**: `v0.2.0` for the product (the server's), with the GitHub
-  release; `ferritor-core-v0.2.0` and so on for the others, which is how
-  release-plz finds each crate's previous release.
+  with the commits that touched its directory (release-plz counts a
+  package's own files only). The server's is the root `CHANGELOG.md`, the
+  product's: its commits, every other released crate's, and the workspace
+  root package's. That one, `ferritor` (`src/lib.rs`, no code), exists
+  for this: it owns every file outside `crates/` (`Cargo.lock`, the
+  Dockerfile, the workflows, the docs, `deny.toml`), so a commit to those
+  (a dependency's security fix, a CI change) is in the product's
+  changelog too. It writes no changelog of its own. `ferritor-testkit`
+  isn't released.
+- **Tags**: `v0.9.1` for the product (the server's), with the GitHub
+  release; `ferritor-core-v0.9.1` and so on for the crates, and
+  `ferritor-workspace-v0.9.1` for the root package: that's how release-plz
+  finds each one's previous release. A tag ruleset lets only the App
+  create, move or delete them.
 - **Commit subjects** sort a commit into the changelog by their start:
   `feat` (Added), `changed`, `deprecated`, `removed`, `fix` (Fixed),
   `perf` (Performance), `security`; anything else is Other. With

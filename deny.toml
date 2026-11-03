@@ -1,6 +1,8 @@
-# cargo-deny: advisories, sources and licenses (`cargo deny check
-# advisories sources licenses`, run by CI on every change and daily, since a
-# new RUSTSEC advisory lands without one). A secret manager's build fails on
+# cargo-deny: advisories, sources and licenses (`cargo deny --workspace
+# check advisories sources licenses`, run by CI on every change and daily,
+# since a new RUSTSEC advisory lands without one; --workspace because the
+# root Cargo.toml is a package, and without it only that one's, no,
+# dependencies would be checked). A secret manager's build fails on
 # a vulnerability in its dependencies (rustls, aes-gcm, tonic, …), an
 # unmaintained crate, a yanked version, a crate from anywhere but crates.io,
 # or a license not on the list below.

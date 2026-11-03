@@ -1,5 +1,7 @@
 # cargo-about: the third-party license notices the images carry
-# (THIRD-PARTY-LICENSES.txt, generated from Cargo.lock with about.hbs;
+# (THIRD-PARTY-LICENSES.txt, generated from Cargo.lock with about.hbs, with
+# --workspace: the root Cargo.toml is a package too, and without it only
+# that one's (no) dependencies would be listed;
 # docs/src/content/docs/contributing/development.md, "Licenses").
 # What the images contain: the musl builds' runtime dependencies, without
 # build-only and dev-only crates.

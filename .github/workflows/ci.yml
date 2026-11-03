@@ -73,9 +73,9 @@ jobs:
       - name: THIRD-PARTY-LICENSES.txt up to date
         run: |
           cargo fetch --locked
-          cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt
+          cargo about generate --frozen --workspace about.hbs -o THIRD-PARTY-LICENSES.txt
           git diff --exit-code THIRD-PARTY-LICENSES.txt \
-            || { echo "::error::THIRD-PARTY-LICENSES.txt is stale: run cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt"; exit 1; }
+            || { echo "::error::THIRD-PARTY-LICENSES.txt is stale: run cargo about generate --frozen --workspace about.hbs -o THIRD-PARTY-LICENSES.txt"; exit 1; }
 
   proto:
     name: buf lint, format, breaking
@@ -304,8 +304,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # --workspace: the root Cargo.toml is a package too (release-plz), and
+      # without it cargo-deny checks only that one's (no) dependencies.
+      # --all-features is the action's default, kept.
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
+          arguments: --all-features --workspace
           command: check advisories sources licenses
       # The fuzz crate's own lockfile (libFuzzer and its dependencies): never
       # distributed, so no license check.

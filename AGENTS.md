@@ -195,8 +195,8 @@ cargo fmt
 cargo clippy --all-targets --all-features --locked -- -D warnings   # warnings are errors
 buf lint && buf format -w       # protos (config: buf.yaml, module root proto/)
 buf breaking --against '.git#branch=main'
-cargo deny check advisories sources licenses   # RUSTSEC advisories, crates.io only, allowed licenses only (deny.toml)
-cargo fetch --locked && cargo about generate --frozen about.hbs -o THIRD-PARTY-LICENSES.txt   # the third-party notices, after any Cargo.lock change
+cargo deny --workspace check advisories sources licenses   # RUSTSEC advisories, crates.io only, allowed licenses only (deny.toml); --workspace, or only the root package is checked
+cargo fetch --locked && cargo about generate --frozen --workspace about.hbs -o THIRD-PARTY-LICENSES.txt   # the third-party notices, after any Cargo.lock change
 SQLX_OFFLINE=true cargo +nightly fuzz run <target> -- -max_total_time=60   # fuzz/, its own workspace; `cargo +nightly fuzz list`
 docker build --target server -t ferritor-server .   # the images (Dockerfile): server, csi-provider, agent, cli
 (cd docs && pnpm install --frozen-lockfile && pnpm build)   # the docs site: fails on a broken internal link or an SEO audit error
@@ -217,6 +217,7 @@ CI (`.github/workflows/ci.yml`, and `docs.yml`, which also publishes the docs si
 
 - Commit subjects start with a conventional prefix the changelog groups by (`release-plz.toml`'s `commit_parsers`): `feat`, `fix`, `perf`, `security`, `changed`, `deprecated`, `removed`, followed by `:`, a `(scope)` or `!` (e.g. `feat: watch streams for the agent`, `fix(agent): …`, `feat!: …`); anything else, "fixture…" included, is listed under Other. `fix` and `feat` also choose the next version, `!` marks a breaking change.
 - Only the merge of a release pull request is released, once `CI` passes on it (`release_always = false`, `release-plz.yml`); a fix for a failed one goes on a branch starting with `release-plz-`.
+- The workspace root is a package, `ferritor` (`src/lib.rs`, no code), only so release-plz counts commits to the files outside `crates/` (it counts a package's own files): the server's changelog, the product's, includes it. Don't give it code, dependents, a changelog or the `v*` tags (those are the server's).
 - Both release-plz jobs run as the `ferritor-release` GitHub App, each minting its token in the job from the `release-plz` environment's key, which only `main` may use: `release-pr` so the release pull request's checks run (`GITHUB_TOKEN` can't start them), `release` because the tag ruleset lets only the App create `v*` and `ferritor-*-v*` tags (`GITHUB_TOKEN` can't bypass a ruleset). Each asks for the permissions it needs, no more. The image jobs keep `GITHUB_TOKEN`, for ghcr.io only; cosign's signing identity is the workflow's, whichever token tags.
 - The `CHANGELOG.md` files are release-plz's: it writes each release's section in the release pull request, where it may be edited before merging. Don't edit a released section afterwards, and don't add one by hand. The root one is the server's (the product's, with every released crate's commits); each other released crate has its own beside its `Cargo.toml`.
 
