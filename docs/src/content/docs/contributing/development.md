@@ -379,6 +379,12 @@ each deliberately, and fix what the new version finds in the same change:
   `packageManager` in `docs/package.json` (which pnpm itself honours
   locally too), the versions `docs/pnpm-lock.yaml` was written with.
 - **Actions**: by commit, the tag in a comment; update both together.
+  Dependabot does (`.github/dependabot.yml`): one grouped pull request a
+  week, `ci:` commits, a release only once it's a week old (`cooldown`),
+  so a compromised one is likely pulled before this build runs it. Review
+  it like any other: it changes what runs with this repository's tokens.
+  Not `dtolnay/rust-toolchain`, whose pins are Rust versions (above),
+  bumped by hand.
 
 Also:
 

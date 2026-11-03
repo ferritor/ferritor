@@ -1,0 +1,26 @@
+# Dependabot keeps the workflows' actions current: every `uses:` is pinned
+# by commit with its tag in a comment, and Dependabot updates both
+# (docs/src/content/docs/contributing/development.md, "CI"). Actions only:
+# Rust, Node, pnpm, the crates and the images are pinned on purpose and
+# updated by hand, with what they need changed alongside.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A release is proposed only once it's a week old: a compromised one is
+    # usually caught and pulled by then, before this build runs it.
+    cooldown:
+      default-days: 7
+    # One pull request for all of them, a week's worth at a time.
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+    ignore:
+      # Pinned to the commit of a Rust version's branch (`# 1.99.1`), or
+      # of a dated nightly for fuzzing: a new one is a new Rust, bumped by
+      # hand with the Dockerfile and the local toolchain.
+      - dependency-name: dtolnay/rust-toolchain
