@@ -406,12 +406,17 @@ tags and creates the GitHub release (`release-plz.toml`,
 `.github/workflows/release-plz.yml`). Nothing goes to crates.io: versions
 come from git tags (`git_only`).
 
-- **The release pull request.** Every push to `main` opens or updates
-  it: the next version and the changelogs' new section, which can be
-  edited there before merging. release-plz bumps the versions in
-  `Cargo.lock` only, so `release-pr` adds a commit of its own with
-  `fuzz/Cargo.lock` brought in line (the fuzz crate's lockfile records the
-  ferritor crates' versions too, and CI builds it `--locked`). Merging it releases, and nothing else does
+- **The release pull request.** `release-pr` opens or updates it when
+  started by hand: Actions, Release-plz, **Run workflow**, on `main`. It
+  holds the next version and the changelogs' new section, which can be
+  edited there before merging. Run at every push, it rebuilt the pull
+  request and ran its checks after every change. It refuses to run while a
+  release is on its way (a release pull request merged, not yet tagged,
+  because `CI` hasn't passed on it): it would offer that version again.
+  release-plz bumps the versions in `Cargo.lock` only, so `release-pr`
+  adds a commit of its own with `fuzz/Cargo.lock` brought in line (the
+  fuzz crate's lockfile records the ferritor crates' versions too, and CI
+  builds it `--locked`). Merging it releases, and nothing else does
   (`release_always = false`): once `CI` has passed on the merge commit,
   `release` tags that very commit and creates the GitHub release from the
   root changelog, as a **draft**. A push that isn't a release pull

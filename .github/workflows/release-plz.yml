@@ -1,20 +1,25 @@
 # Releases with release-plz (release-plz.toml;
-# docs/src/content/docs/contributing/development.md, "Releases"). On every
-# push to main, `release-pr` opens or updates the release pull request (the
-# next version, the changelogs), as the ferritor-release GitHub App, so its
-# checks run like any pull request's; `release`, as the App too, tags and
-# creates the GitHub release (the tag ruleset lets only it). `release` runs once CI has passed on a push
-# to main, on the very commit CI checked, and releases it only if it's the
-# merge of a release pull request (release_always = false): it tags it and
-# creates the GitHub release. So nothing is tagged that CI didn't pass.
-# A release then publishes the container images to ghcr.io and signs them
-# with cosign, keyless (`images`, `image-tags`). Nothing goes to crates.io. Pinned like ci.yml: actions by commit, the tag
-# in a comment, release-plz and Rust by version.
+# docs/src/content/docs/contributing/development.md, "Releases"), as the
+# ferritor-release GitHub App (the tag ruleset lets only it tag; a pull
+# request it opens runs its checks).
+#
+# `release-pr` opens or updates the release pull request (the next version,
+# the changelogs) only when started by hand (Actions, Release-plz, Run
+# workflow, on main): run at every push it rebuilt the pull request, and
+# ran its checks, after every change.
+#
+# `release` runs by itself once CI has passed on a push to main, on that
+# commit: if it's the merge of a release pull request (release_always =
+# false), it tags it and creates the GitHub release, so nothing is tagged
+# that CI didn't pass. A release then publishes the container images to
+# ghcr.io and signs them with cosign, keyless (`images`, `image-tags`), and
+# its binaries (`release-assets`). Nothing goes to crates.io. Pinned like
+# ci.yml: actions by commit, the tag in a comment, release-plz and Rust by
+# version.
 name: Release-plz
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
   workflow_run:
     workflows: [CI]
     types: [completed]
@@ -84,15 +89,18 @@ jobs:
           version=$(jq -r '.[]? | select(.package_name == "ferritor-server") | .version' <<<"${RELEASES:-[]}")
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
-  # Opens or updates the release pull request, as the ferritor-release
-  # GitHub App: a pull request opened with GITHUB_TOKEN starts no workflow,
-  # so CI and Docs wouldn't run on it. The App's token is minted here for
-  # this job only (an hour at most, this repository, contents and pull
-  # requests), from its private key in the `release-plz` environment, which
-  # only main may use.
+  # Opens or updates the release pull request, started by hand, on main
+  # only. As the ferritor-release GitHub App: a pull request opened with
+  # GITHUB_TOKEN starts no workflow, so CI and Docs wouldn't run on it. The
+  # App's token is minted here for this job only (an hour at most, this
+  # repository, contents and pull requests), from its private key in the
+  # `release-plz` environment, which only main may use.
   release-pr:
     name: release pull request
-    if: github.repository_owner == 'ferritor' && github.event_name == 'push'
+    if: >-
+      github.repository_owner == 'ferritor'
+      && github.event_name == 'workflow_dispatch'
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release-plz
@@ -117,6 +125,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Started while a release is still on its way (a release pull request
+      # just merged, CI not yet through, so `release` hasn't tagged it), it
+      # would offer that version again in a second pull request. Refused:
+      # wait for the release, then run it again.
+      - name: No release on its way
+        run: |
+          subject=$(git log -1 --format=%s)
+          case "$subject" in
+            "Merge pull request #"*" from ferritor/release-plz-"*|"chore: release v"*)
+              if ! git tag --points-at HEAD | grep -q '^v'; then
+                echo "::error::main's newest commit merges a release pull request that isn't released yet (no v* tag): wait for CI and the release, then run this again"
+                exit 1
+              fi
+              ;;
+          esac
       - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
       - id: release-plz
         uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
@@ -130,7 +153,7 @@ jobs:
       # ferritor crates' versions too, and CI builds it --locked. So the
       # release pull request carries that update as well, committed through
       # the API (a commit GitHub signs, as the App). release-plz rebuilds the
-      # branch at every push to main; this adds it back each time.
+      # branch each time this job runs; this adds it back each time.
       - name: fuzz/Cargo.lock for the release's versions
         if: steps.release-plz.outputs.pr != '' && steps.release-plz.outputs.pr != '{}'
         env:
