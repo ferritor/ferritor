@@ -1551,8 +1551,20 @@ async fn a_rekey_replaces_the_seal_wraps() {
     assert_eq!(config.unwrap().generation, 2);
     assert_eq!(wraps, [wrap("key-b", 2)]);
 
+    // To another provider: its wrap replaces the other provider's, and a
+    // read of every wrap sees exactly it.
+    let gcp = SealWrap {
+        provider: "gcpkms".to_owned(),
+        ..wrap("projects/p/locations/l/keyRings/r/cryptoKeys/k", 3)
+    };
     db.store
-        .rekey(2, params(5, 3).unwrap(), b"check-3", &[], &Wrapping(None))
+        .rekey(
+            2,
+            params(5, 3).unwrap(),
+            b"check-3",
+            &[],
+            &Wrapping(Some(gcp.clone())),
+        )
         .await
         .unwrap();
     assert!(
@@ -1563,5 +1575,12 @@ async fn a_rekey_replaces_the_seal_wraps() {
             .1
             .is_empty()
     );
+    assert_eq!(db.store.seal_wraps().await.unwrap(), [gcp]);
+
+    db.store
+        .rekey(3, params(5, 3).unwrap(), b"check-4", &[], &Wrapping(None))
+        .await
+        .unwrap();
+    assert!(db.store.seal_wraps().await.unwrap().is_empty());
     db.destroy().await.unwrap();
 }

@@ -727,3 +727,89 @@ async fn a_rekey_changes_the_protection_only_when_asked() {
     assert!(same.rekey_start(params).await.is_ok());
     env.destroy().await.unwrap();
 }
+
+/// The keys database stores a wrap of every auto-unseal provider (the
+/// schema's CHECK lists them), so a new provider can't be left out of it.
+#[tokio::test]
+async fn the_keys_database_takes_every_providers_wrap() {
+    let env = Env::new().await.unwrap();
+    for provider in SealMode::ALL.iter().filter_map(|mode| mode.provider()) {
+        sqlx::query(
+            "INSERT INTO seal_wraps (provider, key_id, generation, ciphertext)
+             VALUES ($1, 'k', 1, '\\x01')",
+        )
+        .bind(provider)
+        .execute(env.keys.pool())
+        .await
+        .unwrap_or_else(|e| panic!("{provider}: {e}"));
+    }
+    env.destroy().await.unwrap();
+}
+
+/// The deployment's protection is every provider's wraps: a server
+/// configured for another provider (even with a key of the same name) asks
+/// for `--seal` with its own provider, and its rekey leaves that provider's
+/// wrap alone, which then auto-unseals it.
+#[tokio::test]
+async fn a_rekey_moves_between_providers_only_when_asked() {
+    let env = Env::new().await.unwrap();
+    let params = ShareParams::new(3, 2).unwrap();
+    let gcp = Arc::new(MemoryKms::named("gcpkms", KEY));
+    let other = env.seal_with(Arc::clone(&gcp) as Arc<dyn AutoUnseal>);
+    env.unseal(&other, &env.shares[..3]).await.unwrap();
+    let refused = other.rekey_start(params).await.unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            SealError::RekeyWouldChangeSeal {
+                suggest: "gcpkms",
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert!(refused.to_string().contains("awskms with"), "{refused}");
+    assert!(matches!(
+        other
+            .rekey_start_changing(params, Some(SealMode::AwsKms))
+            .await,
+        Err(SealError::SealChangeUnconfigured {
+            asked: "awskms",
+            ..
+        })
+    ));
+
+    let new = env
+        .rekey(&other, &env.shares[..3], Some(SealMode::GcpKms))
+        .await
+        .unwrap();
+    let wraps = env.keystore().seal_wraps().await.unwrap();
+    assert_eq!(
+        wraps
+            .iter()
+            .map(|w| (w.provider.as_str(), w.generation))
+            .collect::<Vec<_>>(),
+        [("gcpkms", 2)]
+    );
+    assert!(matches!(
+        env.kms_seal().auto_unseal().await,
+        AutoOutcome::Waiting(_)
+    ));
+    let restarted = env.seal_with(gcp);
+    assert!(matches!(
+        restarted.auto_unseal().await,
+        AutoOutcome::Unsealed
+    ));
+    assert_eq!(env.read(&restarted).await.unwrap(), b"one");
+    // Now the AWS-configured server is the one asked to say so.
+    let aws = env.kms_seal();
+    env.unseal(&aws, &new[..2]).await.unwrap();
+    assert!(matches!(
+        aws.rekey_start(params).await,
+        Err(SealError::RekeyWouldChangeSeal {
+            suggest: "awskms",
+            ..
+        })
+    ));
+    env.destroy().await.unwrap();
+}

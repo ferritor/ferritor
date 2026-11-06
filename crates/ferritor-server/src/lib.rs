@@ -10,6 +10,8 @@ pub mod aws_kms;
 pub mod config;
 pub mod crl;
 pub mod destroy;
+#[cfg(feature = "gcp-kms")]
+pub mod gcp_kms;
 pub mod grpc;
 pub mod health;
 pub mod http;

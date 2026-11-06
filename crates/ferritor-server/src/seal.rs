@@ -918,13 +918,32 @@ pub enum SealMode {
     Shamir,
     /// Wrapped by AWS KMS too (auto-unseal).
     AwsKms,
+    /// Wrapped by Google Cloud KMS too (auto-unseal).
+    GcpKms,
 }
 
 impl SealMode {
+    pub const ALL: [Self; 3] = [Self::Shamir, Self::AwsKms, Self::GcpKms];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Shamir => "shamir",
-            Self::AwsKms => "awskms",
+            Self::AwsKms => crate::auto_unseal::AWS_KMS,
+            Self::GcpKms => crate::auto_unseal::GCP_KMS,
+        }
+    }
+
+    /// `rekey start --seal`'s value.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.as_str() == text)
+    }
+
+    /// The auto-unseal provider it means ([`AutoUnseal::provider`]); `None`
+    /// for the shares alone.
+    pub fn provider(self) -> Option<&'static str> {
+        match self {
+            Self::Shamir => None,
+            other => Some(other.as_str()),
         }
     }
 }
@@ -2699,7 +2718,10 @@ impl Seal {
         // The configured key, resolved before the admin lock (a slow KMS
         // mustn't delay `status`), as an auto-unseal attempt does.
         let here = match &self.auto {
-            Some(auto) => Some(auto.key_id().await.map_err(SealError::AutoUnseal)?),
+            Some(auto) => Some((
+                auto.provider(),
+                auto.key_id().await.map_err(SealError::AutoUnseal)?,
+            )),
             None => None,
         };
         let epoch = self.epoch();
@@ -2751,58 +2773,51 @@ impl Seal {
         Ok(progress)
     }
 
-    /// Whether a rekey through this server, whose configured key is `here`
-    /// (`None`: the shares alone), keeps the deployment's protection (the
-    /// stored wraps at `generation`, or none), or changes it as `change`
-    /// asks.
+    /// Whether a rekey through this server, whose configured provider and
+    /// key are `here` (`None`: the shares alone), keeps the deployment's
+    /// protection (the stored wraps at `generation`, whichever provider made
+    /// them, or none), or changes it as `change` asks.
     async fn check_seal_change(
         &self,
         generation: u32,
-        here: Option<String>,
+        here: Option<(&'static str, String)>,
         change: Option<SealMode>,
     ) -> Result<()> {
-        let stored: Vec<String> = self
+        let stored: Vec<(String, String)> = self
             .keystore
-            .seal_config_and_wraps("awskms")
+            .seal_wraps()
             .await?
-            .1
             .into_iter()
             .filter(|w| w.generation == generation)
-            .map(|w| w.key_id)
+            .map(|w| (w.provider, w.key_id))
             .collect();
-        let describe = |keys: &[String]| match keys {
+        let describe = |wraps: &[(String, String)]| match wraps {
             [] => "shamir (the shares alone)".to_owned(),
-            keys => format!("awskms with {}", keys.join(", ")),
+            wraps => wraps
+                .iter()
+                .map(|(provider, key)| format!("{provider} with {key}"))
+                .collect::<Vec<_>>()
+                .join(", "),
         };
-        let here_text = describe(here.as_slice());
+        let here_wraps: Vec<(String, String)> = here
+            .iter()
+            .map(|(provider, key)| ((*provider).to_owned(), key.clone()))
+            .collect();
+        let here_text = describe(&here_wraps);
+        let here_provider = here.as_ref().map(|(provider, _)| *provider);
         match change {
-            None => {
-                let same = match &here {
-                    None => stored.is_empty(),
-                    Some(key) => stored.len() == 1 && &stored[0] == key,
-                };
-                if same {
-                    Ok(())
-                } else {
-                    Err(SealError::RekeyWouldChangeSeal {
-                        stored: describe(&stored),
-                        here: here_text,
-                        suggest: if here.is_some() {
-                            SealMode::AwsKms.as_str()
-                        } else {
-                            SealMode::Shamir.as_str()
-                        },
-                    })
-                }
+            None if stored == here_wraps => Ok(()),
+            None => Err(SealError::RekeyWouldChangeSeal {
+                stored: describe(&stored),
+                here: here_text,
+                suggest: here_provider.unwrap_or(SealMode::Shamir.as_str()),
+            }),
+            Some(mode) if mode.provider() != here_provider => {
+                Err(SealError::SealChangeUnconfigured {
+                    asked: mode.as_str(),
+                    here: here_text,
+                })
             }
-            Some(SealMode::Shamir) if here.is_some() => Err(SealError::SealChangeUnconfigured {
-                asked: SealMode::Shamir.as_str(),
-                here: here_text,
-            }),
-            Some(SealMode::AwsKms) if here.is_none() => Err(SealError::SealChangeUnconfigured {
-                asked: SealMode::AwsKms.as_str(),
-                here: here_text,
-            }),
             Some(_) => Ok(()),
         }
     }

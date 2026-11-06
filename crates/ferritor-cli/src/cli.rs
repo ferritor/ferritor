@@ -435,11 +435,11 @@ pub enum Rekey {
         #[arg(long, default_value_t = 3)]
         threshold: u32,
         /// Change how the root key is protected, for every server: `shamir`
-        /// (the shares alone) or `awskms` (wrapped by the answering server's
-        /// configured KMS key too). Without it, the rekey keeps the
-        /// deployment's, and is refused through a server configured
-        /// otherwise.
-        #[arg(long, value_parser = ["shamir", "awskms"])]
+        /// (the shares alone), `awskms` or `gcpkms` (wrapped by the
+        /// answering server's configured KMS key too, the provider it's
+        /// configured with). Without it, the rekey keeps the deployment's,
+        /// and is refused through a server configured otherwise.
+        #[arg(long, value_parser = ["shamir", "awskms", "gcpkms"])]
         seal: Option<String>,
     },
     /// Submit one current share (stdin). The last one prints the new shares.

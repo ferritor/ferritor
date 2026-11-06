@@ -85,13 +85,15 @@ pub trait AutoUnseal: Send + Sync {
     ) -> BoxFuture<'a, Result<RootKey, AutoUnsealError>>;
 }
 
-/// A provider keeping its "key" in memory, for tests: what it wraps can be
-/// unwrapped by this instance only, for the generation it was wrapped for.
-/// Its availability can be switched off, and it counts its calls.
 /// What a [`MemoryKms`] wrapped, by handle: the generation, the key bytes.
 type InMemory = HashMap<Vec<u8>, (u32, Zeroizing<Vec<u8>>)>;
 
+/// A provider keeping its "key" in memory, for tests: what it wraps can be
+/// unwrapped by this instance only, for the generation it was wrapped for.
+/// Its availability can be switched off, and it counts its calls. It
+/// passes for `awskms` unless named otherwise ([`MemoryKms::named`]).
 pub struct MemoryKms {
+    provider: &'static str,
     key_id: String,
     wrapped: Mutex<InMemory>,
     available: AtomicBool,
@@ -102,7 +104,13 @@ pub struct MemoryKms {
 
 impl MemoryKms {
     pub fn new(key_id: &str) -> Self {
+        Self::named(AWS_KMS, key_id)
+    }
+
+    /// Passing for `provider` (`gcpkms`, say).
+    pub fn named(provider: &'static str, key_id: &str) -> Self {
         Self {
+            provider,
             key_id: key_id.to_owned(),
             wrapped: Mutex::new(HashMap::new()),
             available: AtomicBool::new(true),
@@ -140,7 +148,7 @@ impl MemoryKms {
 
 impl AutoUnseal for MemoryKms {
     fn provider(&self) -> &'static str {
-        "awskms"
+        self.provider
     }
 
     fn key_id(&self) -> BoxFuture<'_, Result<String, AutoUnsealError>> {
@@ -350,4 +358,39 @@ pub struct AwsKmsConfig {
     pub region: String,
     /// A VPC endpoint (https), or a loopback test double.
     pub endpoint: Option<String>,
+}
+
+/// `[seal.gcpkms]`, checked (see `config`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GcpKmsConfig {
+    /// The key's resource name,
+    /// `projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>`: never a
+    /// version (decrypt finds it from the ciphertext).
+    pub key_name: String,
+    /// Default `https://cloudkms.googleapis.com`; a Private Service Connect
+    /// endpoint (https), or a loopback test double.
+    pub endpoint: Option<String>,
+}
+
+/// AWS KMS's provider name (`seal_wraps.provider`, `[seal] provider`,
+/// `--seal`).
+pub const AWS_KMS: &str = "awskms";
+/// Google Cloud KMS's.
+pub const GCP_KMS: &str = "gcpkms";
+
+/// The provider `[seal]` names, checked (see `config`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderConfig {
+    AwsKms(AwsKmsConfig),
+    GcpKms(GcpKmsConfig),
+}
+
+impl ProviderConfig {
+    /// As [`AutoUnseal::provider`] names it.
+    pub fn provider(&self) -> &'static str {
+        match self {
+            Self::AwsKms(_) => AWS_KMS,
+            Self::GcpKms(_) => GCP_KMS,
+        }
+    }
 }

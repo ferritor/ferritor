@@ -116,7 +116,7 @@ where
 
 impl AutoUnseal for AwsKms {
     fn provider(&self) -> &'static str {
-        "awskms"
+        crate::auto_unseal::AWS_KMS
     }
 
     fn key_id(&self) -> BoxFuture<'_, Result<String, AutoUnsealError>> {

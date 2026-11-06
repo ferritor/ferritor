@@ -45,6 +45,14 @@ aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 aws-config = { version = "1.13.0", default-features = false, features = ["rt-tokio", "sso", "credentials-process"] }
 aws-sdk-kms = { version = "1.127.0", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http-client = { version = "1.5.2", default-features = false, features = ["rustls-ring", "rt-tokio"] }
+# Auto-unseal with Google Cloud KMS (ferritor-server's `gcp-kms` feature):
+# Google's credential chain (Application Default Credentials) only, the two
+# KMS calls over reqwest. Without their default features, which would bring
+# aws-lc-rs (a C build): rustls on ring, as the rest of ferritor.
+google-cloud-auth = { version = "1.18.0", default-features = false }
+# A request body wiped when dropped (`Bytes::from_owner`).
+bytes = "1.12.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "http2", "rustls-no-provider"] }
 anyhow = "1.0.104"
 axum = "0.8.9"
 base64 = "0.23.1"
@@ -115,7 +123,7 @@ x509-parser = "0.18.1"
 # it writes `u-int32`, which no generator knows; `int32` with `minimum: 0` is
 # exact anyway (versions are Postgres INTEGERs; page sizes are capped at 1000).
 utoipa = { version = "6.0.0", features = ["macros"] }
-zeroize = { version = "1.9.1", features = ["derive"] }
+zeroize = { version = "1.9.1", features = ["derive", "serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

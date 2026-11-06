@@ -358,31 +358,37 @@ async fn warn_when_crls_go_stale(tls: ServerTls) {
     }
 }
 
+/// The auto-unseal provider `config` names, in a build that has it.
+async fn auto_unseal_provider(
+    config: &ferritor_server::auto_unseal::ProviderConfig,
+) -> anyhow::Result<Arc<dyn ferritor_server::auto_unseal::AutoUnseal>> {
+    match config {
+        #[cfg(feature = "aws-kms")]
+        ferritor_server::auto_unseal::ProviderConfig::AwsKms(aws) => {
+            Ok(Arc::new(ferritor_server::aws_kms::AwsKms::new(aws).await))
+        }
+        #[cfg(feature = "gcp-kms")]
+        ferritor_server::auto_unseal::ProviderConfig::GcpKms(gcp) => Ok(Arc::new(
+            ferritor_server::gcp_kms::GcpKms::new(gcp)
+                .context("auto-unseal with Google Cloud KMS")?,
+        )),
+        #[cfg_attr(
+            all(feature = "aws-kms", feature = "gcp-kms"),
+            expect(unreachable_patterns, reason = "a build with every provider")
+        )]
+        other => anyhow::bail!(
+            "seal.provider = \"{}\", but this build has no support for it (built without \
+             its feature: `aws-kms`, `gcp-kms`)",
+            other.provider()
+        ),
+    }
+}
+
 /// Refreshes the keyring every `every` while unsealed (see
 /// `ferritor_server::keyring`), so a rotation by another server is picked up
 /// even by a server that only writes (it would otherwise keep wrapping new
 /// DEKs with its old active KEK). A run of failures (a rekey elsewhere, say)
 /// is audited once, at its start; each is logged.
-/// The auto-unseal provider `config` names, in a build that has it.
-#[cfg(feature = "aws-kms")]
-async fn auto_unseal_provider(
-    config: &ferritor_server::auto_unseal::AwsKmsConfig,
-) -> anyhow::Result<Arc<dyn ferritor_server::auto_unseal::AutoUnseal>> {
-    Ok(Arc::new(
-        ferritor_server::aws_kms::AwsKms::new(config).await,
-    ))
-}
-
-#[cfg(not(feature = "aws-kms"))]
-async fn auto_unseal_provider(
-    _: &ferritor_server::auto_unseal::AwsKmsConfig,
-) -> anyhow::Result<Arc<dyn ferritor_server::auto_unseal::AutoUnseal>> {
-    anyhow::bail!(
-        "seal.provider = \"awskms\", but this build has no AWS KMS support (built without \
-         the `aws-kms` feature)"
-    )
-}
-
 async fn refresh_keyring_periodically(seal: Arc<Seal>, gate: Arc<Gate>, every: Duration) {
     let mut ticks = tokio::time::interval(every);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -541,9 +547,13 @@ async fn main() -> anyhow::Result<()> {
     // the loop below starts.
     let seal = Arc::new(match settings.auto_unseal().map_err(anyhow::Error::msg)? {
         Some(config) => {
+            let region = match &config {
+                ferritor_server::auto_unseal::ProviderConfig::AwsKms(aws) => Some(&aws.region),
+                ferritor_server::auto_unseal::ProviderConfig::GcpKms(_) => None,
+            };
             tracing::info!(
-                provider = "awskms",
-                region = config.region,
+                provider = config.provider(),
+                region,
                 "auto-unseal: the server unseals itself at start (the shares stay the recovery \
                  path)"
             );

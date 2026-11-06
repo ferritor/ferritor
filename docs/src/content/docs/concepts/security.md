@@ -267,8 +267,9 @@ the policies re-applied.
 **Auto-unseal's KMS key**, when it's configured
 ([key management](/operations/key-management#auto-unseal)). With it, the root key
 can be had two ways: a threshold of shares, as always, or **read access to
-the keys database plus `Decrypt` on the KMS key** (the servers' role, and
-anyone who can act as it or change the key's policy). That second way is
+the keys database plus `Decrypt` on the KMS key** (the servers' role or
+service account, and anyone who can act as it or change the key's policy
+or IAM bindings). That second way is
 what lets a server start unattended, and what it costs: the key's access
 control becomes part of ferritor's. With **write** access to the keys database
 plus `Decrypt`, the root key also gives:
@@ -293,6 +294,19 @@ not an alias; CloudTrail alarms on calls from elsewhere or more often than
 servers start. A keys-database backup is readable by whoever also has
 `Decrypt`. Disabling the key stops future auto-unseals, not running
 servers: seal them too.
+
+With Google Cloud KMS the same holds with one gap: **IAM can't narrow the
+key's use to ferritor's wraps**. AWS's key policy can require the
+`ferritor:purpose` encryption context; Cloud KMS's additional
+authenticated data binds a wrap to its generation, but no IAM condition
+can see it, and it isn't in the audit logs. So
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key is the whole
+restriction: give it to the servers' identity alone, on that key alone,
+and keep the key for ferritor only. A VPC Service Controls perimeter plays
+the part of `aws:SourceVpce`, and anyone who may impersonate the servers'
+service account (`roles/iam.serviceAccountTokenCreator`) can `decrypt` as
+it. Cloud KMS's Data Access audit logs, which record `decrypt` calls, are
+off until turned on.
 
 What auto-unseal doesn't change: substituting or rolling back the root
 key still takes write access to both databases (the root commitment, the

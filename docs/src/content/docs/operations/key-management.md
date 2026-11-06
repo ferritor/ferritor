@@ -1,6 +1,6 @@
 ---
 title: 'Key management'
-description: 'Init, unseal and seal, the root commitment, auto-unseal with AWS KMS, namespaces, rekey, KEK rotation, rewrap and destroying KEKs.'
+description: 'Init, unseal and seal, the root commitment, auto-unseal with AWS KMS or Google Cloud KMS, namespaces, rekey, KEK rotation, rewrap and destroying KEKs.'
 seo:
   title: 'Key management in ferritor: unseal, rekey, rotate'
 ---
@@ -97,7 +97,8 @@ a key nobody holds, which is harmless.
 
 By default every start ends sealed, and a threshold of operators unseals
 each server with their shares. With auto-unseal a server unseals itself
-at start through a key management service, AWS KMS for now:
+at start through a key management service: AWS KMS (`awskms`) or Google
+Cloud KMS (`gcpkms`), one provider at a time. With AWS KMS:
 
 ```toml
 [seal]
@@ -116,15 +117,42 @@ are in [configuration](/reference/configuration#seal); credentials come from the
 SDK's usual chain (`AWS_PROFILE`, EKS Pod Identity or IRSA, an instance
 profile), never from ferritor's config.
 
+With Google Cloud KMS, the key is named by its resource name, never a
+version (decrypt finds the version from the ciphertext):
+
+```toml
+[seal]
+provider = "gcpkms"
+
+[seal.gcpkms]
+key_name = "projects/my-project/locations/asia-southeast1/keyRings/ferritor/cryptoKeys/root-key"
+```
+
+The wrap is bound to its generation by the additional authenticated data
+(`ferritor:purpose=root-key`, `ferritor:generation=<n>`), and credentials
+come from Google's Application Default Credentials (GKE Workload Identity,
+the VM's service account, `GOOGLE_APPLICATION_CREDENTIALS`). Unlike AWS's
+encryption context, the AAD doesn't appear in Cloud Audit Logs, and IAM
+can't require it: it binds a wrap to its generation, but the key's IAM
+policy can't narrow its use to ferritor's wraps, so give the key to
+ferritor alone. Everything below holds for both.
+
+Only one provider at a time: `[seal]` names one, with its own section and
+no other's, and a rekey keeps only that provider's wrap. A second provider
+would be one more way to the root key, and the recovery shares already
+cover a provider being down.
+
 - **The shares stay**, as the **recovery shares**: shares of the same root
   key, which unseal any server as before. If the KMS key is disabled,
   deleted, unreachable, or its account lost, they're the way in: an
   outage, never lost data. Keep them as carefully as before.
 - **What it trades:** with auto-unseal, whoever can read the keys database
-  *and* use the KMS key (`Decrypt`) has the root key, so the key's access
-  control becomes part of ferritor's. See [security](/concepts/security) for
-  what that implies and how to keep it narrow, and
-  [production](/getting-started/production) for the key policy.
+  *and* use the KMS key (AWS's `Decrypt`, Cloud KMS's
+  `cloudkms.cryptoKeyVersions.useToDecrypt`) has the root key, so the
+  key's access control becomes part of ferritor's. See
+  [security](/concepts/security) for what that implies and how to keep it
+  narrow, and [production](/getting-started/production) for the key
+  policy.
 - **The key comes from the config, never the database:** every `Decrypt`
   names it, so a row pointing at another key is never followed. Use the
   key's ARN in production rather than an alias: whoever can retarget an
@@ -202,24 +230,40 @@ says becomes every server's. So a rekey keeps the deployment's protection
 unless asked to change it, and refuses up front, before any share is asked
 for, through a server configured otherwise (config drift, a debugging
 node). The shares holders then approve the change knowingly, and the
-audit entry records it (`"seal"`: `kept`, `shamir` or `awskms`):
+audit entry records it (`"seal"`: `kept`, `shamir`, `awskms` or `gcpkms`):
 
 - **Shamir → KMS:** configure `[seal]` on the servers, restart them (they
   stay sealed: there's no wrap yet), unseal one with the shares, and
-  `ferritor rekey start --seal awskms`. From then on every server with that
-  config unseals itself.
+  `ferritor rekey start --seal awskms` (or `gcpkms`). From then on every
+  server with that config unseals itself.
 - **KMS → Shamir:** remove `[seal]` from a server, unseal it, `ferritor rekey
   start --seal shamir`: the commit stores no wrap, so the new shares are
   needed again.
-- **Another KMS key:** change `key_id`, then `ferritor rekey start --seal
-  awskms`.
+- **Another KMS key:** change `key_id` (`key_name`), then `ferritor rekey
+  start --seal awskms` (`gcpkms`).
+- **Another provider** (AWS → Google, say): configure the new provider on
+  a server, restart it, unseal it with the shares, and `ferritor rekey
+  start --seal gcpkms` through it. The commit replaces the AWS wrap with
+  Google's, so reconfigure the other servers before they next start. A
+  server still configured for the old provider waits for the shares
+  (there's no wrap for its key), and its rekeys are refused unless asked
+  with `--seal`.
 
-AWS's automatic key rotation keeps the old key material, so existing wraps
-keep working without one. A rekey on one server makes the others fail
-their next refresh, as without KMS: seal each of them, then `ferritor unseal
---auto` (which releases the hold that seal set and unseals through KMS
-with the new generation's wrap), or unseal them with the new shares.
-Following a rekey elsewhere on their own is still to come.
+The providers' own key rotation keeps the old key material (AWS's
+automatic rotation; Cloud KMS's new versions, as long as the old ones stay
+enabled), so existing wraps keep working without a rekey. Never disable
+or destroy a Cloud KMS key version a wrap still uses: a rekey moves the
+wrap to the primary version. The server that wraps (at init and at every
+rekey) logs the version it used (`root key wrapped by Cloud KMS`, with
+`version` and `generation`), before the commit: a rekey that fails or is
+cancelled afterwards logs one too. The version to keep is the newest
+line's whose `generation` is the one `ferritor status` shows.
+
+A rekey on one server makes the others fail their next refresh, as without
+KMS: seal each of them, then `ferritor unseal --auto` (which releases the
+hold that seal set and unseals through KMS with the new generation's
+wrap), or unseal them with the new shares. Following a rekey elsewhere on
+their own is still to come.
 
 ## Namespaces
 
