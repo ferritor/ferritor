@@ -121,14 +121,17 @@ pub struct Settings {
     pub seal: SealSettings,
 }
 
-/// `[seal]`: `provider = "shamir"` (the default: operators' shares) or
-/// `"awskms"` (auto-unseal: the root key wrapped by AWS KMS, the shares
-/// kept as recovery shares), with `[seal.awskms]`.
+/// `[seal]`: `provider = "shamir"` (the default: operators' shares),
+/// `"awskms"` or `"gcpkms"` (auto-unseal: the root key wrapped by AWS KMS
+/// or Google Cloud KMS, the shares kept as recovery shares), with the
+/// provider's own section (`[seal.awskms]`, `[seal.gcpkms]`). One provider
+/// at a time: a section for another is refused.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SealSettings {
     pub provider: Option<String>,
     pub awskms: Option<AwsKmsSettings>,
+    pub gcpkms: Option<GcpKmsSettings>,
 }
 
 /// `[seal.awskms]`.
@@ -140,6 +143,17 @@ pub struct AwsKmsSettings {
     /// Default: the ARN's.
     pub region: Option<String>,
     /// `https://` (a VPC endpoint), or loopback for a test double.
+    pub endpoint: Option<String>,
+}
+
+/// `[seal.gcpkms]`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GcpKmsSettings {
+    /// The key's resource name:
+    /// `projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>`.
+    pub key_name: String,
+    /// `https://` (Private Service Connect), or loopback for a test double.
     pub endpoint: Option<String>,
 }
 
@@ -573,25 +587,74 @@ fn aws_kms(raw: &AwsKmsSettings) -> Result<crate::auto_unseal::AwsKmsConfig, Str
         }
     };
     if let Some(endpoint) = &raw.endpoint {
-        // The root key goes in Encrypt's body: never in the clear off this
-        // host. Loopback as plaintext serving decides it, never by DNS.
-        let uri: axum::http::Uri = endpoint
-            .parse()
-            .map_err(|_| format!("seal.awskms.endpoint {endpoint:?} isn't a URL"))?;
-        let host = uri.host().unwrap_or_default();
-        let https = uri.scheme_str() == Some("https");
-        if !(https || (uri.scheme_str() == Some("http") && crate::http::is_loopback_host(host))) {
-            return Err(format!(
-                "seal.awskms.endpoint {endpoint:?} must be https:// (http:// only on loopback: \
-                 the root key is in the request)"
-            ));
-        }
+        kms_endpoint("awskms", endpoint)?;
     }
     Ok(crate::auto_unseal::AwsKmsConfig {
         key_id: raw.key_id.clone(),
         region,
         endpoint: raw.endpoint.clone(),
     })
+}
+
+/// `[seal.gcpkms]`, checked: the key's full resource name, each part
+/// non-empty and in the characters Cloud KMS allows (it goes into the
+/// request's URL), never a version.
+fn gcp_kms(raw: &GcpKmsSettings) -> Result<crate::auto_unseal::GcpKmsConfig, String> {
+    // Letters, digits, `-` and `_`, starting with a letter or digit; a
+    // project id may also be domain-scoped (`example.com:p`). Never `/`,
+    // `?`, `#`, a `:` elsewhere (`key:encrypt` is a method) or a `..`.
+    fn id(part: &str, scoped: bool) -> bool {
+        part.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && part.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '-' | '_')
+                    || (scoped && matches!(c, '.' | ':'))
+            })
+    }
+    let parts: Vec<&str> = raw.key_name.split('/').collect();
+    let shaped = matches!(
+        parts.as_slice(),
+        ["projects", project, "locations", location, "keyRings", ring, "cryptoKeys", key]
+            if id(project, true) && [location, ring, key].iter().all(|part| id(part, false))
+    );
+    if !shaped {
+        let version = if raw.key_name.contains("/cryptoKeyVersions/") {
+            " (the key, not a version: decrypt finds the version itself)"
+        } else {
+            ""
+        };
+        return Err(format!(
+            "seal.gcpkms.key_name {:?} must be the key's resource name, \
+             projects/<project>/locations/<location>/keyRings/<ring>/cryptoKeys/<key>{version}",
+            raw.key_name
+        ));
+    }
+    if let Some(endpoint) = &raw.endpoint {
+        kms_endpoint("gcpkms", endpoint)?;
+    }
+    Ok(crate::auto_unseal::GcpKmsConfig {
+        key_name: raw.key_name.clone(),
+        endpoint: raw.endpoint.clone(),
+    })
+}
+
+/// A KMS endpoint, checked: the root key goes in the wrap's request body,
+/// so never in the clear off this host. Loopback as plaintext serving
+/// decides it, never by DNS.
+fn kms_endpoint(section: &str, endpoint: &str) -> Result<(), String> {
+    let uri: axum::http::Uri = endpoint
+        .parse()
+        .map_err(|_| format!("seal.{section}.endpoint {endpoint:?} isn't a URL"))?;
+    let host = uri.host().unwrap_or_default();
+    let https = uri.scheme_str() == Some("https");
+    if https || (uri.scheme_str() == Some("http") && crate::http::is_loopback_host(host)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "seal.{section}.endpoint {endpoint:?} must be https:// (http:// only on loopback: \
+             the root key is in the request)"
+        ))
+    }
 }
 
 /// One `[[identity.issuer]]`, checked.
@@ -831,22 +894,39 @@ impl Settings {
     }
 
     /// The auto-unseal provider `[seal]` names, checked: `None` for the
-    /// shares alone.
-    pub fn auto_unseal(&self) -> Result<Option<crate::auto_unseal::AwsKmsConfig>, String> {
+    /// shares alone. Only the named provider's section may be set.
+    pub fn auto_unseal(&self) -> Result<Option<crate::auto_unseal::ProviderConfig>, String> {
+        use crate::auto_unseal::ProviderConfig;
         let provider = self.seal.provider.as_deref().unwrap_or("shamir");
-        match (provider, &self.seal.awskms) {
-            ("shamir", None) => Ok(None),
-            ("shamir", Some(_)) => Err(
-                "[seal.awskms] is set, but seal.provider isn't \"awskms\": set it, or remove the \
-                 section"
-                    .to_owned(),
-            ),
-            ("awskms", None) => {
-                Err("seal.provider = \"awskms\" needs [seal.awskms] with key_id".to_owned())
-            }
-            ("awskms", Some(aws)) => aws_kms(aws).map(Some),
-            (other, _) => Err(format!(
-                "seal.provider {other:?} isn't known: \"shamir\" (the default) or \"awskms\""
+        let sections = [
+            ("awskms", self.seal.awskms.is_some()),
+            ("gcpkms", self.seal.gcpkms.is_some()),
+        ];
+        if let Some((section, _)) = sections
+            .iter()
+            .find(|(section, set)| *set && *section != provider)
+        {
+            return Err(format!(
+                "[seal.{section}] is set, but seal.provider isn't \"{section}\": set it, or \
+                 remove the section (one provider at a time)"
+            ));
+        }
+        let needs = |key: &str| {
+            format!("seal.provider = \"{provider}\" needs [seal.{provider}] with {key}")
+        };
+        match provider {
+            "shamir" => Ok(None),
+            "awskms" => match &self.seal.awskms {
+                Some(aws) => aws_kms(aws).map(|c| Some(ProviderConfig::AwsKms(c))),
+                None => Err(needs("key_id")),
+            },
+            "gcpkms" => match &self.seal.gcpkms {
+                Some(gcp) => gcp_kms(gcp).map(|c| Some(ProviderConfig::GcpKms(c))),
+                None => Err(needs("key_name")),
+            },
+            other => Err(format!(
+                "seal.provider {other:?} isn't known: \"shamir\" (the default), \"awskms\" or \
+                 \"gcpkms\""
             )),
         }
     }
@@ -1285,6 +1365,19 @@ mod tests {
             })
             .map(|line| format!("{line}\n"))
             .collect();
+        // One provider's section at a time: the example's AWS one, and its
+        // Google one with the provider switched to it.
+        let (before_gcp, gcp_section) = all.split_at(all.find("[seal.gcpkms]").unwrap());
+        let before_aws = &all[..all.find("[seal.awskms]").unwrap()];
+        let gcp = format!(
+            "{}{gcp_section}",
+            before_aws.replace("provider = \"awskms\"", "provider = \"gcpkms\"")
+        );
+        assert!(matches!(
+            from_toml(&gcp).unwrap().auto_unseal().unwrap(),
+            Some(crate::auto_unseal::ProviderConfig::GcpKms(_))
+        ));
+        let all = before_gcp.to_owned();
         let secured = from_toml(&all).unwrap();
         let limits = secured.limits().unwrap();
         assert_eq!(limits.server_max_in_flight.get(), 36);
@@ -1366,8 +1459,11 @@ mod tests {
                 "{key} isn't in the example"
             );
         }
-        assert!(EXAMPLE.contains("#[seal.awskms]"));
-        assert!(secured.auto_unseal().unwrap().is_some());
+        assert!(EXAMPLE.contains("#[seal.awskms]") && EXAMPLE.contains("#[seal.gcpkms]"));
+        assert!(matches!(
+            secured.auto_unseal().unwrap(),
+            Some(crate::auto_unseal::ProviderConfig::AwsKms(_))
+        ));
     }
 
     /// Every known key, so `KNOWN_KEYS` can't lag behind `Settings`
@@ -1585,8 +1681,10 @@ mod tests {
         let kms = get(&format!(
             "[seal]\nprovider = \"awskms\"\n[seal.awskms]\nkey_id = \"{arn}\""
         ))
-        .unwrap()
         .unwrap();
+        let Some(crate::auto_unseal::ProviderConfig::AwsKms(kms)) = kms else {
+            panic!("{kms:?}");
+        };
         assert_eq!(
             (kms.key_id.as_str(), kms.region.as_str()),
             (arn, "ap-southeast-1")
@@ -1618,6 +1716,109 @@ mod tests {
             ("[seal]\nprovider = \"awskms\"".to_owned(), "key_id"),
             ("[seal]\nprovider = \"vault\"".to_owned(), "isn't known"),
             (format!("[seal.awskms]\nkey_id = \"{arn}\""), "provider"),
+        ] {
+            let error = get(&toml).unwrap_err();
+            assert!(error.contains(says), "{toml}: {error}");
+        }
+    }
+
+    /// Every seal mode's provider is one `[seal] provider` knows, with a
+    /// section of its own.
+    #[test]
+    fn every_seal_mode_is_a_known_provider() {
+        for provider in crate::seal::SealMode::ALL
+            .iter()
+            .filter_map(|mode| mode.provider())
+        {
+            let error = parse(&format!("[seal]\nprovider = \"{provider}\""))
+                .unwrap()
+                .auto_unseal()
+                .unwrap_err();
+            assert!(
+                error.contains(&format!("needs [seal.{provider}]")),
+                "{error}"
+            );
+        }
+    }
+
+    /// `[seal.gcpkms]`: the key's full resource name, never a version or
+    /// anything that would change the request's URL; the endpoint as for
+    /// AWS; one provider's section at a time.
+    #[test]
+    fn gcp_kms_settings_resolve_and_refuse_what_they_must() {
+        let get = |toml: &str| parse(toml).unwrap().auto_unseal();
+        let gcp = |key: &str, extra: &str| {
+            get(&format!(
+                "[seal]\nprovider = \"gcpkms\"\n[seal.gcpkms]\nkey_name = \"{key}\"\n{extra}"
+            ))
+        };
+        let name = "projects/p-1/locations/asia-southeast1/keyRings/ferritor/cryptoKeys/root-key";
+        assert_eq!(
+            gcp(name, "").unwrap(),
+            Some(crate::auto_unseal::ProviderConfig::GcpKms(
+                crate::auto_unseal::GcpKmsConfig {
+                    key_name: name.to_owned(),
+                    endpoint: None,
+                }
+            ))
+        );
+        let scoped = "projects/example.com:p/locations/global/keyRings/r_1/cryptoKeys/k";
+        assert!(gcp(scoped, "").is_ok());
+        for endpoint in [
+            "https://cloudkms-x.p.googleapis.com",
+            "http://127.0.0.1:8080",
+        ] {
+            assert!(
+                gcp(name, &format!("endpoint = \"{endpoint}\"")).is_ok(),
+                "{endpoint}"
+            );
+        }
+        for (key, says) in [
+            (format!("{name}/cryptoKeyVersions/1"), "not a version"),
+            ("root-key".to_owned(), "resource name"),
+            (format!("{name}/"), "resource name"),
+            (
+                "projects//locations/l/keyRings/r/cryptoKeys/k".to_owned(),
+                "resource name",
+            ),
+            (
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k?x=1".to_owned(),
+                "resource name",
+            ),
+            (
+                "projects/p/locations/l/keyRings/r/cryptoKeys/k:encrypt".to_owned(),
+                "resource name",
+            ),
+            (
+                "projects/p/locations/l/keyRings/../cryptoKeys/k".to_owned(),
+                "resource name",
+            ),
+            (
+                "projects/../locations/l/keyRings/r/cryptoKeys/k".to_owned(),
+                "resource name",
+            ),
+        ] {
+            let error = gcp(&key, "").unwrap_err();
+            assert!(error.contains(says), "{key}: {error}");
+        }
+        for (toml, says) in [
+            (
+                format!(
+                    "[seal]\nprovider = \"gcpkms\"\n[seal.gcpkms]\nkey_name = \"{name}\"\n\
+                     endpoint = \"http://kms.internal\""
+                ),
+                "https",
+            ),
+            ("[seal]\nprovider = \"gcpkms\"".to_owned(), "key_name"),
+            (format!("[seal.gcpkms]\nkey_name = \"{name}\""), "provider"),
+            (
+                format!(
+                    "[seal]\nprovider = \"awskms\"\n[seal.awskms]\n\
+                     key_id = \"arn:aws:kms:ap-southeast-1:111122223333:key/k\"\n\
+                     [seal.gcpkms]\nkey_name = \"{name}\""
+                ),
+                "one provider at a time",
+            ),
         ] {
             let error = get(&toml).unwrap_err();
             assert!(error.contains(says), "{toml}: {error}");

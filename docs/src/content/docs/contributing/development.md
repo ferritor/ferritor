@@ -147,8 +147,27 @@ AWS_PROFILE=dev FERRITOR_TEST_AWS_KMS_KEY=arn:aws:kms:…:key/… \
 ```
 
 It needs `kms:Encrypt`, `kms:Decrypt` and `kms:DescribeKey` on the key.
-Without the `aws-kms` feature (`--no-default-features`) the server builds
-without the AWS SDK, and `[seal] provider = "awskms"` refuses to start.
+
+The Google Cloud KMS client, `tests/gcp_kms.rs`, runs against a double of
+Cloud KMS's REST API on loopback in every run (the requests, the AAD, how
+refusals are sorted, the retry), and once more against the real service
+when `FERRITOR_TEST_GCP_KMS_KEY` names a key (its resource name), with
+Application Default Credentials. Impersonate the service account the
+servers use, so the test runs with their permissions (it needs
+`roles/iam.serviceAccountTokenCreator` on that account):
+
+```sh
+gcloud auth application-default login \
+  --impersonate-service-account ferritor-server@my-project.iam.gserviceaccount.com
+FERRITOR_TEST_GCP_KMS_KEY=projects/my-project/locations/…/keyRings/…/cryptoKeys/… \
+  cargo test -p ferritor-server --test gcp_kms
+```
+
+Each provider is a feature of `ferritor-server`, both on by default:
+`aws-kms` (the AWS SDK) and `gcp-kms` (Google's credentials crate and an
+HTTP client for KMS's REST API, on rustls with ring, never aws-lc-rs).
+Without one (`--no-default-features`, then `--features …`), a config
+naming its provider refuses to start.
 
 ### The CSI provider in a cluster
 
@@ -209,8 +228,8 @@ and `latest` (see [Releases](#releases)).
   later) or Podman.
 - Nothing but the binary is in an image: no shell, no libc, no tools. The
   server's also has the build image's CA bundle
-  (`/etc/ssl/certs/ca-certificates.crt`), for the AWS KMS client, which
-  trusts the system's CAs. So an `exec` probe or an agent's `on_change`
+  (`/etc/ssl/certs/ca-certificates.crt`), for the KMS clients (AWS and
+  Google), which trust the system's CAs. So an `exec` probe or an agent's `on_change`
   command can't run anything from the image. They run as UID and GID
   65532 unless the pod says otherwise (the CSI provider's DaemonSet runs
   it as root, for the driver's socket directory).

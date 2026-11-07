@@ -183,13 +183,15 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 
 # How the root key is opened at start (https://ferritor.dev/operations/key-management).
 # Without this section (or with provider = "shamir"), the operators' shares
-# unseal every server after every start. With "awskms" a server unseals
-# itself through AWS KMS, credentials from the AWS SDK's usual chain
-# (AWS_PROFILE, EKS Pod Identity, an instance profile), and the shares stay
-# the recovery path. Read at startup only; switching providers is a rekey.
+# unseal every server after every start. With "awskms" or "gcpkms" a server
+# unseals itself through AWS KMS or Google Cloud KMS, and the shares stay the
+# recovery path. One provider at a time, with its own section below and no
+# other's. Read at startup only; switching providers is a rekey.
 #[seal]
 #provider = "awskms"
 #
+# AWS KMS: credentials from the AWS SDK's usual chain (AWS_PROFILE, EKS Pod
+# Identity, an instance profile).
 #[seal.awskms]
 #key_id = "arn:aws:kms:ap-southeast-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
 #region = "ap-southeast-1"    # default: the key ARN's
@@ -197,3 +199,13 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 # same name reaches it from inside the VPC). Set only for an endpoint without
 # private DNS, or a local test double (http only on loopback).
 #endpoint = "https://vpce-0123456789abcdef0-abcdefgh.kms.ap-southeast-1.vpce.amazonaws.com"
+#
+# Google Cloud KMS (provider = "gcpkms", instead of [seal.awskms]):
+# credentials from Google's Application Default Credentials (GKE Workload
+# Identity, the VM's service account, GOOGLE_APPLICATION_CREDENTIALS). The
+# key's resource name, never a version (decrypt finds the version itself).
+#[seal.gcpkms]
+#key_name = "projects/my-project/locations/asia-southeast1/keyRings/ferritor/cryptoKeys/root-key"
+# Default: https://cloudkms.googleapis.com. Set only for a Private Service
+# Connect endpoint, or a local test double (http only on loopback).
+#endpoint = "https://cloudkms-ferritor.p.googleapis.com"

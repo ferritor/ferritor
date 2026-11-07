@@ -375,6 +375,63 @@ key's access control inside ferritor's trust boundary (see
 > Keep the recovery shares exactly as carefully as before: they unseal
 > without KMS, and they're the way in if the KMS key is lost.
 
+### Auto-unseal with Google Cloud KMS (optional)
+
+The same with Google Cloud KMS (`provider = "gcpkms"`), instead of AWS:
+one provider at a time. The same trust applies: whoever can use the key
+and read the keys database has the root key.
+
+1. **A symmetric key** for ferritor alone, in its own key ring, ideally in
+   a project of its own, separate from the databases' backups. Protection
+   level `hsm` keeps it in an HSM; a destruction delay leaves time to undo
+   a mistake:
+
+   ```sh
+   gcloud kms keyrings create ferritor --location asia-southeast1 --project my-project
+   gcloud kms keys create root-key --keyring ferritor --location asia-southeast1 \
+     --project my-project --purpose encryption --protection-level hsm \
+     --destroy-scheduled-duration 30d
+   ```
+
+   `[seal.gcpkms] key_name` is its resource name,
+   `projects/my-project/locations/asia-southeast1/keyRings/ferritor/cryptoKeys/root-key`.
+2. **An identity for the servers**, never a key file if you can avoid it:
+   GKE Workload Identity, or the VM's service account. Grant it
+   `roles/cloudkms.cryptoKeyEncrypterDecrypter` on **this key only**, never
+   on the key ring or the project:
+
+   ```sh
+   gcloud kms keys add-iam-policy-binding root-key --keyring ferritor \
+     --location asia-southeast1 --project my-project \
+     --member serviceAccount:ferritor-server@my-project.iam.gserviceaccount.com \
+     --role roles/cloudkms.cryptoKeyEncrypterDecrypter
+   ```
+
+   With GKE Workload Identity, the member can be the server's Kubernetes
+   service account itself:
+   `principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/my-project.svc.id.goog/subject/ns/<namespace>/sa/<service-account>`.
+   ferritor reads no key metadata, so no other role is needed. IAM can't
+   require ferritor's additional authenticated data, so the role is the
+   whole restriction: keep the key for ferritor alone. Optional hardening:
+   a VPC Service Controls perimeter around the project, so stolen
+   credentials can't use the key from outside it (with a Private Service
+   Connect endpoint, set `[seal.gcpkms] endpoint`). Keep `cloudkms.admin`
+   on the key, and the right to impersonate the servers' service account
+   (`roles/iam.serviceAccountTokenCreator`), away from everyone else: both
+   lead to `decrypt`.
+3. **`[seal]`** in every server's config, then `ferritor init`, or a rekey
+   (`--seal gcpkms`) for a deployment that started under Shamir or another
+   provider, as for AWS above.
+4. **Cloud KMS's Data Access audit logs**, which are **off by default**:
+   without them, a `decrypt` leaves no trace. Turn on `DATA_READ` and
+   `DATA_WRITE` for `cloudkms.googleapis.com` (IAM & Admin, Audit Logs),
+   then alert on `Decrypt` by any principal but the servers', on a
+   `Decrypt` through impersonation (`serviceAccountDelegationInfo` set),
+   on more `Decrypt`s than servers start, and on any `Encrypt` outside a
+   planned init or rekey. The entries are in Cloud Logging, under
+   `cloudaudit.googleapis.com%2Fdata_access`, kept 30 days unless routed
+   elsewhere.
+
 ## 8. The first namespace and secret
 
 Nothing can be stored until a namespace exists: a secret's path starts with

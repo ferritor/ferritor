@@ -910,22 +910,24 @@ impl SystemService for System {
         )?;
         let change = match req.seal.as_str() {
             "" => None,
-            "shamir" => Some(seal::SealMode::Shamir),
-            "awskms" => Some(seal::SealMode::AwsKms),
-            other => {
-                let error = format!("seal {other:?}: \"shamir\", \"awskms\", or empty to keep it");
-                self.gate.outcome(
-                    &caller,
-                    Action::Rekey,
-                    Target::System,
-                    "rekey_start",
-                    Outcome::Failed {
-                        error: error.clone(),
-                        details: None,
-                    },
-                );
-                return Err(Status::invalid_argument(error));
-            }
+            asked => match seal::SealMode::parse(asked) {
+                Some(mode) => Some(mode),
+                None => {
+                    let known = seal::SealMode::ALL.map(seal::SealMode::as_str).join(", ");
+                    let error = format!("seal {asked:?}: one of {known}, or empty to keep it");
+                    self.gate.outcome(
+                        &caller,
+                        Action::Rekey,
+                        Target::System,
+                        "rekey_start",
+                        Outcome::Failed {
+                            error: error.clone(),
+                            details: None,
+                        },
+                    );
+                    return Err(Status::invalid_argument(error));
+                }
+            },
         };
         let result = self.seal.rekey_start_changing(params, change).await;
         self.record(&caller, Action::Rekey, "rekey_start", &result, false, |p| {

@@ -343,11 +343,12 @@ message SealStatus {
 }
 
 message AutoUnsealStatus {
-  // The provider this server is configured with ("awskms"); empty: none,
-  // the shares alone unseal it.
+  // The provider this server is configured with ("awskms", "gcpkms");
+  // empty: none, the shares alone unseal it.
   string provider = 1;
-  // The configured key (an ARN), as the last attempt resolved it. Names
-  // the cloud account: empty unless the caller may unseal.
+  // The configured key (an ARN, a Cloud KMS key's resource name), as the
+  // last attempt resolved it. Names the cloud account or project: empty
+  // unless the caller may unseal.
   string key_id = 2;
   // Whether the keys database holds a wrap at the current generation.
   bool wrapped = 3;
@@ -440,8 +441,9 @@ message RekeyStartRequest {
   // commit stores the answering server's KMS wrap (or none) and deletes
   // every other. Empty: keep it as it is (refused if the answering
   // server's config would change it). "shamir": the shares alone (the
-  // server must be configured so). "awskms": wrapped by the server's
-  // configured KMS key too. Recorded in the audit entry.
+  // server must be configured so). "awskms", "gcpkms": wrapped by the
+  // server's configured KMS key too (the server must be configured with
+  // that provider). Recorded in the audit entry.
   string seal = 3;
 }
 

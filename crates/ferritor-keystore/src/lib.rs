@@ -341,9 +341,10 @@ pub trait RekeyRewrap {
 /// (`seal_wraps`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SealWrap {
-    /// `awskms`.
+    /// `awskms` or `gcpkms`.
     pub provider: String,
-    /// The key as the provider names it (an ARN).
+    /// The key as the provider names it (an ARN, a Cloud KMS key's resource
+    /// name).
     pub key_id: String,
     /// The root key generation it wraps.
     pub generation: u32,
@@ -1299,6 +1300,30 @@ impl Keystore {
             .collect::<Result<Vec<_>>>()?;
             tx.commit().await?;
             Ok((config, wraps))
+        })
+        .await
+    }
+
+    /// Every provider's wraps (a rekey compares them with this server's
+    /// configured provider and key, whichever provider made them).
+    pub async fn seal_wraps(&self) -> Result<Vec<SealWrap>> {
+        bounded(self.timeout, async move {
+            sqlx::query!(
+                "SELECT provider, key_id, generation, ciphertext FROM seal_wraps
+                 ORDER BY provider, key_id"
+            )
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(SealWrap {
+                    provider: row.provider,
+                    key_id: row.key_id,
+                    generation: u32_from_db("generation", row.generation)?,
+                    ciphertext: row.ciphertext,
+                })
+            })
+            .collect()
         })
         .await
     }

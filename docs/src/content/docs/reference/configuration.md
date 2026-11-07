@@ -133,7 +133,7 @@ switching providers takes a rekey.
 
 | Key | Default | |
 |---|---|---|
-| `provider` | `shamir` | `shamir`: the operators' shares unseal every server after every start. `awskms`: a server unseals itself through AWS KMS (the shares stay the recovery shares); needs `[seal.awskms]`, and a build with the `aws-kms` feature (the default). |
+| `provider` | `shamir` | `shamir`: the operators' shares unseal every server after every start. `awskms` or `gcpkms`: a server unseals itself through AWS KMS or Google Cloud KMS (the shares stay the recovery shares); needs that provider's section (`[seal.awskms]`, `[seal.gcpkms]`) and no other's, and a build with its feature (`aws-kms`, `gcp-kms`, both on by default). |
 
 `[seal.awskms]`:
 
@@ -147,6 +147,25 @@ Credentials are the AWS SDK's usual chain, never in this file: the
 environment (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, …), the shared config
 with Identity Center sessions, EKS Pod Identity or IRSA, an EC2 instance
 profile. Each KMS call ends within 5 seconds, its own retry included.
+
+`[seal.gcpkms]`:
+
+| Key | Default | |
+|---|---|---|
+| `key_name` | (required) | The key's resource name, `projects/<project>/locations/<location>/keyRings/<ring>/cryptoKeys/<key>`: never a version (decrypt finds it from the ciphertext). Cloud KMS has no aliases: every call names this key. |
+| `endpoint` | `https://cloudkms.googleapis.com` | Rarely needed: a Private Service Connect endpoint, or `http://` on loopback only (a test double): the root key is in `encrypt`'s request. Loopback is an IP literal or `localhost`, never decided by DNS. |
+
+Credentials are Google's Application Default Credentials, never in this
+file: GKE Workload Identity or a VM's service account (the metadata
+server), `GOOGLE_APPLICATION_CREDENTIALS` (a key file, or a workload
+identity federation config), or `gcloud auth application-default login`
+for development. The server's identity needs
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key, nothing else.
+They're loaded at the first auto-unseal attempt, not at startup: a
+credentials file that's missing or unreadable (a secret mounted late)
+makes the attempt `denied`, tried again every minute, and the server
+starts sealed meanwhile, so the shares still unseal it. Each KMS call ends
+within 5 seconds, its own retry (after 200 ms) included.
 
 `[[policy]]`: the config rules, for the operators (see [policy](/guides/policy);
 the applications' grants are stored policies, managed over the API). Each
