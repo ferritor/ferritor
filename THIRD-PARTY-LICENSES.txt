@@ -11,9 +11,9 @@ edit it by hand.
 
 Licenses
 --------
-- MIT License: 283
+- MIT License: 284
 - Apache License 2.0: 37
-- Unicode License v3: 20
+- Unicode License v3: 21
 - BSD 3-Clause "New" or "Revised" License: 5
 - ISC License: 3
 - Creative Commons Zero v1.0 Universal: 1
@@ -233,10 +233,10 @@ Used by:
 Apache License 2.0
 
 Used by:
-- aws-sdk-kms 1.127.0
-- aws-sdk-sso 1.117.0
-- aws-sdk-ssooidc 1.119.0
-- aws-sdk-sts 1.122.0
+- aws-sdk-kms 1.129.0
+- aws-sdk-sso 1.119.0
+- aws-sdk-ssooidc 1.121.0
+- aws-sdk-sts 1.124.0
 
                                 Apache License
                            Version 2.0, January 2004
@@ -661,7 +661,7 @@ Used by:
 - aws-config 1.13.0
 - aws-credential-types 1.3.1
 - aws-runtime 1.10.2
-- aws-sigv4 1.6.3
+- aws-sigv4 1.6.4
 - aws-smithy-async 1.3.1
 - aws-smithy-http-client 1.5.2
 - aws-smithy-http 0.64.3
@@ -671,7 +671,7 @@ Used by:
 - aws-smithy-runtime-api-macros 1.2.0
 - aws-smithy-runtime-api 1.19.2
 - aws-smithy-runtime 1.16.2
-- aws-smithy-schema 1.1.0
+- aws-smithy-schema 1.1.2
 - aws-smithy-types 1.9.1
 - aws-smithy-xml 0.64.1
 - aws-types 1.7.0
@@ -913,7 +913,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 BSD 3-Clause "New" or "Revised" License
 
 Used by:
-- encoding_rs 0.8.42
+- encoding_rs 0.8.44
 
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
 
@@ -1076,7 +1076,7 @@ express Statement of Purpose.
 Community Data License Agreement Permissive 2.0
 
 Used by:
-- webpki-roots 1.0.10
+- webpki-roots 1.0.11
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -1237,6 +1237,69 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+--------------------------------------------------------------------------------
+MIT License
+
+Used by:
+- tonic-prost 0.14.9
+
+/*
+ *
+ * Copyright 2025 gRPC authors.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ *
+ */
+
+//! Prost codec implementation for tonic.
+//!
+//! This crate provides the [`ProstCodec`] for encoding and decoding protobuf
+//! messages using the [`prost`] library.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use tonic_prost::ProstCodec;
+//!
+//! let codec = ProstCodec::<Message, Message>::default();
+//! ```
+
+#![warn(
+    missing_docs,
+    missing_debug_implementations,
+    rust_2018_idioms,
+    unreachable_pub
+)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/tokio-rs/website/master/public/img/icons/tonic.svg"
+)]
+#![doc(html_root_url = "https://docs.rs/tonic-prost/0.13.1")]
+#![doc(issue_tracker_base_url = "https://github.com/grpc/grpc-rust/issues/")]
+
+mod codec;
+
+pub use codec::{ProstCodec, ProstDecoder, ProstEncoder};
+
+// Re-export prost types that users might need
+pub use prost;
+
 
 --------------------------------------------------------------------------------
 MIT License
@@ -1503,7 +1566,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- mime 0.3.17
+- mime 0.3.18
 
 Copyright (c) 2014 Sean McArthur
 
@@ -1566,7 +1629,7 @@ MIT License
 
 Used by:
 - bitflags 2.13.2
-- log 0.4.34
+- log 0.4.35
 - num-bigint 0.4.8
 - num-integer 0.1.47
 - num-traits 0.2.19
@@ -1605,7 +1668,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- uuid 1.28.0
+- uuid 1.29.1
 
 Copyright (c) 2014 The Rust Project Developers
 Copyright (c) 2018 Ashley Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon
@@ -1733,7 +1796,7 @@ Used by:
 - heck 0.5.0
 - unicode-bidi 0.3.18
 - unicode-normalization 0.1.26
-- unicode-properties 0.1.4
+- unicode-properties 0.1.5
 - unicode-segmentation 1.13.3
 
 Copyright (c) 2015 The Rust Project Developers
@@ -2389,7 +2452,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- ron 0.12.2
+- ron 0.12.3
 
 Copyright (c) 2017 RON developers
 
@@ -2747,7 +2810,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- smallvec 1.16.3
+- smallvec 1.16.5
 
 Copyright (c) 2018 The Servo Project Developers
 
@@ -2904,7 +2967,7 @@ THE SOFTWARE.
 MIT License
 
 Used by:
-- aes 0.9.3
+- aes 0.9.4
 
 Copyright (c) 2018-2024 The RustCrypto Project Developers
 Copyright (c) 2018 Artyom Pavlov
@@ -3570,7 +3633,7 @@ MIT License
 Used by:
 - const-oid 0.10.2
 - cpufeatures 0.3.1
-- der 0.8.2
+- der 0.8.3
 - pkcs8 0.11.0
 
 Copyright (c) 2020-2026 The RustCrypto Project Developers
@@ -3951,35 +4014,6 @@ SOFTWARE.
 MIT License
 
 Used by:
-- tonic-health 0.14.6
-- tonic-types 0.14.6
-- tonic 0.14.6
-
-Copyright (c) 2025 Lucio Franco
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-
---------------------------------------------------------------------------------
-MIT License
-
-Used by:
 - ctutils 0.4.8
 
 Copyright (c) 2025-2026 The RustCrypto Project Developers
@@ -4025,15 +4059,15 @@ Used by:
 - config 0.15.27
 - is_terminal_polyfill 1.70.2
 - serde_spanned 0.6.9
-- serde_spanned 1.1.2
+- serde_spanned 1.1.3
 - toml 0.8.23
-- toml 1.1.8+spec-1.1.0
+- toml 1.2.1+spec-1.1.0
 - toml_datetime 0.6.11
-- toml_datetime 1.1.2+spec-1.1.0
+- toml_datetime 1.1.3+spec-1.1.0
 - toml_edit 0.22.27
 - toml_parser 1.1.5+spec-1.1.0
 - toml_write 0.1.2
-- toml_writer 1.1.3+spec-1.1.0
+- toml_writer 1.2.0+spec-1.1.0
 
 Copyright (c) Individual contributors
 
@@ -4280,9 +4314,39 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- encoding_rs 0.8.42
+- tonic-health 0.14.9
+- tonic-types 0.14.9
+- tonic 0.14.9
+
+Copyright 2019 gRPC authors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+--------------------------------------------------------------------------------
+MIT License
+
+Used by:
+- encoding_rs 0.8.44
 - multiversion_no_op 1.0.0
-- utf8_iter 1.0.4
+- utf8_iter 1.1.0
+- utf_types 1.0.0
 
 Copyright Mozilla Foundation
 
@@ -4727,7 +4791,7 @@ SOFTWARE.
 MIT License
 
 Used by:
-- json5 1.3.3
+- json5 1.3.7
 
 MIT License
 
@@ -4763,7 +4827,6 @@ Used by:
 - sqlx-macros-core 0.9.0
 - sqlx-macros 0.9.0
 - sqlx-postgres 0.9.0
-- tonic-prost 0.14.6
 - vsimd 0.8.0
 - whoami 2.1.3
 
@@ -4880,7 +4943,7 @@ Used by:
 - atomic-waker 1.1.2
 - curve25519-dalek-derive 0.1.1
 - displaydoc 0.2.7
-- erased-serde 0.4.10
+- erased-serde 0.4.11
 - event-listener 5.4.2
 - fastrand 2.5.0
 - itoa 1.0.18
@@ -4895,7 +4958,7 @@ Used by:
 - pin-project 1.1.13
 - proc-macro2 1.0.107
 - quote 1.0.47
-- rustix 1.1.5
+- rustix 1.1.6
 - rustversion 1.0.23
 - serde-untagged 0.1.9
 - serde 1.0.229
@@ -4973,7 +5036,7 @@ MIT License
 
 Used by:
 - winnow 0.7.15
-- winnow 1.0.4
+- winnow 1.0.5
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
@@ -5650,24 +5713,71 @@ authorization of the copyright holder.
 Unicode License v3
 
 Used by:
-- icu_collections 2.3.0
-- icu_locale_core 2.3.0
-- icu_normalizer 2.3.0
-- icu_normalizer_data 2.3.0
-- icu_properties 2.3.0
-- icu_properties_data 2.3.0
-- icu_provider 2.3.1
+- unicode-properties 0.1.5
+
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+
+
+--------------------------------------------------------------------------------
+Unicode License v3
+
+Used by:
+- icu_collections 2.4.0
+- icu_locale_core 2.4.0
+- icu_normalizer 2.4.0
+- icu_normalizer_data 2.4.0
+- icu_properties 2.4.0
+- icu_properties_data 2.4.0
+- icu_provider 2.4.0
 - litemap 0.8.3
 - potential_utf 0.1.6
-- tinystr 0.8.4
+- tinystr 0.8.5
 - writeable 0.6.4
 - yoke-derive 0.8.4
-- yoke 0.8.3
+- yoke 0.8.4
 - zerofrom-derive 0.1.8
 - zerofrom 0.1.8
 - zerotrie 0.2.5
-- zerovec-derive 0.11.6
-- zerovec 0.11.8
+- zerovec-derive 0.11.7
+- zerovec 0.11.9
 
 UNICODE LICENSE V3
 

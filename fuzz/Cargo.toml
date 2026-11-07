@@ -22,7 +22,7 @@ libfuzzer-sys = "0.4.13"
 rustls-pki-types = "1.15.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-toml = "1.1.8"
+toml = "1.2.1"
 ferritor-core = { path = "../crates/ferritor-core" }
 ferritor-server = { path = "../crates/ferritor-server" }
 
