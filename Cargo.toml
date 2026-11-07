@@ -43,7 +43,7 @@ aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 # own HTTPS client would bring aws-lc-rs (a C build); this one is rustls on
 # ring, as the rest of ferritor.
 aws-config = { version = "1.13.0", default-features = false, features = ["rt-tokio", "sso", "credentials-process"] }
-aws-sdk-kms = { version = "1.127.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-kms = { version = "1.129.0", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http-client = { version = "1.5.2", default-features = false, features = ["rustls-ring", "rt-tokio"] }
 # Auto-unseal with Google Cloud KMS (ferritor-server's `gcp-kms` feature):
 # Google's credential chain (Application Default Credentials) only, the two
@@ -52,7 +52,7 @@ aws-smithy-http-client = { version = "1.5.2", default-features = false, features
 google-cloud-auth = { version = "1.18.0", default-features = false }
 # A request body wiped when dropped (`Bytes::from_owner`).
 bytes = "1.12.1"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "http2", "rustls-no-provider"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "http2", "rustls-no-provider"] }
 anyhow = "1.0.104"
 axum = "0.8.9"
 base64 = "0.23.1"
@@ -70,7 +70,7 @@ hyper = { version = "1.12.0", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 # The public CA roots for fetching a token issuer's keys (identity), unless a
 # private CA is configured; the same crate the metrics exporter uses.
-webpki-roots = "1.0.10"
+webpki-roots = "1.0.11"
 proptest = "1.12.0"
 # The allocator of the static (musl) builds in the images (Dockerfile):
 # musl's own made reads 2.8 times slower.
@@ -90,7 +90,7 @@ rpassword = "7.5.4"
 # PR_SET_DUMPABLE through a safe wrapper (the workspace forbids unsafe code):
 # see ferritor-server `forbid_memory_access`; `fs` for the agent's tmpfs check
 # (statfs).
-rustix = { version = "1.1.5", features = ["fs", "process"] }
+rustix = { version = "1.1.6", features = ["fs", "process"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -107,12 +107,12 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["logg
 tokio-stream = { version = "0.1.19", features = ["net"] }
 # TaskTracker, for the requests tls::serve detaches from their connections.
 tokio-util = { version = "0.7.20", features = ["rt"] }
-toml = "1.1.8"
-tonic = { version = "0.14.6", features = ["tls-ring"] }
-tonic-health = "0.14.6"
-tonic-prost = "0.14.6"
-tonic-prost-build = "0.14.6"
-tonic-types = "0.14.6"
+toml = "1.2.1"
+tonic = { version = "0.14.9", features = ["tls-ring"] }
+tonic-health = "0.14.9"
+tonic-prost = "0.14.9"
+tonic-prost-build = "0.14.9"
+tonic-types = "0.14.9"
 tower = "0.5.3"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
