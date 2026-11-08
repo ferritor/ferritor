@@ -179,8 +179,8 @@ is recorded in Sigstore's public transparency log. Verifying it
 one that workflow built and pushed, not that its code is sound: whoever
 can merge to `main` (a release pull request included) can have an image
 signed, and GitHub and Sigstore are trusted for the identity. The release
-archives (the same static binaries, for x86_64 and aarch64 Linux) are
-signed the same way, each with a cosign bundle beside it, and `SHA256SUMS`
+archives (the same static binaries, for x86_64 and aarch64 Linux, and the
+CLI alone for macOS and Windows) are signed the same way, each with a cosign bundle beside it, and `SHA256SUMS`
 lists their checksums; a published release is immutable, so its assets
 can't be swapped afterwards.
 
@@ -435,6 +435,15 @@ None of these is fixed yet.
    short rate limit, until the call ends; in the agent, its own copies of a
    value are wiped, but the decoded responses and the transport's buffers
    aren't.
+4. **`ferritor login --key-out` on Windows** writes the private key with
+   the access rules its folder passes on, not an owner-only one as `0600`
+   is on Unix: setting one takes Win32 calls the workspace's
+   `forbid(unsafe_code)` rules out, or a helper program (`icacls`) in the
+   key's path. Under the user's profile the inherited rules are the user,
+   SYSTEM and Administrators, as private as `0600`; in a shared folder
+   (`C:\temp`, a folder directly under `C:\`) they usually let every
+   local account read it, and so act as the identity until the certificate
+   expires ([workload identity](/guides/workload-identity#the-cli)).
 
 ## Checklist
 

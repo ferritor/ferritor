@@ -3,9 +3,16 @@
 # --workspace: the root Cargo.toml is a package too, and without it only
 # that one's (no) dependencies would be listed;
 # docs/src/content/docs/contributing/development.md, "Licenses").
-# What the images contain: the musl builds' runtime dependencies, without
-# build-only and dev-only crates.
-targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"]
+# What the release ships: the musl builds' runtime dependencies (the images,
+# the Linux archives) and the CLI's for macOS and Windows (its archives),
+# without build-only and dev-only crates. One file for all of them.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
+]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 # ferritor's own crates (all publish = false): their license is
