@@ -1436,11 +1436,11 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "ferritor"
-version = "0.9.1"
+version = "0.9.2"
 
 [[package]]
 name = "ferritor-agent"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "clap",
  "ferritor-client",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-cli"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1496,7 +1496,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-client"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "base64 0.23.1",
  "ferritor-core",
@@ -1512,7 +1512,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "aes-gcm",
  "ed25519-dalek",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-datastore"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "ferritor-core",
  "ferritor-testkit",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-keystore"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "ferritor-core",
  "ferritor-testkit",
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-server"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -1615,7 +1615,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-testkit"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "base64 0.23.1",
  "dotenvy",

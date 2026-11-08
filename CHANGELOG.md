@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/ferritor/ferritor/compare/v0.9.1...v0.9.2) - 2026-11-08
+
+### Added
+
+- auto-unseal with Google Cloud KMS
+- the CLI for macOS and Windows
+
+### Other
+
+- the examples name 0.9.2, the next release
+- update dependencies
+- fuzz/Cargo.lock for the Google Cloud KMS dependencies
+- release-pr only when started by hand
+- update Cargo.toml dependencies
+
 ## [0.9.1](https://github.com/ferritor/ferritor/compare/v0.9.0...v0.9.1) - 2026-11-03
 
 ### Added
