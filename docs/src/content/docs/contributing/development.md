@@ -253,9 +253,10 @@ twice:
   require (each crate's license text and copyright lines; MIT for a crate
   that offers a choice), and every image carries it under
   `/usr/share/doc/ferritor/`, with ferritor's own two files. `cargo-about`
-  generates it from `Cargo.lock` (`about.toml`, `about.hbs`): the musl
-  targets' runtime dependencies, not dev- or build-only ones, and not
-  ferritor's own crates. Generated offline, from the downloaded crates
+  generates it from `Cargo.lock` (`about.toml`, `about.hbs`): the runtime
+  dependencies of every target a release ships (the musl ones, and the
+  CLI's macOS and Windows ones: one file for every archive), not dev- or
+  build-only ones, and not ferritor's own crates. Generated offline, from the downloaded crates
   alone, so it's the same on every machine. CI's `lint` fails while it's
   stale, so regenerate it with any `Cargo.lock` change:
 
@@ -327,6 +328,7 @@ or in dev mode.
 | `test` | the two Postgres servers as in `compose.yaml`; the migrations; `cargo sqlx prepare --check` in both store crates; `cargo test --workspace` |
 | `fuzz` | the fuzz crate's fmt and clippy; that `fuzz/Cargo.lock` has Cargo.lock's version of every crate both name; then every target (see "Fuzzing") for 30 s, daily 5 minutes, from its seeds and the corpus the previous run left (cached). Every target runs even after one crashes; a crash's input is kept as the run's `fuzz-artifacts` |
 | `cluster` | `e2e/cluster.sh` (above), after a release build of the CLI: the server's and the provider's images built, the CSI provider with the real driver and kubelet in k3s, k3d pinned and its download checked; then the agent's and the CLI's images, so every target builds |
+| `cli-cross` | the CLI for `aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-pc-windows-gnu`, as a release builds it: clippy `-D warnings` on its library and binary, then the release build, both through `cargo-zigbuild` (Zig as C compiler and linker, no Apple or Microsoft SDK), so code that only compiles on Unix fails here. Not its tests, which run the server, Unix-only |
 | `advisories` | `cargo deny check advisories sources` (`deny.toml`; `--workspace` for the main one, whose root is a package), for both lockfiles: a RUSTSEC vulnerability, an unmaintained crate, a yanked version, or a crate from anywhere but crates.io fails the build. Also daily, since new advisories land without a change here. For the main lockfile `licenses` too: a dependency under a license not in `deny.toml`'s list fails it (the fuzz crate is never distributed) |
 
 `.github/workflows/docs.yml` builds the docs site on the same events
@@ -339,8 +341,8 @@ to GitHub Pages, <https://ferritor.dev>: the only job that may, with the
 repository's Pages source set to "GitHub Actions" and the custom domain
 in its Pages settings. A pull request's build is never published.
 
-A pull request is checked before it merges only if these seven jobs (the
-six above and the docs' `build`) are
+A pull request is checked before it merges only if these eight jobs (the
+seven above and the docs' `build`) are
 required status checks on `main` (branch protection); a push straight
 to `main` is checked after it has landed. To run the same checks locally:
 
@@ -357,6 +359,10 @@ cargo test --workspace --locked
 cargo deny --workspace check advisories sources licenses
 cargo fetch --locked && cargo about generate --frozen --workspace about.hbs -o THIRD-PARTY-LICENSES.txt && git diff --exit-code THIRD-PARTY-LICENSES.txt
 cargo deny --manifest-path fuzz/Cargo.toml check advisories sources
+for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-gnu; do   # needs zig, cargo-zigbuild and the targets
+  SQLX_OFFLINE=true cargo-zigbuild clippy -p ferritor-cli --lib --bins --locked --target $t -- -D warnings &&
+  SQLX_OFFLINE=true cargo zigbuild --release --locked -p ferritor-cli --target $t
+done
 (cd docs && pnpm install --frozen-lockfile && pnpm build)
 ```
 
@@ -381,6 +387,12 @@ each deliberately, and fix what the new version finds in the same change:
   Hub anonymously, whose pull limit is per IP address and shared by CI's
   runners: if runs start failing on pulls, point them at a pull-through
   mirror.
+- **Zig and cargo-zigbuild**, for `cli-cross` and the release's
+  `cli-archives`: `ZIG_VERSION` with `ZIG_SHA256` (the `shasum` of
+  `zig-x86_64-linux-<version>.tar.xz` in ziglang.org's
+  `download/index.json`) and `CARGO_ZIGBUILD_VERSION`, the same in both
+  workflows. A new Zig can change how the macOS binaries are linked and
+  signed: run one on a Mac and the `.exe` on Windows before bumping.
 - **Nightly and cargo-fuzz**, for `fuzz` only: `toolchain:` (a dated
   nightly) and `CARGO_FUZZ_VERSION`.
 - **release-plz**: the action's commit and its `version:` (`0.4.2`) in
@@ -415,7 +427,8 @@ Also:
   Re-enable it under Actions, or the advisory check silently stops.
 - **Checkouts keep no token** (`persist-credentials: false`): nothing here
   pushes, and every build script and proc-macro runs in these jobs.
-- **Time limits**: 30 minutes for `test`, 90 for `fuzz`, 20 for the rest,
+- **Time limits**: 30 minutes for `test` and `cli-cross`, 90 for `fuzz`,
+  40 for `cluster`, 20 for the rest,
   so a hung test or database doesn't hold a runner for six hours.
 
 ## Releases
@@ -455,6 +468,16 @@ come from git tags (`git_only`).
   reproducibly (sorted, the commit's time, no owners, no gzip timestamp).
   Each is signed keyless with cosign, as the images are, so `cosign
   verify-blob` with the same identity checks it.
+- **The CLI for macOS and Windows** (`cli-archives`):
+  `ferritor-cli-<version>-aarch64-apple-darwin.tar.gz`, the
+  `x86_64-apple-darwin` one and `ferritor-cli-<version>-x86_64-pc-windows-gnu.zip`,
+  each the CLI alone with the same three license files, packed the same
+  reproducible way (the zip with the commit's time on every entry).
+  Cross-built on Linux with `cargo-zigbuild`, as CI's `cli-cross` does:
+  no Apple or Microsoft SDK, so the macOS binaries are ad-hoc signed by
+  Zig's linker (Apple silicon runs nothing unsigned) and nothing is
+  notarized or signed by a publisher; Gatekeeper and SmartScreen treat a
+  browser download as unknown. Checksummed and signed with the rest.
 - **Images**: a release then builds the [images](#images) from the
   released commit, each architecture on its own runner (`images`, amd64 on
   `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`: natively, since Rust under

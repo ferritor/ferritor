@@ -8,14 +8,17 @@
 # or a license not on the list below.
 
 [graph]
-# Where the server runs, and what the images are built for (musl, which
-# brings mimalloc): an advisory for a Windows- or macOS-only crate doesn't
-# fail the build.
+# Where the server runs, what the images are built for (musl, which brings
+# mimalloc), and the CLI's macOS and Windows archives: an advisory for a
+# crate only another platform uses doesn't fail the build.
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-gnu",
 ]
 all-features = true
 

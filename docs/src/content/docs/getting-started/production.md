@@ -61,6 +61,18 @@ sha256sum -c SHA256SUMS --ignore-missing
 tar -xzf "$f"   # ferritor-server, ferritor-csi-provider, ferritor-agent, ferritor
 ```
 
+The CLI alone runs on macOS and Windows too, for operators' machines:
+`ferritor-cli-<version>-aarch64-apple-darwin.tar.gz` (Apple silicon),
+`ferritor-cli-<version>-x86_64-apple-darwin.tar.gz` (Intel Macs) and
+`ferritor-cli-<version>-x86_64-pc-windows-gnu.zip`, verified the same way
+(`shasum -a 256` on macOS, `Get-FileHash` on Windows, for the checksum).
+They're cross-built and not notarized or signed by a publisher: fetched
+with `curl` they run as they are, but downloaded with a browser macOS
+refuses to start the binary until `xattr -d com.apple.quarantine ferritor`,
+and Windows SmartScreen asks first. On Windows, mind where `ferritor login
+--key-out` writes its key
+([workload identity](/guides/workload-identity#the-cli)).
+
 ## 2. Databases
 
 One database and one login role per side; the role owns its database,

@@ -157,7 +157,8 @@ pub enum Command {
         /// Where to write the certificate (PEM).
         #[arg(long)]
         cert_out: PathBuf,
-        /// Where to write its private key (PEM), readable by you alone.
+        /// Where to write its private key (PEM), readable by you alone (on
+        /// Windows: as its folder allows; keep it under your profile).
         #[arg(long)]
         key_out: PathBuf,
     },

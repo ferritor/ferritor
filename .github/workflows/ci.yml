@@ -204,6 +204,50 @@ jobs:
           docker build -q --target agent .
           docker build -q --target cli .
 
+  # The CLI for macOS and Windows, as a release builds it (release-plz.yml's
+  # `cli-archives`): cross-built with cargo-zigbuild, so code that only
+  # compiles on Unix fails here, not at a release. Zig pinned and checked.
+  cli-cross:
+    name: CLI for macOS and Windows (cross-built)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SQLX_OFFLINE: "true"
+      ZIG_VERSION: "0.17.0"
+      ZIG_SHA256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+      CARGO_ZIGBUILD_VERSION: "0.23.4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install Zig and cargo-zigbuild
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xJf "$RUNNER_TEMP/zig.tar.xz"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION" >>"$GITHUB_PATH"
+          cargo install cargo-zigbuild --locked --version "$CARGO_ZIGBUILD_VERSION"
+      # Clippy too, through cargo-zigbuild (ring compiles C for the target): a
+      # lint can fire only where a cfg is (a Unix-only import unused on
+      # Windows). The library and binary only: the tests run the server,
+      # which is Unix-only.
+      - name: Clippy and build, each target
+        run: |
+          for triple in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-gnu; do
+            echo "::group::$triple"
+            cargo-zigbuild clippy -p ferritor-cli --lib --bins --locked --target "$triple" -- -D warnings
+            cargo zigbuild --release --locked -p ferritor-cli --target "$triple"
+            echo "::endgroup::"
+          done
+
   fuzz:
     name: fuzz (cargo-fuzz)
     runs-on: ubuntu-24.04

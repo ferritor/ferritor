@@ -117,18 +117,21 @@ async fn login(
 }
 
 /// Writes `contents` to `path` with mode 0600, replacing what's there
-/// (removed first, so an existing file's wider mode isn't kept).
+/// (removed first, so an existing file's wider mode isn't kept). On
+/// Windows the new file takes its directory's inherited ACL.
 fn write_private(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt as _;
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
     file.write_all(contents)?;
     file.sync_all()
 }

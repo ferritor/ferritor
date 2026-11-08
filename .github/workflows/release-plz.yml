@@ -13,7 +13,8 @@
 # false), it tags it and creates the GitHub release, so nothing is tagged
 # that CI didn't pass. A release then publishes the container images to
 # ghcr.io and signs them with cosign, keyless (`images`, `image-tags`), and
-# its binaries (`release-assets`). Nothing goes to crates.io. Pinned like
+# its binaries: Linux's from the images' build, the CLI's for macOS and
+# Windows (`cli-archives`), checksummed and signed (`release-assets`). Nothing goes to crates.io. Pinned like
 # ci.yml: actions by commit, the tag in a comment, release-plz and Rust by
 # version.
 name: Release-plz
@@ -275,6 +276,81 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The CLI for macOS (Apple silicon and Intel) and Windows (x86_64), cross-
+  # built on Linux with cargo-zigbuild (Zig as the C compiler and linker,
+  # without Apple's or Microsoft's SDKs; the macOS binaries ad-hoc signed by
+  # Zig's linker, which Apple silicon requires), as CI's `cli-cross` builds
+  # them. One archive per platform, the CLI alone: the Linux archives
+  # (`images`) carry it with the other binaries.
+  cli-archives:
+    name: CLI archives (macOS, Windows)
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      ZIG_VERSION: "0.17.0"
+      ZIG_SHA256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+      CARGO_ZIGBUILD_VERSION: "0.23.4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Install protoc and zip
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler zip
+      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu
+      - name: Install Zig and cargo-zigbuild
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-x86_64-linux-$ZIG_VERSION.tar.xz"
+          echo "$ZIG_SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xJf "$RUNNER_TEMP/zig.tar.xz"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION" >>"$GITHUB_PATH"
+          cargo install cargo-zigbuild --locked --version "$CARGO_ZIGBUILD_VERSION"
+      - name: Build, and archive each platform's
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/assets"
+          mtime=$(git log -1 --format=%ct)
+          for triple in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-gnu; do
+            cargo zigbuild --release --locked -p ferritor-cli --target "$triple"
+            name="ferritor-cli-$VERSION-$triple"
+            mkdir "$RUNNER_TEMP/$name"
+            case "$triple" in
+              *-windows-*) cp "target/$triple/release/ferritor.exe" "$RUNNER_TEMP/$name/" ;;
+              *) cp "target/$triple/release/ferritor" "$RUNNER_TEMP/$name/" ;;
+            esac
+            cp LICENSE-MIT LICENSE-APACHE THIRD-PARTY-LICENSES.txt "$RUNNER_TEMP/$name/"
+            chmod 0755 "$RUNNER_TEMP/$name"
+            # Reproducible, as the Linux archives: entries sorted, the
+            # commit's time, no owner names. Windows gets a zip (Explorer
+            # opens it), macOS a tar.gz.
+            case "$triple" in
+              *-windows-*)
+                find "$RUNNER_TEMP/$name" -exec touch -h -d "@$mtime" {} +
+                (cd "$RUNNER_TEMP" && find "$name" | LC_ALL=C sort | TZ=UTC zip -X -q -9 -@ "$RUNNER_TEMP/assets/$name.zip")
+                unzip -l "$RUNNER_TEMP/assets/$name.zip"
+                ;;
+              *)
+                tar -C "$RUNNER_TEMP" --sort=name --mtime="@$mtime" \
+                  --owner=0 --group=0 --numeric-owner -cf - "$name" \
+                  | gzip -n -9 >"$RUNNER_TEMP/assets/$name.tar.gz"
+                tar -tzvf "$RUNNER_TEMP/assets/$name.tar.gz"
+                ;;
+            esac
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: assets-cli
+          path: ${{ runner.temp }}/assets
+          if-no-files-found: error
+          retention-days: 1
+
   image-tags:
     name: image tags
     needs: [release, images]
@@ -344,7 +420,7 @@ jobs:
   # release stays a draft, and re-running this job completes it.
   release-assets:
     name: release assets, publish
-    needs: [release, images, image-tags]
+    needs: [release, images, image-tags, cli-archives]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -366,9 +442,9 @@ jobs:
       - name: Checksums, and each file signed
         working-directory: ${{ runner.temp }}/assets
         run: |
-          sha256sum -- *.tar.gz >SHA256SUMS
+          sha256sum -- *.tar.gz *.zip >SHA256SUMS
           cat SHA256SUMS
-          for f in *.tar.gz SHA256SUMS; do
+          for f in *.tar.gz *.zip SHA256SUMS; do
             cosign sign-blob --yes --bundle "$f.sigstore.json" "$f" >/dev/null
           done
           ls -l
@@ -412,6 +488,16 @@ jobs:
             echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com"
             echo "sha256sum -c SHA256SUMS --ignore-missing"
             echo '```'
+            echo
+            echo "The CLI alone, for macOS and Windows, verifies the same way:"
+            echo
+            echo "- \`ferritor-cli-$VERSION-aarch64-apple-darwin.tar.gz\` (Apple silicon)"
+            echo "- \`ferritor-cli-$VERSION-x86_64-apple-darwin.tar.gz\` (Intel Macs)"
+            echo "- \`ferritor-cli-$VERSION-x86_64-pc-windows-gnu.zip\` (Windows, x86_64)"
+            echo
+            echo "Neither is notarized nor signed by a publisher: fetched with \`curl\`,"
+            echo "they run as they are; downloaded with a browser, macOS needs"
+            echo "\`xattr -d com.apple.quarantine ferritor\` and Windows SmartScreen asks first."
           } >>"$notes"
           gh release edit "$tag" --notes-file "$notes"
           gh release upload "$tag" "$RUNNER_TEMP"/assets/*

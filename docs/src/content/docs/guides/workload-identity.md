@@ -251,6 +251,15 @@ ferritor --ca ca.pem --cert job.pem --key job-key.pem get billing/db
 `login` writes the key readable by its user alone (`0600`, replacing any
 file there) and prints the identity and when the certificate expires.
 
+On Windows there's no mode: the key file gets the access rules its folder
+passes on to new files, and `login` sets none of its own. Under your
+profile (`%USERPROFILE%`, e.g. `%LOCALAPPDATA%\ferritor\`) those are you,
+SYSTEM and Administrators only, as private as `0600`. In a shared folder
+(`C:\temp`, a project folder directly under `C:\`) they usually include
+Users or Authenticated Users, and then every account on the machine can
+read the key and act as your identity until the certificate expires. Keep
+`--key-out` under your profile; check a folder with `icacls <folder>`.
+
 ## Several servers
 
 Every server issues: the issuing key is in the keys database and loaded at
