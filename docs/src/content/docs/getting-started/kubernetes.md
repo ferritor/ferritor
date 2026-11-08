@@ -32,7 +32,7 @@ pod ── CSI volume ── Secrets Store CSI Driver ── ferritor-csi-provid
   you trust it (cosign 3), and deploy it by the digest that verified:
 
   ```sh
-  cosign verify ghcr.io/ferritor/ferritor-server:0.9.1 \
+  cosign verify ghcr.io/ferritor/ferritor-server:0.9.2 \
     --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
