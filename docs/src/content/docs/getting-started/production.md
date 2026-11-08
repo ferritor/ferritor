@@ -53,7 +53,7 @@ unpack it: its cosign bundle must name the release workflow, and its
 checksum must match.
 
 ```sh
-f=ferritor-0.9.1-x86_64-unknown-linux-musl.tar.gz
+f=ferritor-0.9.2-x86_64-unknown-linux-musl.tar.gz
 cosign verify-blob "$f" --bundle "$f.sigstore.json" \
   --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
@@ -64,8 +64,30 @@ tar -xzf "$f"   # ferritor-server, ferritor-csi-provider, ferritor-agent, ferrit
 The CLI alone runs on macOS and Windows too, for operators' machines:
 `ferritor-cli-<version>-aarch64-apple-darwin.tar.gz` (Apple silicon),
 `ferritor-cli-<version>-x86_64-apple-darwin.tar.gz` (Intel Macs) and
-`ferritor-cli-<version>-x86_64-pc-windows-gnu.zip`, verified the same way
-(`shasum -a 256` on macOS, `Get-FileHash` on Windows, for the checksum).
+`ferritor-cli-<version>-x86_64-pc-windows-gnu.zip`, verified the same way.
+On macOS:
+
+```sh
+f=ferritor-cli-0.9.2-aarch64-apple-darwin.tar.gz
+cosign verify-blob "$f" --bundle "$f.sigstore.json" \
+  --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+grep " $f\$" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$f"   # ferritor-cli-0.9.2-aarch64-apple-darwin/ferritor
+```
+
+On Windows, in PowerShell:
+
+```powershell
+$f = "ferritor-cli-0.9.2-x86_64-pc-windows-gnu.zip"
+cosign verify-blob $f --bundle "$f.sigstore.json" `
+  --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main `
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+$want = (Select-String -Path SHA256SUMS -SimpleMatch " $f").Line.Split(" ")[0]
+(Get-FileHash $f).Hash -eq $want   # True (-eq ignores case)
+Expand-Archive $f -DestinationPath .   # ferritor-cli-0.9.2-x86_64-pc-windows-gnu\ferritor.exe
+```
+
 They're cross-built and not notarized or signed by a publisher: fetched
 with `curl` they run as they are, but downloaded with a browser macOS
 refuses to start the binary until `xattr -d com.apple.quarantine ferritor`,
