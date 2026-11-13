@@ -42,7 +42,7 @@ operators.
   hour-long client certificate from ferritor, renewed by the agent itself: no
   certificates to issue to applications.
 - **Secrets as files.** `ferritor-agent` keeps an application's secrets
-  current as files (a Kubernetes sidecar, a systemd service), swapped
+  current as files (a Kubernetes sidecar, a systemd or Windows service), swapped
   atomically as a set, for applications that read their configuration from
   files; in Kubernetes, `ferritor-csi-provider` does it once per node for
   every pod, through the Secrets Store CSI Driver, each pod reading with
@@ -117,7 +117,7 @@ What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 | [Policy](docs/src/content/docs/guides/policy.md) | who may do what, on which paths: config rules and stored policies, `ferritor policy` and its APIs |
 | [TLS and identity](docs/src/content/docs/guides/tls.md) | client certificates, `ferritor://` identities, expiry and CRL revocation |
 | [Workload identity](docs/src/content/docs/guides/workload-identity.md) | platform tokens exchanged for short-lived certificates: issuers, mappings, revoking, the CLI and the agent |
-| [The agent](docs/src/content/docs/guides/agent.md) | secrets as files: `ferritor-agent` as a Kubernetes sidecar or a systemd service, its settings, reading the files, failures |
+| [The agent](docs/src/content/docs/guides/agent.md) | secrets as files: `ferritor-agent` as a Kubernetes sidecar, a systemd service or a Windows service, its settings, reading the files, failures |
 | [The CSI provider](docs/src/content/docs/guides/csi.md) | secrets as files in Kubernetes pods, one provider per node: the volume, refreshing, failures, running it |
 
 **Operations**
@@ -155,6 +155,7 @@ crates/ferritor-client      talking to a server over gRPC: the library the CLI a
 crates/ferritor-cli         the `ferritor` CLI (library + binary)
 crates/ferritor-agent       keeps an application's secrets current as files (`ferritor-agent`)
 crates/ferritor-testkit     test helpers: throwaway databases, a test CA
+crates/ferritor-winsec      Windows access lists for the agent (the one crate allowed `unsafe`)
 proto/ferritor/v1           the gRPC contract
 Dockerfile                  the images: each binary alone in a scratch image
 ```

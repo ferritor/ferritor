@@ -175,7 +175,7 @@ impl Agent {
     pub fn new(config: Config) -> Result<Self, FilesError> {
         let mut outputs = Vec::with_capacity(config.outputs.len());
         for output in config.outputs {
-            let writer = Writer::open(&output.dir, output.group, output.allow_disk)?;
+            let writer = Writer::open(&output.dir, output.group.as_ref(), output.allow_disk)?;
             let secrets = output
                 .secrets
                 .iter()

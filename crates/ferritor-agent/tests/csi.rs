@@ -4,6 +4,10 @@
 //! `SecretProviderClass`'s parameters merged with the kubelet's attributes,
 //! the pod's token among them. `mount_at(now)` decides by the `now` it's
 //! given, so backoffs run without waiting.
+//!
+//! Unix only: the server, in process here, runs on Unix, and the provider serves
+//! a Unix socket.
+#![cfg(unix)]
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};

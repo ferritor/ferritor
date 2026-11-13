@@ -13,7 +13,6 @@ ferritor-client.workspace = true
 ferritor-core.workspace = true
 clap.workspace = true
 prost.workspace = true
-rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -28,20 +27,37 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 zeroize.workspace = true
 
+# Unix: modes and groups, the tmpfs check, signals, the undumpable flag.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+# Windows: access lists and the process's own (ferritor-winsec), the
+# service control manager.
+[target.'cfg(windows)'.dependencies]
+ferritor-winsec.workspace = true
+windows-service.workspace = true
+
 [build-dependencies]
 tonic-prost-build.workspace = true
 
-# The server crates are for the end-to-end tests only (a server in process).
+[dev-dependencies]
+ferritor-testkit.workspace = true
+
+# The server crates are for the end-to-end tests only (a server in process,
+# which is Unix-only: those tests run on Linux, the files' tests everywhere).
 # Never make them normal dependencies: the agent talks to the server over
 # gRPC only.
-[dev-dependencies]
+# The files' tests read the access lists back.
+[target.'cfg(windows)'.dev-dependencies]
+ferritor-winsec.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
 # The CSI tests call the provider over its Unix socket, as the driver does.
 hyper-util.workspace = true
 tower.workspace = true
 ferritor-datastore.workspace = true
 ferritor-keystore.workspace = true
 ferritor-server.workspace = true
-ferritor-testkit.workspace = true
 
 [lints]
 workspace = true

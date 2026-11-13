@@ -208,10 +208,10 @@ jobs:
   # `cli-archives`): cross-built with cargo-zigbuild, so code that only
   # compiles on Unix fails here, not at a release. Zig pinned and checked.
   cli-cross:
-    name: CLI for macOS and Windows (cross-built)
+    name: CLI and agent for macOS and Windows (cross-built)
     if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       SQLX_OFFLINE: "true"
       ZIG_VERSION: "0.17.1"
@@ -247,6 +247,65 @@ jobs:
             cargo zigbuild --release --locked -p ferritor-cli --target "$triple"
             echo "::endgroup::"
           done
+      # The agent isn't released for macOS, but its Unix code builds there
+      # (a libc type differs: statfs's f_type is u32), so it's linted.
+      - name: The agent for macOS, clippy
+        run: |
+          for triple in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo-zigbuild clippy -p ferritor-agent --all-targets --locked --target "$triple" -- -D warnings
+          done
+      # The agent on Windows, as a release builds it: clippy on every target
+      # (the files' tests have Windows cases of their own), then its tests
+      # and ferritor-winsec's built for Windows here, with the release's
+      # toolchain, and run by `agent-windows` on a Windows runner. The tests
+      # that run a server are Unix-only (`cfg(unix)`): they build empty.
+      - name: The agent for Windows, clippy and its tests
+        run: |
+          cargo-zigbuild clippy -p ferritor-agent -p ferritor-winsec --all-targets --locked \
+            --target x86_64-pc-windows-gnu -- -D warnings
+          mkdir -p "$RUNNER_TEMP/windows-tests"
+          cargo zigbuild --release --tests --locked -p ferritor-agent -p ferritor-winsec \
+            --target x86_64-pc-windows-gnu --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable != null)
+                     | "\(.target.name) \(.executable)"' \
+            | while read -r name exe; do cp "$exe" "$RUNNER_TEMP/windows-tests/$name.exe"; done
+          ls -l "$RUNNER_TEMP/windows-tests"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-tests
+          path: ${{ runner.temp }}/windows-tests
+          if-no-files-found: error
+          retention-days: 1
+
+  # The agent's tests on Windows, as cross-built by `cli-cross`: the
+  # output directory's links, access lists and held-open files, the
+  # config's Windows refusals, ferritor-winsec's calls. The runner's user
+  # is an administrator, so it holds the link privilege.
+  agent-windows:
+    name: agent on Windows
+    if: github.event_name != 'schedule'
+    needs: cli-cross
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-tests
+          path: windows-tests
+      - name: Run each test program
+        shell: pwsh
+        run: |
+          $failed = @()
+          foreach ($exe in Get-ChildItem windows-tests -Filter *.exe) {
+            Write-Host "::group::$($exe.Name)"
+            & $exe.FullName
+            if ($LASTEXITCODE -ne 0) { $failed += $exe.Name }
+            Write-Host "::endgroup::"
+          }
+          if ($failed) {
+            Write-Host "::error::failed: $($failed -join ', ')"
+            exit 1
+          }
 
   fuzz:
     name: fuzz (cargo-fuzz)

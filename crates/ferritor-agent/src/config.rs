@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+pub use crate::files::Group;
 use ferritor_client::exchange::TokenSource;
 use ferritor_core::path::SecretPath;
 use serde::Deserialize;
@@ -145,10 +146,13 @@ pub struct Secret {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Output {
     pub dir: PathBuf,
-    /// The files' and directories' group (the agent must be a member);
-    /// unset, the directory's (`fsGroup` in Kubernetes).
-    pub group: Option<u32>,
-    /// Write to a directory that isn't in memory (tmpfs, ramfs).
+    /// The files' and directories' group: on Unix a gid (the agent must be
+    /// a member; unset, the directory's, `fsGroup` in Kubernetes), on
+    /// Windows an account or group name given read access (unset, only the
+    /// agent's account, SYSTEM and Administrators).
+    pub group: Option<Group>,
+    /// Write to a directory that isn't in memory (tmpfs, ramfs). Required
+    /// on Windows, which has no memory-backed filesystem.
     pub allow_disk: bool,
     pub notify: Notify,
     pub secrets: Vec<Secret>,
@@ -188,7 +192,7 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct RawOutput {
     dir: PathBuf,
-    group: Option<u32>,
+    group: Option<Group>,
     #[serde(default)]
     allow_disk: bool,
     list_prefix: Option<String>,
@@ -258,7 +262,7 @@ impl Config {
         for (i, output) in raw.output.into_iter().enumerate() {
             let output = self::output(output, raw.detect)
                 .map_err(|e| invalid(format!("output {}: {e}", i + 1)))?;
-            if !dirs.insert(output.dir.clone()) {
+            if !dirs.insert(dir_key(&output.dir)) {
                 return Err(invalid(format!(
                     "output {}: {} is another output's directory too",
                     i + 1,
@@ -367,7 +371,7 @@ fn output(raw: RawOutput, default_detect: Detect) -> Result<Output, String> {
         let path = SecretPath::parse(&raw.path).map_err(|e| format!("path {:?}: {e}", raw.path))?;
         let secret = secret(raw, path, default_mode, default_on_revoked, default_detect)
             .map_err(|e| format!("secret {}", e))?;
-        if !files.insert(secret.file.clone()) {
+        if !files.insert(file_key(&secret.file)) {
             return Err(format!(
                 "secret {}: file {:?} is another secret's file too",
                 secret.path, secret.file
@@ -376,11 +380,17 @@ fn output(raw: RawOutput, default_detect: Detect) -> Result<Output, String> {
         secrets.push(secret);
     }
     let list_prefixes = list_prefixes(&secrets, list_prefix.as_ref())?;
+    if let Some(group) = &raw.group {
+        check_group(group)?;
+    }
+    check_disk(raw.allow_disk)?;
+    let notify = raw.on_change.map(notify).transpose()?.unwrap_or_default();
+    check_notify(&notify)?;
     Ok(Output {
         dir: raw.dir,
         group: raw.group,
         allow_disk: raw.allow_disk,
-        notify: raw.on_change.map(notify).transpose()?.unwrap_or_default(),
+        notify,
         secrets,
         list_prefixes,
     })
@@ -428,7 +438,8 @@ fn last_segment(path: &SecretPath) -> &str {
 
 /// One name in the output directory: no `/`, not `.` or `..`, and not
 /// starting with `..`, which the agent's own entries use (`..data`, the
-/// generations, `..status.json`).
+/// generations, `..status.json`). On Windows also none of the characters
+/// or device names it refuses, and no trailing dot or space, which it drops.
 fn check_file_name(file: &str) -> Result<(), String> {
     if file.is_empty() || file.contains('/') || file.contains('\0') {
         return Err(format!("file {file:?}: one file name, without '/'"));
@@ -438,7 +449,159 @@ fn check_file_name(file: &str) -> Result<(), String> {
             "file {file:?}: names starting with \"..\" are the agent's own"
         ));
     }
+    if cfg!(windows) {
+        check_windows_file_name(file)?;
+    }
     Ok(())
+}
+
+/// What Windows refuses (or silently changes) in a file name.
+fn check_windows_file_name(file: &str) -> Result<(), String> {
+    if let Some(c) = file
+        .chars()
+        .find(|c| matches!(c, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control())
+    {
+        return Err(format!(
+            "file {file:?}: {c:?} isn't allowed in a Windows file name"
+        ));
+    }
+    if file.ends_with('.') || file.ends_with(' ') {
+        return Err(format!(
+            "file {file:?}: Windows drops a trailing dot or space from a name"
+        ));
+    }
+    let stem = file
+        .split('.')
+        .next()
+        .unwrap_or(file)
+        .trim_end()
+        .to_ascii_uppercase();
+    // COM and LPT with a digit, the superscripts ¹²³ included.
+    let port = stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+        .is_some_and(|rest| {
+            let mut chars = rest.chars();
+            matches!(
+                (chars.next(), chars.next()),
+                (Some('0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+            )
+        });
+    let device = port
+        || matches!(
+            stem.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        );
+    if device {
+        return Err(format!("file {file:?}: a Windows device name"));
+    }
+    Ok(())
+}
+
+/// How two file names are compared: as the platform's filesystem does.
+/// Windows ignores case, comparing names uppercased a character at a time
+/// (its own table maps each character to one): a character whose
+/// uppercase is several (`ß`) stays as it is.
+fn file_key(file: &str) -> String {
+    if cfg!(windows) {
+        file.chars()
+            .map(|c| {
+                let mut upper = c.to_uppercase();
+                match (upper.next(), upper.next()) {
+                    (Some(u), None) => u,
+                    _ => c,
+                }
+            })
+            .collect()
+    } else {
+        file.to_owned()
+    }
+}
+
+/// How two output directories are compared: component by component, each
+/// as `file_key` compares names. On Windows a drive or share is the same
+/// written verbatim (`\\?\C:\`, `\\?\UNC\host\share\`) or not.
+fn dir_key(dir: &Path) -> Vec<String> {
+    use std::path::{Component, Prefix};
+    if !cfg!(windows) {
+        return dir
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+    }
+    dir.components()
+        .map(|c| match c {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                    format!("{}:", char::from(drive.to_ascii_uppercase()))
+                }
+                Prefix::UNC(host, share) | Prefix::VerbatimUNC(host, share) => format!(
+                    "\\\\{}\\{}",
+                    file_key(&host.to_string_lossy()),
+                    file_key(&share.to_string_lossy())
+                ),
+                _ => file_key(&prefix.as_os_str().to_string_lossy()),
+            },
+            other => file_key(&other.as_os_str().to_string_lossy()),
+        })
+        .collect()
+}
+
+/// A gid on Unix, an account or group name on Windows.
+fn check_group(group: &Group) -> Result<(), String> {
+    match group {
+        Group::Id(_) if cfg!(windows) => Err(
+            "group: on Windows, an account or group name (\"DOMAIN\\\\name\", \"NT SERVICE\\\\app\"), \
+             not a number"
+                .to_owned(),
+        ),
+        Group::Name(name) if !cfg!(windows) => Err(format!(
+            "group {name:?}: a numeric gid (names are for Windows)"
+        )),
+        Group::Name(name) if name.trim().is_empty() => {
+            Err("group: an account or group name".to_owned())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Windows has no memory-backed filesystem: the values go to a disk, which
+/// the config must say it knows.
+fn check_disk(allow_disk: bool) -> Result<(), String> {
+    if cfg!(windows) && !allow_disk {
+        return Err(
+            "allow_disk = true is required on Windows, which has no memory-backed directory: \
+             the values are written to disk (encrypt it, BitLocker)"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Windows has no signals: only a command can tell the application. Nor a
+/// batch file as the program: Windows runs one through `cmd.exe`, which
+/// parses the arguments by rules of its own.
+fn check_notify(notify: &Notify) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    match notify {
+        Notify::Signal { .. } => {
+            Err("on_change signal: Windows has no signals; use on_change command".to_owned())
+        }
+        Notify::Command(command)
+            if command.first().is_some_and(|program| {
+                // Windows drops trailing dots and spaces: `run.bat.` is a
+                // batch file too.
+                Path::new(program.trim_end_matches(['.', ' ']))
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("bat") || e.eq_ignore_ascii_case("cmd"))
+            }) =>
+        {
+            Err("on_change command: a batch file; run it through \"cmd.exe\", \"/c\"".to_owned())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// At most `0o777`, and nothing for others: a secret readable by every user
@@ -526,6 +689,7 @@ fn notify(raw: RawOnChange) -> Result<Notify, String> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     const EXAMPLE: &str = r#"
         server = "https://ferritor.internal:7070"
         ca = "/etc/ferritor/ca.pem"
@@ -562,11 +726,22 @@ mod tests {
         })
     }
 
+    /// An output directory, as the platform writes one (Windows: a drive,
+    /// and the disk allowed, which it requires), and one not absolute.
+    #[cfg(unix)]
+    const DIR: &str = "dir = \"/run/s\"";
+    #[cfg(unix)]
+    const RELATIVE_DIR: &str = "dir = \"run/s\"";
+    #[cfg(windows)]
+    const DIR: &str = "dir = 'C:\\s'\nallow_disk = true";
+    #[cfg(windows)]
+    const RELATIVE_DIR: &str = "dir = 's'\nallow_disk = true";
+
     /// One output with `secret` (a `[[output.secret]]` body) and output
     /// settings `extra`, against a plain server.
     fn with_secret(extra: &str, secret: &str) -> String {
         format!(
-            "server = \"http://127.0.0.1:7070\"\n[[output]]\ndir = \"/run/s\"\n{extra}\n\
+            "server = \"http://127.0.0.1:7070\"\n[[output]]\n{DIR}\n{extra}\n\
              [[output.secret]]\n{secret}\n"
         )
     }
@@ -595,13 +770,14 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_example_loads_with_its_defaults() {
         let config = parse(EXAMPLE).unwrap();
         assert_eq!(config.interval, DEFAULT_INTERVAL);
         assert!(matches!(config.server, ServerSettings::Tls { .. }));
         let output = &config.outputs[0];
-        assert_eq!(output.group, Some(1000));
+        assert_eq!(output.group, Some(crate::files::Group::Id(1000)));
         assert!(!output.allow_disk);
         assert_eq!(
             output.notify,
@@ -641,14 +817,14 @@ mod tests {
     /// which must cover every listed secret; pinned secrets aren't listed.
     #[test]
     fn list_prefixes_are_derived_or_given() {
-        let config = parse(
+        let config = parse(&format!(
             "server = \"http://127.0.0.1:7070\"\ndetect = \"list\"\n[[output]]\n\
-             dir = \"/run/s\"\n\
+             {DIR}\n\
              [[output.secret]]\npath = \"billing/app/tls/cert\"\nfile = \"c\"\n\
              [[output.secret]]\npath = \"billing/app/tls/key\"\nfile = \"k\"\n\
              [[output.secret]]\npath = \"billing/app/db\"\n\
              [[output.secret]]\npath = \"billing/old/db\"\nfile = \"old\"\nversion = 3\n",
-        )
+        ))
         .unwrap();
         let prefixes: Vec<&str> = config.outputs[0]
             .list_prefixes
@@ -663,6 +839,139 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(given.outputs[0].list_prefixes[0].as_str(), "billing/app");
+    }
+
+    /// The same example as written for Windows: a drive's path, the group an
+    /// account or group name, a command to tell the application.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_example_loads_with_its_defaults() {
+        let config = parse(
+            r#"
+            server = "https://ferritor.internal:7070"
+            ca = 'C:\ProgramData\ferritor\ca.pem'
+            cert = 'C:\ProgramData\ferritor\agent.crt'
+            key = 'C:\ProgramData\ferritor\agent.key'
+
+            [[output]]
+            dir = 'C:\ProgramData\ferritor\secrets\app'
+            allow_disk = true
+            group = 'NT SERVICE\app'
+            on_change = { command = ["powershell", "-NoProfile", "-Command", "Restart-Service app"] }
+
+            [[output.secret]]
+            path = "billing/app/db-password"
+        "#,
+        )
+        .unwrap();
+        let output = &config.outputs[0];
+        assert_eq!(
+            output.group,
+            Some(crate::files::Group::Name("NT SERVICE\\app".to_owned()))
+        );
+        assert!(output.allow_disk);
+        assert!(matches!(output.notify, Notify::Command(_)));
+        assert_eq!(output.secrets[0].file, "db-password");
+    }
+
+    /// What can't work on Windows is refused there when the config loads:
+    /// a gid, signals, no `allow_disk`, names Windows can't hold, and two
+    /// names it would treat as one.
+    #[cfg(windows)]
+    #[test]
+    fn windows_refuses_what_it_cant_do() {
+        for (text, says) in [
+            (
+                with_secret("group = 1000", "path = \"a/b\""),
+                "not a number",
+            ),
+            (
+                with_secret(
+                    "on_change = { signal = \"HUP\", pid_file = 'C:\\p' }",
+                    "path = \"a/b\"",
+                ),
+                "Windows has no signals",
+            ),
+            (
+                with_secret(
+                    "on_change = { command = ['C:\\app\\reload.CMD'] }",
+                    "path = \"a/b\"",
+                ),
+                "a batch file",
+            ),
+            (
+                with_secret(
+                    "on_change = { command = ['C:\\app\\run.bat. .'] }",
+                    "path = \"a/b\"",
+                ),
+                "a batch file",
+            ),
+            (
+                with_secret("", "path = \"a/b\"").replace("allow_disk = true\n", ""),
+                "allow_disk = true is required",
+            ),
+            (
+                with_secret("", "path = \"a/b\"\nfile = \"a:b\""),
+                "isn't allowed",
+            ),
+            (
+                with_secret("", "path = \"a/b\"\nfile = 'a\\b'"),
+                "isn't allowed",
+            ),
+            (
+                with_secret("", "path = \"a/b\"\nfile = \"x.\""),
+                "trailing dot",
+            ),
+            (with_secret("", "path = \"a/con\""), "device name"),
+            (
+                with_secret("", "path = \"a/b\"\nfile = \"COM1.txt\""),
+                "device name",
+            ),
+            (
+                with_secret("", "path = \"a/b\"\nfile = \"lpt\u{b2}.log\""),
+                "device name",
+            ),
+            (
+                with_secret("", "path = \"a/b\"\nfile = \"conin$\""),
+                "device name",
+            ),
+            (
+                with_secret("", "path = \"a/b\"\nfile = \"CONOUT$.txt\""),
+                "device name",
+            ),
+            (
+                format!(
+                    "{}[[output]]\ndir = 'c:/S'\nallow_disk = true\n[[output.secret]]\npath = \"c/d\"\n",
+                    with_secret("", "path = \"a/b\"")
+                ),
+                "another output's directory",
+            ),
+            (
+                format!(
+                    "{}[[output]]\ndir = '\\\\?\\C:\\S'\nallow_disk = true\n[[output.secret]]\npath = \"c/d\"\n",
+                    with_secret("", "path = \"a/b\"")
+                ),
+                "another output's directory",
+            ),
+            (
+                with_secret(
+                    "",
+                    "path = \"a/b\"\nfile = \"Key\"\n[[output.secret]]\npath = \"a/c\"\nfile = \"key\"",
+                ),
+                "another secret's file",
+            ),
+        ] {
+            let error = parse(&text).unwrap_err();
+            assert!(error.contains(says), "{text}\n=> {error}");
+        }
+    }
+
+    /// On Unix a group is a gid; a name is refused (Windows' kind).
+    #[cfg(unix)]
+    #[test]
+    fn unix_takes_a_gid_not_a_name() {
+        let error = parse(&with_secret("group = \"staff\"", "path = \"a/b\"")).unwrap_err();
+        assert!(error.contains("a numeric gid"), "{error}");
     }
 
     #[test]
@@ -725,7 +1034,7 @@ mod tests {
                 "a program to run",
             ),
             (
-                with_secret("", "path = \"a/b\"").replace("/run/s", "run/s"),
+                with_secret("", "path = \"a/b\"").replace(DIR, RELATIVE_DIR),
                 "absolute",
             ),
             (
@@ -786,7 +1095,7 @@ mod tests {
             ),
             (
                 format!(
-                    "{}[[output]]\ndir = \"/run/s\"\n[[output.secret]]\npath = \"c/d\"\n",
+                    "{}[[output]]\n{DIR}\n[[output.secret]]\npath = \"c/d\"\n",
                     with_secret("", "path = \"a/b\"")
                 ),
                 "another output's directory",

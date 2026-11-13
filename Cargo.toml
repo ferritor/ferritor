@@ -37,6 +37,7 @@ ferritor-keystore = { path = "crates/ferritor-keystore" }
 # process); the CLI itself must talk to the server over gRPC only.
 ferritor-server = { path = "crates/ferritor-server" }
 ferritor-testkit = { path = "crates/ferritor-testkit" }
+ferritor-winsec = { path = "crates/ferritor-winsec" }
 
 aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 # Auto-unseal with AWS KMS (ferritor-server's `aws-kms` feature). The SDK's
@@ -117,6 +118,12 @@ tower = "0.5.3"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 vsss-rs = { version = "6.0.1", default-features = false, features = ["std", "zeroize"] }
+# The agent as a Windows service (start, stop, the service control
+# manager); a safe API.
+windows-service = "0.8.1"
+# Win32's security calls, for ferritor-winsec only (the one crate allowed
+# `unsafe`); the version tokio and windows-service already bring.
+windows-sys = "0.61.2"
 x509-parser = "0.18.1"
 # The JSON API's OpenAPI description, derived from the handlers and the
 # types serde uses (see ferritor-server `http::openapi`). Not `non_strict_integers`:

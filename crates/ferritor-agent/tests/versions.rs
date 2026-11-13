@@ -1,6 +1,10 @@
 //! Each binary of this package says its own name with `--version`: the
 //! provider is a binary of `ferritor-agent`, whose name it would show
 //! otherwise.
+//!
+//! Unix only: the provider binary is Linux-only, and a cross-built test
+//! runs on another machine than the one that built the binaries.
+#![cfg(unix)]
 
 use std::process::Command;
 

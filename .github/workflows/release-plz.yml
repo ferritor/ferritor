@@ -276,14 +276,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # The CLI for macOS (Apple silicon and Intel) and Windows (x86_64), cross-
-  # built on Linux with cargo-zigbuild (Zig as the C compiler and linker,
+  # The CLI for macOS (Apple silicon and Intel) and Windows (x86_64), and
+  # the agent for Windows, cross-built on Linux with cargo-zigbuild (Zig as the C compiler and linker,
   # without Apple's or Microsoft's SDKs; the macOS binaries ad-hoc signed by
   # Zig's linker, which Apple silicon requires), as CI's `cli-cross` builds
   # them. One archive per platform, the CLI alone: the Linux archives
   # (`images`) carry it with the other binaries.
   cli-archives:
-    name: CLI archives (macOS, Windows)
+    name: CLI archives (macOS, Windows), the Windows agent
     needs: release
     if: needs.release.outputs.version != ''
     runs-on: ubuntu-24.04
@@ -344,6 +344,18 @@ jobs:
                 ;;
             esac
           done
+          # The agent for Windows: its own zip, packed the same way (the
+          # Linux archives carry the Linux agent).
+          triple=x86_64-pc-windows-gnu
+          cargo zigbuild --release --locked -p ferritor-agent --bin ferritor-agent --target "$triple"
+          name="ferritor-agent-$VERSION-$triple"
+          mkdir "$RUNNER_TEMP/$name"
+          cp "target/$triple/release/ferritor-agent.exe" LICENSE-MIT LICENSE-APACHE \
+            THIRD-PARTY-LICENSES.txt "$RUNNER_TEMP/$name/"
+          chmod 0755 "$RUNNER_TEMP/$name"
+          find "$RUNNER_TEMP/$name" -exec touch -h -d "@$mtime" {} +
+          (cd "$RUNNER_TEMP" && find "$name" | LC_ALL=C sort | TZ=UTC zip -X -q -9 -@ "$RUNNER_TEMP/assets/$name.zip")
+          unzip -l "$RUNNER_TEMP/assets/$name.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: assets-cli
@@ -495,9 +507,13 @@ jobs:
             echo "- \`ferritor-cli-$VERSION-x86_64-apple-darwin.tar.gz\` (Intel Macs)"
             echo "- \`ferritor-cli-$VERSION-x86_64-pc-windows-gnu.zip\` (Windows, x86_64)"
             echo
-            echo "Neither is notarized nor signed by a publisher: fetched with \`curl\`,"
+            echo "The agent for Windows (x86_64), \`ferritor-agent-$VERSION-x86_64-pc-windows-gnu.zip\`,"
+            echo "too: see https://ferritor.dev/guides/agent/#windows."
+            echo
+            echo "None is notarized or signed by a publisher: fetched with \`curl\`,"
             echo "they run as they are; downloaded with a browser, macOS needs"
             echo "\`xattr -d com.apple.quarantine ferritor\` and Windows SmartScreen asks first."
+            echo "Windows 11's Smart App Control, where it's on, may refuse to run them."
           } >>"$notes"
           gh release edit "$tag" --notes-file "$notes"
           gh release upload "$tag" "$RUNNER_TEMP"/assets/*
