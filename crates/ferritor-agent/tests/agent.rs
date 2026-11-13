@@ -2,6 +2,9 @@
 //! an authorizer whose grants a test can change), polled with simulated
 //! time: `poll(now)` decides by the `now` it's given, so minutes of rounds
 //! take milliseconds.
+//!
+//! Unix only: the server, in process here, runs on Unix.
+#![cfg(unix)]
 
 use std::net::SocketAddr;
 use std::os::unix::process::ExitStatusExt as _;

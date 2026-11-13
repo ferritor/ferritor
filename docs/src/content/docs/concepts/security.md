@@ -444,6 +444,18 @@ None of these is fixed yet.
    (`C:\temp`, a folder directly under `C:\`) they usually let every
    local account read it, and so act as the identity until the certificate
    expires ([workload identity](/guides/workload-identity#the-cli)).
+5. **The agent on Windows** writes the values to a disk (Windows has no
+   memory-backed directory: `allow_disk = true` is required there), where
+   they outlive the agent and a reboot, and a stolen, unencrypted disk has
+   them. Its process's and threads' access lists keep its own account out
+   of its memory and its threads (the stand-in for `PR_SET_DUMPABLE`;
+   a thread taken over, its context set, would run the account's code in
+   the agent), but not SYSTEM or an
+   administrator holding `SeDebugPrivilege`, and Windows Error Reporting
+   writes a dump of it if `LocalDumps` is configured (it isn't by
+   default). The agent sets each file's access list itself, but not its
+   own key file's: whatever created that decides
+   ([the agent](/guides/agent#windows)).
 
 ## Checklist
 

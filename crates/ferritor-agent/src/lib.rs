@@ -5,6 +5,8 @@
 pub mod agent;
 pub mod config;
 mod connection;
+/// The CSI provider: Linux nodes only.
+#[cfg(unix)]
 pub mod csi;
 pub mod files;
 mod notify;

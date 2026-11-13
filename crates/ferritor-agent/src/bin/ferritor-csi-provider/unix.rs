@@ -1,5 +1,4 @@
-//! `ferritor-csi-provider`: the ferritor provider for the Kubernetes Secrets Store
-//! CSI Driver (`docs/src/content/docs/guides/csi.md`), one per node, on the driver's provider socket.
+//! The provider itself, on Unix: it serves the driver on a Unix socket.
 
 use std::io::IsTerminal as _;
 use std::os::unix::fs::PermissionsExt as _;
@@ -27,7 +26,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> ExitCode {
+pub async fn main() -> ExitCode {
     // First of all, before any token, key or value is in memory: no core
     // dumps, no same-user ptrace or /proc/<pid>/mem.
     #[cfg(target_os = "linux")]

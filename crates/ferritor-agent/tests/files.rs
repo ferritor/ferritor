@@ -1,6 +1,6 @@
-//! The output directory's writer, on real directories.
+//! The output directory's writer, on real directories: on Linux and on
+//! Windows (whose access lists stand in for the modes and the group).
 
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,65 @@ impl Drop for Dir {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).ok();
     }
+}
+
+/// A link to a directory, as the platform makes one.
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    return std::os::windows::fs::symlink_dir(target, link);
+}
+
+/// A file's or directory's mode bits.
+#[cfg(unix)]
+fn mode(path: &Path) -> TestResult<u32> {
+    use std::os::unix::fs::PermissionsExt as _;
+    Ok(std::fs::metadata(path)?.permissions().mode() & 0o7777)
+}
+
+/// An access list: whether it's protected (nothing inherited), and its
+/// entries as (SID string, mask), sorted.
+#[cfg(windows)]
+type Acl = (bool, Vec<(String, u32)>);
+
+/// The access list of `path` (a link itself, not what it points to).
+#[cfg(windows)]
+fn dacl(path: &Path) -> TestResult<Acl> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsHandle as _;
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(0x0002_0000) // READ_CONTROL
+        .custom_flags(0x0200_0000 | 0x0020_0000) // directories, links themselves
+        .open(path)?;
+    let dacl = ferritor_winsec::read_dacl(handle.as_handle(), ferritor_winsec::Object::File)?;
+    assert!(
+        dacl.entries.iter().all(|e| e.allowed && !e.inherited),
+        "{dacl:?}"
+    );
+    let mut entries = Vec::new();
+    for e in &dacl.entries {
+        entries.push((e.sid.to_string_form()?, e.mask));
+    }
+    entries.sort();
+    Ok((dacl.protected, entries))
+}
+
+/// What every file and directory the agent writes allows on Windows: its
+/// own account, SYSTEM and Administrators everything, plus `extra`.
+#[cfg(windows)]
+fn expected_dacl(extra: &[(String, u32)]) -> TestResult<Acl> {
+    use ferritor_winsec::{FULL, Sid};
+    const SYSTEM: &str = "S-1-5-18";
+    let mut entries = vec![(SYSTEM.to_owned(), FULL), ("S-1-5-32-544".to_owned(), FULL)];
+    // As LocalSystem the agent's own entry is SYSTEM's, given once.
+    let me = Sid::current_user()?.to_string_form()?;
+    if me != SYSTEM {
+        entries.push((me, FULL));
+    }
+    entries.extend_from_slice(extra);
+    entries.sort();
+    Ok((true, entries))
 }
 
 fn file(name: &str, contents: &str, mode: u32) -> OutputFile {
@@ -80,10 +139,26 @@ fn a_set_is_written_with_its_modes_and_replaced_whole() {
         Path::new(DATA).join("db-password")
     );
     let real = dir.0.join(std::fs::read_link(dir.0.join(DATA)).unwrap());
-    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
-    assert_eq!(mode(&real.join("db-password")), 0o440);
-    assert_eq!(mode(&real.join("tls.key")), 0o400);
-    assert_eq!(mode(&real), DIR_MODE);
+    #[cfg(unix)]
+    {
+        assert_eq!(mode(&real.join("db-password")).unwrap(), 0o440);
+        assert_eq!(mode(&real.join("tls.key")).unwrap(), 0o400);
+        assert_eq!(mode(&real).unwrap(), DIR_MODE);
+    }
+    // No group: the agent, SYSTEM and Administrators only, whatever the mode.
+    #[cfg(windows)]
+    {
+        let _ = DIR_MODE;
+        assert_eq!(
+            dacl(&real.join("db-password")).unwrap(),
+            expected_dacl(&[]).unwrap()
+        );
+        assert_eq!(
+            dacl(&real.join("tls.key")).unwrap(),
+            expected_dacl(&[]).unwrap()
+        );
+        assert_eq!(dacl(&real).unwrap(), expected_dacl(&[]).unwrap());
+    }
 
     writer
         .write(&[
@@ -216,28 +291,179 @@ fn the_status_is_outside_the_set() {
     assert!(status.contains("\"ok\": true"), "{status}");
     let set = dir.0.join(std::fs::read_link(dir.0.join(DATA)).unwrap());
     assert!(!set.join(STATUS).exists());
-    let mode = std::fs::metadata(dir.0.join(STATUS))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o7777, 0o440);
+    #[cfg(unix)]
+    assert_eq!(mode(&dir.0.join(STATUS)).unwrap(), 0o440);
+    #[cfg(windows)]
+    assert_eq!(
+        dacl(&dir.0.join(STATUS)).unwrap(),
+        expected_dacl(&[]).unwrap()
+    );
 }
 
 /// A group the agent belongs to (here its own) is set on the files and
 /// the generation's directory.
+#[cfg(unix)]
 #[test]
 fn the_group_is_set() {
+    use std::os::unix::fs::MetadataExt as _;
     let dir = Dir::temp("group").unwrap();
     let gid = rustix::process::getgid().as_raw();
-    let mut writer = Writer::open(&dir.0, Some(gid), true).unwrap();
+    let group = ferritor_agent::files::Group::Id(gid);
+    let mut writer = Writer::open(&dir.0, Some(&group), true).unwrap();
     writer.write(&[file("a", "1", 0o440)]).unwrap();
     let set = dir.0.join(std::fs::read_link(dir.0.join(DATA)).unwrap());
     assert_eq!(std::fs::metadata(set.join("a")).unwrap().gid(), gid);
     assert_eq!(std::fs::metadata(&set).unwrap().gid(), gid);
 }
 
+/// On Windows the group is an account or group name: it may read a file
+/// whose mode gives the group read, and list the generation's directory;
+/// a file the mode keeps from the group (0o400) it can't open. No other
+/// entry, nothing inherited.
+#[cfg(windows)]
+#[test]
+fn the_group_may_read_what_its_mode_allows() {
+    use ferritor_winsec::{READ, READ_AND_LIST};
+    let dir = Dir::temp("group").unwrap();
+    let group = ferritor_agent::files::Group::Name("BUILTIN\\Users".to_owned());
+    let mut writer = Writer::open(&dir.0, Some(&group), true).unwrap();
+    writer
+        .write(&[file("shared", "1", 0o440), file("private", "2", 0o400)])
+        .unwrap();
+    let set = dir.0.join(std::fs::read_link(dir.0.join(DATA)).unwrap());
+    let users = "S-1-5-32-545".to_owned();
+    assert_eq!(
+        dacl(&set.join("shared")).unwrap(),
+        expected_dacl(&[(users.clone(), READ)]).unwrap()
+    );
+    assert_eq!(
+        dacl(&set.join("private")).unwrap(),
+        expected_dacl(&[]).unwrap()
+    );
+    assert_eq!(
+        dacl(&set).unwrap(),
+        expected_dacl(&[(users, READ_AND_LIST)]).unwrap()
+    );
+}
+
+/// A group that doesn't name an account is refused at open, by name.
+#[cfg(windows)]
+#[test]
+fn an_unknown_group_is_refused() {
+    let dir = Dir::temp("nogroup").unwrap();
+    let group = ferritor_agent::files::Group::Name("no-such-account-ferritor".to_owned());
+    assert!(matches!(
+        Writer::open(&dir.0, Some(&group), true),
+        Err(FilesError::Account { .. })
+    ));
+}
+
+/// Windows has no memory-backed directory: without `allow_disk` it's
+/// refused, saying so.
+#[cfg(windows)]
+#[test]
+fn windows_needs_allow_disk() {
+    let dir = Dir::temp("disk").unwrap();
+    assert!(matches!(
+        Writer::open(&dir.0, None, false),
+        Err(FilesError::DiskOnly { .. })
+    ));
+    Writer::open(&dir.0, None, true).unwrap();
+}
+
+/// An application holding a file open without letting it be deleted (most
+/// Windows programs: .NET, the C runtime) keeps that generation from being
+/// removed. The writes go on all the same; the generation is removed at
+/// the first write after the file is closed. Replacing the visible name of
+/// a file held open works too: the link isn't what's open.
+#[cfg(windows)]
+#[test]
+fn a_file_held_open_never_fails_a_write() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_SHARE_READ: u32 = 1;
+    let dir = Dir::temp("held").unwrap();
+    let mut writer = Writer::open(&dir.0, None, true).unwrap();
+    writer.write(&[file("a", "1", 0o440)]).unwrap();
+    let first = std::fs::read_link(dir.0.join(DATA)).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(dir.0.join("a"))
+        .unwrap();
+    for n in 2..=4 {
+        writer.write(&[file("a", &n.to_string(), 0o440)]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join("a")).unwrap(),
+            n.to_string()
+        );
+    }
+    assert!(dir.0.join(&first).exists());
+    assert!(!writer.leftovers().is_empty());
+    drop(held);
+    writer.write(&[file("a", "5", 0o440)]).unwrap();
+    assert!(!dir.0.join(&first).exists());
+    assert!(writer.leftovers().is_empty(), "{:?}", writer.leftovers());
+    // The current set and the one before it.
+    assert_eq!(generations(&dir.0).unwrap().len(), 2);
+}
+
+/// At open, a stray generation held open is kept for later rather than
+/// failing the start.
+#[cfg(windows)]
+#[test]
+fn a_stray_held_open_never_fails_a_start() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_SHARE_READ: u32 = 1;
+    let dir = Dir::temp("heldstray").unwrap();
+    {
+        let mut writer = Writer::open(&dir.0, None, true).unwrap();
+        writer.write(&[file("a", "1", 0o440)]).unwrap();
+    }
+    let stray = dir.0.join("..2026_01_01_00_00_00.000000000.9");
+    std::fs::create_dir(&stray).unwrap();
+    std::fs::write(stray.join("old"), "x").unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(stray.join("old"))
+        .unwrap();
+    let mut writer = Writer::open(&dir.0, None, true).unwrap();
+    assert!(stray.exists());
+    drop(held);
+    writer.write(&[file("a", "2", 0o440)]).unwrap();
+    assert!(!stray.exists());
+}
+
+/// A junction named like a generation, and `..data` pointing at it, is
+/// never believed: what it points to is left alone.
+#[cfg(windows)]
+#[test]
+fn a_junction_is_never_a_generation() {
+    let base = Dir::temp("junction").unwrap();
+    let victim = base.0.join("victim");
+    std::fs::create_dir(&victim).unwrap();
+    std::fs::write(victim.join("precious"), "keep me").unwrap();
+    let dir = base.0.join("out");
+    std::fs::create_dir(&dir).unwrap();
+    let fake = dir.join("..2026_01_01_00_00_00.000000000.1");
+    let made = std::process::Command::new("cmd")
+        .args(["/c", "mklink", "/J"])
+        .arg(&fake)
+        .arg(&victim)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    std::os::windows::fs::symlink_dir("..2026_01_01_00_00_00.000000000.1", dir.join(DATA)).unwrap();
+    let mut writer = Writer::open(&dir, None, true).unwrap();
+    for n in 0..3 {
+        writer.write(&[file("a", &n.to_string(), 0o440)]).unwrap();
+    }
+    assert!(victim.join("precious").exists());
+}
+
 /// Without `allow_disk`, a directory that isn't in memory is refused, and
 /// one in a tmpfs (`/dev/shm`) is fine.
+#[cfg(unix)]
 #[test]
 fn a_directory_on_disk_is_refused_unless_allowed() {
     let shm = Path::new("/dev/shm");
@@ -248,7 +474,7 @@ fn a_directory_on_disk_is_refused_unless_allowed() {
     // The build's own directory, normally on disk.
     let disk = Dir::new(Path::new(env!("CARGO_TARGET_TMPDIR")), "disk").unwrap();
     let fs_type = rustix::fs::statfs(&disk.0).unwrap().f_type;
-    if [0x0102_1994, 0x8584_58f6].contains(&u64::try_from(fs_type).unwrap()) {
+    if [0x0102_1994, 0x8584_58f6].contains(&u64::try_from(i128::from(fs_type)).unwrap()) {
         eprintln!("skipped: {} is itself in memory", disk.0.display());
         return;
     }
@@ -273,11 +499,11 @@ fn a_data_link_pointing_outside_is_never_deleted() {
         let dir = base.0.join("out");
         std::fs::create_dir(&dir).unwrap();
         let target = if relative {
-            PathBuf::from("../victim")
+            Path::new("..").join("victim")
         } else {
             victim.clone()
         };
-        std::os::unix::fs::symlink(&target, dir.join(DATA)).unwrap();
+        link_dir(&target, &dir.join(DATA)).unwrap();
 
         let mut writer = Writer::open(&dir, None, true).unwrap();
         writer.write(&[file("a", "1", 0o440)]).unwrap();
@@ -303,8 +529,12 @@ fn only_a_real_generation_directory_is_believed() {
     let dir = base.0.join("out");
     std::fs::create_dir(&dir).unwrap();
     // A link named like a generation, pointing outside, and `..data` to it.
-    std::os::unix::fs::symlink(&victim, dir.join("..2026_01_01_00_00_00.000000000.1")).unwrap();
-    std::os::unix::fs::symlink("..2026_01_01_00_00_00.000000000.1", dir.join(DATA)).unwrap();
+    link_dir(&victim, &dir.join("..2026_01_01_00_00_00.000000000.1")).unwrap();
+    link_dir(
+        Path::new("..2026_01_01_00_00_00.000000000.1"),
+        &dir.join(DATA),
+    )
+    .unwrap();
 
     let mut writer = Writer::open(&dir, None, true).unwrap();
     for n in 0..3 {

@@ -328,7 +328,8 @@ or in dev mode.
 | `test` | the two Postgres servers as in `compose.yaml`; the migrations; `cargo sqlx prepare --check` in both store crates; `cargo test --workspace` |
 | `fuzz` | the fuzz crate's fmt and clippy; that `fuzz/Cargo.lock` has Cargo.lock's version of every crate both name; then every target (see "Fuzzing") for 30 s, daily 5 minutes, from its seeds and the corpus the previous run left (cached). Every target runs even after one crashes; a crash's input is kept as the run's `fuzz-artifacts` |
 | `cluster` | `e2e/cluster.sh` (above), after a release build of the CLI: the server's and the provider's images built, the CSI provider with the real driver and kubelet in k3s, k3d pinned and its download checked; then the agent's and the CLI's images, so every target builds |
-| `cli-cross` | the CLI for `aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-pc-windows-gnu`, as a release builds it: clippy `-D warnings` on its library and binary, then the release build, both through `cargo-zigbuild` (Zig as C compiler and linker, no Apple or Microsoft SDK), so code that only compiles on Unix fails here. Not its tests, which run the server, Unix-only |
+| `cli-cross` | the CLI for `aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-pc-windows-gnu`, as a release builds it: clippy `-D warnings` on its library and binary, then the release build, both through `cargo-zigbuild` (Zig as C compiler and linker, no Apple or Microsoft SDK), so code that only compiles on Unix fails here. Not its tests, which run the server, Unix-only. Then clippy on every target of `ferritor-agent` for both macOS targets (not released there, but its Unix code builds there). Then the agent for Windows: clippy on every target of `ferritor-agent` and `ferritor-winsec`, and their tests built for Windows (release profile, uploaded as `windows-tests`) |
+| `agent-windows` | on a Windows runner (`windows-2025`, whose user is an administrator, holding the link privilege): every test program `cli-cross` built for Windows, run: the output directory's links, access lists and held-open files, the config's Windows refusals, `ferritor-winsec`'s calls. The tests that run a server are `cfg(unix)` and build empty |
 | `advisories` | `cargo deny check advisories sources` (`deny.toml`; `--workspace` for the main one, whose root is a package), for both lockfiles: a RUSTSEC vulnerability, an unmaintained crate, a yanked version, or a crate from anywhere but crates.io fails the build. Also daily, since new advisories land without a change here. For the main lockfile `licenses` too: a dependency under a license not in `deny.toml`'s list fails it (the fuzz crate is never distributed) |
 
 `.github/workflows/docs.yml` builds the docs site on the same events
@@ -341,8 +342,8 @@ to GitHub Pages, <https://ferritor.dev>: the only job that may, with the
 repository's Pages source set to "GitHub Actions" and the custom domain
 in its Pages settings. A pull request's build is never published.
 
-A pull request is checked before it merges only if these eight jobs (the
-seven above and the docs' `build`) are
+A pull request is checked before it merges only if these nine jobs (the
+eight above and the docs' `build`) are
 required status checks on `main` (branch protection); a push straight
 to `main` is checked after it has landed. To run the same checks locally:
 
@@ -363,6 +364,8 @@ for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-gnu; do   # 
   SQLX_OFFLINE=true cargo-zigbuild clippy -p ferritor-cli --lib --bins --locked --target $t -- -D warnings &&
   SQLX_OFFLINE=true cargo zigbuild --release --locked -p ferritor-cli --target $t
 done
+SQLX_OFFLINE=true cargo-zigbuild clippy -p ferritor-agent -p ferritor-winsec --all-targets --locked --target x86_64-pc-windows-gnu -- -D warnings
+SQLX_OFFLINE=true cargo zigbuild --release --tests --locked -p ferritor-agent -p ferritor-winsec --target x86_64-pc-windows-gnu   # then run target/x86_64-pc-windows-gnu/release/deps/*.exe on Windows
 (cd docs && pnpm install --frozen-lockfile && pnpm build)
 ```
 
@@ -427,8 +430,8 @@ Also:
   Re-enable it under Actions, or the advisory check silently stops.
 - **Checkouts keep no token** (`persist-credentials: false`): nothing here
   pushes, and every build script and proc-macro runs in these jobs.
-- **Time limits**: 30 minutes for `test` and `cli-cross`, 90 for `fuzz`,
-  40 for `cluster`, 20 for the rest,
+- **Time limits**: 30 minutes for `test`, 45 for `cli-cross`, 15 for
+  `agent-windows`, 90 for `fuzz`, 40 for `cluster`, 20 for the rest,
   so a hung test or database doesn't hold a runner for six hours.
 
 ## Releases
@@ -468,6 +471,9 @@ come from git tags (`git_only`).
   reproducibly (sorted, the commit's time, no owners, no gzip timestamp).
   Each is signed keyless with cosign, as the images are, so `cosign
   verify-blob` with the same identity checks it.
+- **The agent for Windows** (`cli-archives` too):
+  `ferritor-agent-<version>-x86_64-pc-windows-gnu.zip`, `ferritor-agent.exe`
+  with the three license files, packed as the CLI's zip.
 - **The CLI for macOS and Windows** (`cli-archives`):
   `ferritor-cli-<version>-aarch64-apple-darwin.tar.gz`, the
   `x86_64-apple-darwin` one and `ferritor-cli-<version>-x86_64-pc-windows-gnu.zip`,

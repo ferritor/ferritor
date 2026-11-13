@@ -17,6 +17,7 @@ seo:
 | `ferritor-cli` | The `ferritor` CLI: operators and clients, over gRPC only, through `ferritor-client`. |
 | `ferritor-agent` | Secrets as files: the agent next to an application ([agent](/guides/agent)), and the CSI provider, once per Kubernetes node ([CSI](/guides/csi)). |
 | `ferritor-testkit` | Dev-only test helpers: a throwaway Postgres database per test, a test CA, a token issuer. |
+| `ferritor-winsec` | Windows only: access lists on files, directories and the agent's own process (Windows has no modes, groups or `PR_SET_DUMPABLE`). The one crate allowed `unsafe`, for Win32's security calls. |
 
 The gRPC contract is `proto/ferritor/v1/ferritor.proto`: `SystemService` for the
 seal lifecycle and key management (operators), `SecretsService` for secrets,
