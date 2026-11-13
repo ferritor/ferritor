@@ -75,7 +75,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0 # the whole history: tags and the commits since them
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
       - id: release-plz
         uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
         with:
@@ -141,7 +141,7 @@ jobs:
               fi
               ;;
           esac
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
       - id: release-plz
         uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
         with:
@@ -291,9 +291,9 @@ jobs:
     permissions:
       contents: read
     env:
-      ZIG_VERSION: "0.17.0"
-      ZIG_SHA256: 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
-      CARGO_ZIGBUILD_VERSION: "0.23.4"
+      ZIG_VERSION: "0.17.1"
+      ZIG_SHA256: 3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
+      CARGO_ZIGBUILD_VERSION: "0.24.1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -301,7 +301,7 @@ jobs:
           persist-credentials: false
       - name: Install protoc and zip
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler zip
-      - uses: dtolnay/rust-toolchain@d124f86f28ff42855784ff3319f48ac182c248f8 # 1.99.1
+      - uses: dtolnay/rust-toolchain@9522411a9bce8484da960823fc2f46e52f981f71 # 1.100.0
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin, x86_64-pc-windows-gnu
       - name: Install Zig and cargo-zigbuild
