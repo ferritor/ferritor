@@ -20,7 +20,7 @@ updates:
     commit-message:
       prefix: ci
     ignore:
-      # Pinned to the commit of a Rust version's branch (`# 1.99.1`), or
+      # Pinned to the commit of a Rust version's branch (`# 1.100.0`), or
       # of a dated nightly for fuzzing: a new one is a new Rust, bumped by
       # hand with the Dockerfile and the local toolchain.
       - dependency-name: dtolnay/rust-toolchain

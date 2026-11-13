@@ -25,7 +25,7 @@
 # The base image is pinned by digest (the tag says what it was), like the
 # images in e2e/cluster.sh; its Rust version is CI's (.github/workflows/ci.yml).
 
-FROM docker.io/library/rust:1.99.1-slim-trixie@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247 AS build
+FROM docker.io/library/rust:1.100.0-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends musl-tools protobuf-compiler \
  && rm -rf /var/lib/apt/lists/*
