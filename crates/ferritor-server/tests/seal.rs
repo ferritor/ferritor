@@ -1229,13 +1229,15 @@ async fn grpc_maps_errors_to_status_codes() {
 
 /// With the keys database stalled, seal still returns at once (sealed, the
 /// status left out), and admin calls fail within the bound instead of
-/// hanging.
+/// hanging. The bound covers the setup's calls too (init, the unseals),
+/// so it leaves them room on a busy machine: at 200 ms, `init` alone timed
+/// out in CI.
 #[tokio::test]
 async fn a_stalled_keys_database_never_blocks_seal_and_bounds_unseal() {
     let db = TestDatabase::new("KEYS_DATABASE_URL", "ferritor_server_test", &MIGRATOR)
         .await
         .unwrap();
-    let seal = Seal::new(Keystore::new(db.pool().clone()).with_timeout(Duration::from_millis(200)))
+    let seal = Seal::new(Keystore::new(db.pool().clone()).with_timeout(Duration::from_secs(1)))
         .with_commit_check_timeout(Duration::from_millis(100));
     let shares: Vec<Vec<u8>> = seal
         .init(params(5, 3).unwrap())
@@ -1255,7 +1257,8 @@ async fn a_stalled_keys_database_never_blocks_seal_and_bounds_unseal() {
         .unwrap();
     let started = std::time::Instant::now();
     let outcome = seal.seal().await;
-    assert!(started.elapsed() < Duration::from_secs(2));
+    // The seal config's read runs out its bound; nothing waits for the lock.
+    assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(outcome.status, None);
     assert!(seal.is_sealed());
     assert!(matches!(
