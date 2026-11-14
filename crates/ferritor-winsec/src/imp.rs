@@ -405,9 +405,11 @@ pub fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
 }
 
 /// Whether `dacl` is exactly `expected` with everything: protected, each
-/// entry allowed, set on the object (not inherited), `FULL`, one per SID.
+/// entry allowed, set on the object (not inherited), `FULL`, one per SID,
+/// and none of a kind `read_dacl` can't show.
 fn is_private(dacl: &Dacl, expected: &[&Sid]) -> bool {
     dacl.protected
+        && dacl.other == 0
         && dacl.entries.len() == expected.len()
         && dacl
             .entries
@@ -450,6 +452,9 @@ pub struct Dacl {
     /// Nothing inherited from the parent.
     pub protected: bool,
     pub entries: Vec<DaclEntry>,
+    /// Entries left out of `entries`, of kinds it can't hold (objects',
+    /// callbacks'): each may grant something.
+    pub other: usize,
 }
 
 #[derive(Debug)]
@@ -464,7 +469,7 @@ pub struct DaclEntry {
 
 /// Reads the access list of what `handle` refers to (opened with
 /// `READ_CONTROL`). Entries other than plain allow and deny ones (objects',
-/// callbacks') are left out.
+/// callbacks') are left out, and counted (`other`).
 pub fn read_dacl(handle: BorrowedHandle<'_>, object: Object) -> io::Result<Dacl> {
     let mut dacl: *mut ACL = ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
@@ -518,6 +523,7 @@ pub fn read_dacl(handle: BorrowedHandle<'_>, object: Object) -> io::Result<Dacl>
         return Err(io::Error::last_os_error());
     }
     let mut entries = Vec::new();
+    let mut other = 0;
     for index in 0..info.AceCount {
         let mut ace: *mut c_void = ptr::null_mut();
         // SAFETY: `index` is below the ACL's entry count; `ace` is a valid
@@ -532,6 +538,7 @@ pub fn read_dacl(handle: BorrowedHandle<'_>, object: Object) -> io::Result<Dacl>
             let header = &*ace.cast::<ACE_HEADER>();
             let kind = u32::from(header.AceType);
             if kind != ACCESS_ALLOWED_ACE_TYPE && kind != ACCESS_DENIED_ACE_TYPE {
+                other += 1;
                 continue;
             }
             let allowed_ace = &*ace.cast::<ACCESS_ALLOWED_ACE>();
@@ -544,7 +551,11 @@ pub fn read_dacl(handle: BorrowedHandle<'_>, object: Object) -> io::Result<Dacl>
             });
         }
     }
-    Ok(Dacl { protected, entries })
+    Ok(Dacl {
+        protected,
+        entries,
+        other,
+    })
 }
 
 /// Locks this process and its threads against other processes, as far as
@@ -1389,7 +1400,8 @@ mod tests {
 
     /// What the read-back accepts: exactly the entries asked for. A list a
     /// file system made of its own (none protected, inherited, another
-    /// account, a narrower mask, a duplicate, one missing) is refused.
+    /// account, a narrower mask, a duplicate, one missing, one it can't
+    /// show) is refused.
     #[test]
     fn only_the_asked_for_list_counts_as_private() -> io::Result<()> {
         let (system, administrators) = (Sid::local_system()?, Sid::administrators()?);
@@ -1402,9 +1414,23 @@ mod tests {
         };
         let expected = [&system, &administrators];
         let check = |protected: bool, entries: Vec<DaclEntry>| {
-            is_private(&Dacl { protected, entries }, &expected)
+            is_private(
+                &Dacl {
+                    protected,
+                    entries,
+                    other: 0,
+                },
+                &expected,
+            )
         };
         assert!(check(true, vec![entry(&administrators), entry(&system)]));
+        // An entry of a kind it can't show (a callback's, an object's).
+        let with_other = Dacl {
+            protected: true,
+            entries: vec![entry(&administrators), entry(&system)],
+            other: 1,
+        };
+        assert!(!is_private(&with_other, &expected));
         assert!(!check(false, vec![entry(&system), entry(&administrators)]));
         assert!(!check(true, vec![entry(&system)]));
         assert!(!check(true, vec![entry(&system), entry(&system)]));
