@@ -436,16 +436,7 @@ None of these is fixed yet.
    short rate limit, until the call ends; in the agent, its own copies of a
    value are wiped, but the decoded responses and the transport's buffers
    aren't.
-4. **`ferritor login --key-out` on Windows** writes the private key with
-   the access rules its folder passes on, not an owner-only one as `0600`
-   is on Unix: setting one takes Win32 calls the workspace's
-   `forbid(unsafe_code)` rules out, or a helper program (`icacls`) in the
-   key's path. Under the user's profile the inherited rules are the user,
-   SYSTEM and Administrators, as private as `0600`; in a shared folder
-   (`C:\temp`, a folder directly under `C:\`) they usually let every
-   local account read it, and so act as the identity until the certificate
-   expires ([workload identity](/guides/workload-identity#the-cli)).
-5. **The agent on Windows** writes the values to a disk (Windows has no
+4. **The agent on Windows** writes the values to a disk (Windows has no
    memory-backed directory: `allow_disk = true` is required there), where
    they outlive the agent and a reboot, and a stolen, unencrypted disk has
    them. Its process's and threads' access lists keep its own account out
