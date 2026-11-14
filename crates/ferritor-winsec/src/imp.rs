@@ -306,8 +306,14 @@ fn build_acl(entries: &[Entry<'_>]) -> io::Result<Vec<u32>> {
 /// set afterwards would leave a moment in which an account the folder
 /// grants rights on new files could open a handle and keep that access.
 /// The returned handle is unshared besides, until it closes.
+///
+/// The list is read back from the new file before it's returned: a file
+/// system without access lists (FAT, exFAT) ignores the one asked for, and
+/// a share may map it to something else. Then the (still empty) file is
+/// removed again and it's an error, so no key is written into it. `path`
+/// may be longer than `MAX_PATH` (made absolute, with the `\\?\` prefix).
 pub fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
-    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
+    use std::os::windows::io::{AsHandle as _, FromRawHandle as _, OwnedHandle};
 
     let (user, system, administrators) = (
         Sid::current_user()?,
@@ -363,7 +369,7 @@ pub fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
         lpSecurityDescriptor: sd,
         bInheritHandle: 0,
     };
-    let name = wide_nul(path.as_os_str())?;
+    let name = wide_nul(verbatim(path)?.as_os_str())?;
     // SAFETY: `name` is NUL-terminated UTF-16, `attributes` and the
     // descriptor and ACL it points to live until the call returns, and no
     // template file is given.
@@ -382,9 +388,60 @@ pub fn create_private_file(path: &Path) -> io::Result<std::fs::File> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: a valid handle CreateFileW just opened, owned by nothing else.
-    Ok(std::fs::File::from(unsafe {
-        OwnedHandle::from_raw_handle(handle)
-    }))
+    let file = std::fs::File::from(unsafe { OwnedHandle::from_raw_handle(handle) });
+    let expected: Vec<&Sid> = entries.iter().map(|e| e.sid).collect();
+    let kept =
+        read_dacl(file.as_handle(), Object::File).is_ok_and(|dacl| is_private(&dacl, &expected));
+    if !kept {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the file system didn't keep the file's access list (one without \
+             access lists, like FAT, or a share): choose a folder on NTFS",
+        ));
+    }
+    Ok(file)
+}
+
+/// Whether `dacl` is exactly `expected` with everything: protected, each
+/// entry allowed, set on the object (not inherited), `FULL`, one per SID.
+fn is_private(dacl: &Dacl, expected: &[&Sid]) -> bool {
+    dacl.protected
+        && dacl.entries.len() == expected.len()
+        && dacl
+            .entries
+            .iter()
+            .all(|e| e.allowed && !e.inherited && e.mask == FULL)
+        && expected
+            .iter()
+            .all(|sid| dacl.entries.iter().filter(|e| e.sid == **sid).count() == 1)
+}
+
+/// `path` absolute, in the extended-length form a Win32 call takes past
+/// `MAX_PATH` (as `std::fs` does it): `\\?\C:\…`, `\\?\UNC\server\share\…`
+/// for a share; already extended or a device path (`\\.\`), as it is.
+/// Made absolute first, by Windows' rules (`..`, `.`, `/`), which the
+/// prefix then turns off.
+fn verbatim(path: &Path) -> io::Result<PathBuf> {
+    use std::path::{Component, Prefix};
+
+    let absolute = std::path::absolute(path)?;
+    let Some(Component::Prefix(prefix)) = absolute.components().next() else {
+        return Ok(absolute);
+    };
+    let mut wide: Vec<u16> = match prefix.kind() {
+        Prefix::Disk(_) => r"\\?\".encode_utf16().collect(),
+        // `\\server\share\…`: the leading two backslashes become the prefix.
+        Prefix::UNC(..) => r"\\?\UNC".encode_utf16().collect(),
+        _ => return Ok(absolute),
+    };
+    let rest = absolute.as_os_str().encode_wide();
+    match prefix.kind() {
+        Prefix::UNC(..) => wide.extend(rest.skip(1)),
+        _ => wide.extend(rest),
+    }
+    Ok(PathBuf::from(OsString::from_wide(&wide)))
 }
 
 /// An access list as read back: for checks and tests.
@@ -1298,7 +1355,73 @@ mod tests {
             again.err().map(|e| e.kind()),
             Some(io::ErrorKind::AlreadyExists)
         );
+
+        // Past MAX_PATH, as std::fs takes it.
+        let deep = dir.join("d".repeat(200)).join("e".repeat(100));
+        std::fs::create_dir_all(&deep)?;
+        let long = deep.join("key.pem");
+        assert!(long.as_os_str().len() > 260);
+        create_private_file(&long)?.write_all(b"secret")?;
+        assert_eq!(std::fs::read_to_string(&long)?, "secret");
         std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    /// Made absolute by Windows' rules, then prefixed; a share's form has
+    /// `UNC`; an extended or device path stays as it is.
+    #[test]
+    fn a_path_gets_its_extended_length_form() -> io::Result<()> {
+        let form = |p: &str| verbatim(Path::new(p)).map(|p| p.display().to_string());
+        assert_eq!(form(r"C:\a\..\b/key.pem")?, r"\\?\C:\b\key.pem");
+        assert_eq!(
+            form(r"\\server\share\dir\key.pem")?,
+            r"\\?\UNC\server\share\dir\key.pem"
+        );
+        assert_eq!(form(r"\\?\C:\x\key.pem")?, r"\\?\C:\x\key.pem");
+        assert_eq!(form(r"\\.\pipe\x")?, r"\\.\pipe\x");
+        let relative = form("key.pem")?;
+        assert!(
+            relative.starts_with(r"\\?\") && relative.ends_with(r"\key.pem"),
+            "{relative}"
+        );
+        Ok(())
+    }
+
+    /// What the read-back accepts: exactly the entries asked for. A list a
+    /// file system made of its own (none protected, inherited, another
+    /// account, a narrower mask, a duplicate, one missing) is refused.
+    #[test]
+    fn only_the_asked_for_list_counts_as_private() -> io::Result<()> {
+        let (system, administrators) = (Sid::local_system()?, Sid::administrators()?);
+        let everyone = Sid::well_known(windows_sys::Win32::Security::WinWorldSid)?;
+        let entry = |sid: &Sid| DaclEntry {
+            allowed: true,
+            sid: sid.clone(),
+            mask: FULL,
+            inherited: false,
+        };
+        let expected = [&system, &administrators];
+        let check = |protected: bool, entries: Vec<DaclEntry>| {
+            is_private(&Dacl { protected, entries }, &expected)
+        };
+        assert!(check(true, vec![entry(&administrators), entry(&system)]));
+        assert!(!check(false, vec![entry(&system), entry(&administrators)]));
+        assert!(!check(true, vec![entry(&system)]));
+        assert!(!check(true, vec![entry(&system), entry(&system)]));
+        assert!(!check(true, vec![entry(&system), entry(&everyone)]));
+        assert!(!check(
+            true,
+            vec![entry(&system), entry(&administrators), entry(&everyone)]
+        ));
+        let mut narrow = entry(&administrators);
+        narrow.mask = READ;
+        assert!(!check(true, vec![entry(&system), narrow]));
+        let mut inherited = entry(&administrators);
+        inherited.inherited = true;
+        assert!(!check(true, vec![entry(&system), inherited]));
+        let mut denied = entry(&administrators);
+        denied.allowed = false;
+        assert!(!check(true, vec![entry(&system), denied]));
         Ok(())
     }
 }

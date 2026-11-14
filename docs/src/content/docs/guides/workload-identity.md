@@ -255,7 +255,9 @@ On Windows, where there's no mode, the key file gets an access list of its
 own instead: you, SYSTEM and Administrators, protected, so nothing the
 folder passes on to new files applies, even in a shared folder like
 `C:\temp`. The file is created with that list, so it never has any
-other, not even for a moment. `icacls <file>` shows it.
+other, not even for a moment. `icacls <file>` shows it. A folder whose
+file system has no access lists (FAT or exFAT, on a USB stick say) is
+refused: the CLI removes the empty file and writes no key.
 
 ## Several servers
 
