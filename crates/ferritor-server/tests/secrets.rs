@@ -966,12 +966,15 @@ async fn a_put_stuck_in_its_insert_across_a_seal_returns_sealed() {
     env.destroy().await.unwrap();
 }
 
-/// Secrets over the same databases, with short bounds.
+/// Secrets over the same databases, with short bounds. The call bound
+/// leaves room beside the lock wait on a busy machine (a put's other
+/// statements share it): at 300 ms, a slow runner could turn `Busy` into
+/// `DataTimeout`.
 fn impatient(env: &Env) -> Secrets {
     Secrets::new(
         Arc::clone(&env.seal),
         Datastore::new(env.data.pool().clone())
-            .with_timeout(Duration::from_millis(300))
+            .with_timeout(Duration::from_secs(1))
             .with_lock_timeout(Duration::from_millis(100)),
         Arc::clone(&env.gate),
     )
@@ -985,7 +988,7 @@ async fn a_stalled_data_database_times_out() {
 
     let started = std::time::Instant::now();
     let read = impatient(&env).get(&ANON, "app/db", None).await;
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(started.elapsed() < Duration::from_secs(3));
     assert!(matches!(read, Err(SecretsError::DataTimeout)));
     assert_eq!(
         tonic::Status::from(SecretsError::DataTimeout).code(),
