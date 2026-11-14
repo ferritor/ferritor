@@ -982,13 +982,19 @@ async fn run_stops_in_the_middle_of_a_round() {
     env.agent("", &outputs).unwrap().poll(Instant::now()).await;
     assert_eq!(read(&out, "db").as_deref(), Some("v1"));
 
-    // Accepts, then holds every connection without a word.
+    // Accepts, then holds every connection without a word, telling the
+    // test of each.
     let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = silent.local_addr().unwrap().port();
-    let holding = tokio::spawn(async move {
-        let mut held = Vec::new();
-        while let Ok((connection, _)) = silent.accept().await {
-            held.push(connection);
+    let accepted = Arc::new(tokio::sync::Notify::new());
+    let holding = tokio::spawn({
+        let accepted = Arc::clone(&accepted);
+        async move {
+            let mut held = Vec::new();
+            while let Ok((connection, _)) = silent.accept().await {
+                held.push(connection);
+                accepted.notify_one();
+            }
         }
     });
     let text = format!(
@@ -1004,8 +1010,10 @@ async fn run_stops_in_the_middle_of_a_round() {
         })
         .await;
     });
-    // Well into the round: connected, waiting for the server's answer.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // In the round: connected, waiting for the server's answer.
+    tokio::time::timeout(Duration::from_secs(5), accepted.notified())
+        .await
+        .expect("the round never connected");
     let asked = Instant::now();
     stop.send(()).ok();
     tokio::time::timeout(Duration::from_secs(1), running)
