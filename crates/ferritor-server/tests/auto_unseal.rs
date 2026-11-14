@@ -573,6 +573,9 @@ async fn the_loop_keeps_the_server_unsealed_and_heeds_the_hold() {
 /// lock until the write times out, the data database's half refused. The
 /// loop wakes the moment the keyring drops; this server's own hold, set in
 /// the same critical section, stops it. An explicit `--auto` then unseals.
+/// The keystore's bound covers that unseal too (one attempt, no retry), so
+/// it leaves room on a busy machine, as `seal.rs`'s stalled-database test
+/// does.
 #[tokio::test]
 async fn the_loop_never_undoes_its_own_seal() {
     let env = Env::new().await.unwrap();
@@ -581,7 +584,7 @@ async fn the_loop_never_undoes_its_own_seal() {
         down: std::sync::atomic::AtomicBool::new(true),
     });
     let seal = Arc::new(
-        Seal::new(env.keystore().with_timeout(Duration::from_millis(300)))
+        Seal::new(env.keystore().with_timeout(Duration::from_secs(1)))
             .with_root_ledger(
                 Arc::clone(&flaky) as Arc<dyn ferritor_server::root_ledger::RootLedger>
             )
