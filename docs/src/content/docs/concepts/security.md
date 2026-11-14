@@ -57,7 +57,8 @@ accordingly.
 | Applications | their client certificate | their stored policies' grants, nothing more |
 | Client hosts (where the CLI or an application runs) | the values they read, the shares typed into them, their certificate's key | what that identity may do, and the shares entered there |
 | Database administrators, backups | one database each, or both | wrapped keys only, never a usable one; integrity and availability (below) |
-| The network | | nothing: TLS with a client certificate on every connection |
+| The network | | nothing: TLS with a client certificate on every connection to the API |
+| Whoever reaches the Prometheus port (`[metrics] exporter = "prometheus"`) | the metrics | the sealed state, counts (namespaces, stored policies, the policy revision) and rates (requests, denials, refusals): never a path, an identity, a namespace's name or a value. Loopback by default; elsewhere TLS, with `client_ca` to say who may scrape ([operations](/operations/running#metrics)) |
 
 The boundaries that matter: the server process (keys exist in usable form
 only inside it), the client CA (it decides who exists), the shares (they
@@ -475,6 +476,9 @@ What a deployment must get right for the above to hold
 - config rules for operators only, applications' grants in stored policies
   applied from a reviewed source of truth (`--prune`); `policy`,
   `destroy_kek`, `purge` and `seal` granted narrowly;
+- metrics on loopback, or over TLS with `client_ca` when the scrapers'
+  network is shared: they show the sealed state and request and denial
+  rates;
 - shares with different people, never on the server host; a rekey when one
   may be exposed;
 - both databases with synchronous replication, backed up in the right

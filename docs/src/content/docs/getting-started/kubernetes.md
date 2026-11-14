@@ -518,6 +518,74 @@ once it's readable, the next retry mounts it.
   health service for `ferritor.v1.SecretsService`, which is `NOT_SERVING`
   while sealed ([operations](/operations/running#health-and-readiness)); it
   needs a gRPC health client in the image.
+- **Metrics**, for Prometheus (kube-prometheus-stack, the Prometheus
+  Operator): a listener of its own, over TLS with the server's certificate
+  (off loopback it always is), which only scrapers with a certificate from
+  a CA of their own may read: any pod in the cluster can reach the port,
+  and the metrics show the sealed state and the denial rates
+  ([operations](/operations/running#metrics)). The scrapers' CA, and
+  Prometheus's certificate from it:
+
+  ```sh
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 \
+    -keyout scrapers-ca-key.pem -out scrapers-ca.pem -subj /CN=ferritor-scrapers-ca
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout prometheus-key.pem -out prometheus.csr -subj /CN=prometheus
+  printf 'extendedKeyUsage=clientAuth\n' > prometheus.ext
+  openssl x509 -req -in prometheus.csr -CA scrapers-ca.pem -CAkey scrapers-ca-key.pem \
+    -CAcreateserial -days 90 -extfile prometheus.ext -out prometheus.pem
+  ```
+
+  `scrapers-ca.pem` goes into the `ferritor-server` Secret with the rest
+  (another `--from-file`), and `ferritor.toml` gets:
+
+  ```toml
+  [metrics]
+  exporter = "prometheus"
+  listen_addr = "0.0.0.0:9464"
+  client_ca = "/etc/ferritor/scrapers-ca.pem"
+  ```
+
+  The Deployment's container gets a port, `{name: metrics, containerPort:
+  9464}`, and the Service the same, `{name: metrics, port: 9464}`, and
+  `labels: {app: ferritor}` in its `metadata` for the `ServiceMonitor` to
+  find it. Prometheus gets the server's CA in a ConfigMap and its own
+  certificate in a Secret, never the `ferritor-server` Secret, which holds
+  the server's key:
+
+  ```sh
+  kubectl -n ferritor-system create configmap ferritor-ca --from-file=ca.pem
+  kubectl -n ferritor-system create secret generic ferritor-scraper \
+    --from-file=tls.crt=prometheus.pem --from-file=tls.key=prometheus-key.pem
+  ```
+
+  ```yaml
+  apiVersion: monitoring.coreos.com/v1
+  kind: ServiceMonitor
+  metadata:
+    name: ferritor
+    namespace: ferritor-system
+    labels: {release: monitoring}   # kube-prometheus-stack's release name: it selects by it
+  spec:
+    selector: {matchLabels: {app: ferritor}}
+    endpoints:
+      - port: metrics
+        scheme: https
+        tlsConfig:
+          ca: {configMap: {name: ferritor-ca, key: ca.pem}}
+          cert: {secret: {name: ferritor-scraper, key: tls.crt}}
+          keySecret: {name: ferritor-scraper, key: tls.key}
+          serverName: ferritor.ferritor-system.svc
+  ```
+
+  `serverName` is a name in the server's certificate. kube-prometheus-stack
+  picks up only the `ServiceMonitor`s labelled with its release's name
+  (`monitoring` here, whatever `helm install` named it); installed with
+  this setting, it picks up every one:
+  `prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false`.
+  Keep `scrapers-ca-key.pem` off the cluster, like `ca-key.pem`. Then alert
+  on `ferritor_sealed`, `ferritor_kek_vanished` and the rest of
+  [operations](/operations/running#metrics)' list.
 - **Certificates**: renew the server's (`ferritor.server_certificate.expiry`)
   and send SIGHUP, or restart and unseal; keep operators' short-lived.
 - **The token exchange**: one issuer per cluster, mappings as narrow as

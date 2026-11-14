@@ -22,6 +22,7 @@ pub mod namespaces;
 pub mod policies;
 pub mod policy;
 pub mod policy_store;
+pub mod prometheus;
 pub mod purge;
 pub mod ratelimit;
 pub mod rewrap;

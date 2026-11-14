@@ -548,7 +548,9 @@ certificate instead of being issued one ([workload identity](/guides/workload-id
 - **Certificates**: renew the server certificate before it expires (the
   `ferritor.server_certificate.expiry` gauge), then `systemctl reload ferritor`;
   keep client certificates short-lived or publish a CRL.
-- **Metrics**: set `OTEL_EXPORTER_OTLP_ENDPOINT` and alert on what
+- **Metrics**: set `OTEL_EXPORTER_OTLP_ENDPOINT`, or `[metrics] exporter =
+  "prometheus"` for a scrape ([configuration](/reference/configuration#metrics)),
+  and alert on what
   [operations](/operations/running) lists (`ferritor.sealed`, `ferritor.kek.vanished`,
   `ferritor.audit.queue.depth`, the expiry gauges).
 - **Rate limits**: on by default (calls in flight, per identity and per

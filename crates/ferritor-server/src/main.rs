@@ -11,13 +11,16 @@ use ferritor_datastore::Datastore;
 use ferritor_keystore::Keystore;
 use ferritor_server::audit::{AuditLog, Drain, Gate, PolicyReload};
 use ferritor_server::authz::StoredPolicies;
-use ferritor_server::config::{CertificatePem, ReloadError, ReloadedPolicy, Settings};
+use ferritor_server::config::{
+    self, CertificatePem, PrometheusListener, ReloadError, ReloadedPolicy, Settings,
+};
 use ferritor_server::crl::StaleWatch;
 use ferritor_server::destroy::Destroy;
 use ferritor_server::health::Readiness;
 use ferritor_server::identity::exchange::{self, Exchange};
 use ferritor_server::namespaces::Namespaces;
 use ferritor_server::policies::Policies;
+use ferritor_server::prometheus::Scrape;
 use ferritor_server::purge::Purge;
 use ferritor_server::rewrap::Rewrap;
 use ferritor_server::seal::{Seal, SealError};
@@ -26,6 +29,7 @@ use ferritor_server::tls;
 use ferritor_server::tls::ServerTls;
 use ferritor_server::watch::Watch;
 use ferritor_server::{error_chain, grpc, http, keyring, metrics};
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use secrecy::{ExposeSecret, SecretString};
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -164,8 +168,65 @@ const DRAIN_LIMIT: Duration = Duration::from_secs(15);
 /// the audit drain could together take longer.
 const KUBERNETES_GRACE: Duration = Duration::from_secs(30);
 
-/// How long shutdown waits for the last metrics export.
+/// How long shutdown waits for the last metrics export, or the last scrape.
 const METRICS_FLUSH_LIMIT: Duration = Duration::from_secs(3);
+
+/// The metrics exporter in use.
+enum Exporting {
+    /// Pushing: flushed at exit.
+    Otlp(SdkMeterProvider),
+    /// Scraped: the provider lives as long as the scrape is served.
+    Prometheus {
+        _provider: SdkMeterProvider,
+        scrape: Scrape,
+        listener: PrometheusListener,
+    },
+    Off,
+}
+
+/// Installs the exporter `[metrics]` chose (see `config::MetricsSettings`).
+fn start_metrics(chosen: &config::Metrics) -> anyhow::Result<Exporting> {
+    let otlp = |export: metrics::Export| -> anyhow::Result<Exporting> {
+        let provider = metrics::init(Some(export))
+            .context("starting the OTLP metrics exporter")?
+            .context("the OTLP exporter wasn't installed")?;
+        tracing::info!("exporting metrics over OTLP (OTEL_EXPORTER_OTLP_* settings)");
+        Ok(Exporting::Otlp(provider))
+    };
+    match chosen {
+        config::Metrics::OtlpIfConfigured => match metrics::Export::from_env()? {
+            Some(export) => otlp(export),
+            None => {
+                tracing::info!(
+                    "metrics off: no OTEL_EXPORTER_OTLP_ENDPOINT, no [metrics] exporter"
+                );
+                Ok(Exporting::Off)
+            }
+        },
+        config::Metrics::Otlp => otlp(metrics::Export::from_env()?.context(
+            "[metrics] exporter = \"otlp\" needs OTEL_EXPORTER_OTLP_ENDPOINT (or \
+             OTEL_EXPORTER_OTLP_METRICS_ENDPOINT)",
+        )?),
+        config::Metrics::Prometheus(listener) => {
+            if metrics::otlp_endpoint_set() {
+                tracing::warn!(
+                    "OTEL_EXPORTER_OTLP_ENDPOINT is set, but [metrics] exporter = \"prometheus\": \
+                     nothing is pushed over OTLP"
+                );
+            }
+            let (provider, scrape) = metrics::init_prometheus();
+            Ok(Exporting::Prometheus {
+                _provider: provider,
+                scrape,
+                listener: listener.clone(),
+            })
+        }
+        config::Metrics::Off => {
+            tracing::info!("metrics off ([metrics] exporter = \"none\")");
+            Ok(Exporting::Off)
+        }
+    }
+}
 
 /// How long a second signal waits for the audit log before exiting.
 const SECOND_SIGNAL_FLUSH: Duration = Duration::from_secs(1);
@@ -494,16 +555,6 @@ async fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
         )
         .init();
-    // Before anything records: instruments bind to the provider in place
-    // when they're created.
-    let meter_provider = metrics::init(metrics::Export::from_env()?)
-        .context("starting the OTLP metrics exporter")?;
-    if meter_provider.is_some() {
-        tracing::info!("exporting metrics over OTLP (OTEL_EXPORTER_OTLP_* settings)");
-    } else {
-        tracing::info!("metrics off: no OTEL_EXPORTER_OTLP_ENDPOINT");
-    }
-
     let serving = Arc::new(AtomicBool::new(false));
     let audit_for_signals = Arc::new(OnceLock::new());
     let first_signal = watch_signals(Arc::clone(&serving), Arc::clone(&audit_for_signals))?;
@@ -513,6 +564,9 @@ async fn main() -> anyhow::Result<()> {
     let security = settings
         .security()
         .context("setting up TLS and the policy")?;
+    // Before anything records (nothing above does): instruments bind to the
+    // provider in place when they're created.
+    let exporting = start_metrics(&settings.metrics().map_err(anyhow::Error::msg)?)?;
     let (database_timeout, lock_timeout) = (settings.database_timeout(), settings.lock_timeout());
     migrate(&settings.keys_database_url, &ferritor_keystore::MIGRATOR)
         .await
@@ -637,6 +691,54 @@ async fn main() -> anyhow::Result<()> {
                 tls,
                 Routes::new(grpc::identity_service(Arc::clone(exchange))),
             ))
+        }
+        _ => None,
+    };
+    // The Prometheus scrape's own listener (see `tls::serve_metrics`).
+    let metrics_serving = match &exporting {
+        Exporting::Prometheus {
+            listener, scrape, ..
+        } => {
+            let addr = listener.addr;
+            let tls = if listener.tls {
+                let server_tls = security
+                    .tls
+                    .as_ref()
+                    .context("metrics over TLS without [tls] (refused when loading)")?;
+                let client_ca = listener
+                    .client_ca
+                    .as_deref()
+                    .map(|path| {
+                        std::fs::read(path).with_context(|| {
+                            format!("reading metrics.client_ca {}", path.display())
+                        })
+                    })
+                    .transpose()?;
+                Some(
+                    server_tls
+                        .for_metrics(client_ca.as_deref())
+                        .context("setting up the [metrics] listener's TLS")?,
+                )
+            } else {
+                None
+            };
+            let bound = TcpListener::bind(addr)
+                .await
+                .with_context(|| format!("listening on {addr} ([metrics] listen_addr)"))?;
+            if tls.is_none() && !ferritor_server::config::is_loopback(addr.ip()) {
+                tracing::warn!(
+                    %addr,
+                    "serving metrics in plaintext off loopback (metrics.tls = false): anyone who \
+                     reaches the port reads them, the sealed state and request rates included"
+                );
+            }
+            tracing::info!(
+                %addr,
+                tls = tls.is_some(),
+                client_certificates = listener.client_ca.is_some(),
+                "serving metrics for Prometheus (GET /metrics)"
+            );
+            Some((bound, tls, scrape.clone().router()))
         }
         _ => None,
     };
@@ -812,6 +914,18 @@ async fn main() -> anyhow::Result<()> {
             None => Ok(()),
         }
     };
+    // The scrape keeps answering through the drain, when in-flight calls and
+    // the audit queue matter most: stopped only once the rest has ended.
+    let metrics_stop = CancellationToken::new();
+    let metrics_served = metrics_serving.map(|(listener, tls, routes)| {
+        let stop = metrics_stop.clone().cancelled_owned();
+        tokio::spawn(async move {
+            let served = tls::serve_metrics(routes, listener, tls, stop).await;
+            if let Err(e) = &served {
+                tracing::error!(error = %error_chain(e), "the metrics listener stopped");
+            }
+        })
+    });
     tokio::select! {
         served = async { tokio::try_join!(served, exchange_served) } => {
             served.context("serving")?;
@@ -829,7 +943,15 @@ async fn main() -> anyhow::Result<()> {
              queued entries (a seal's, possibly) are lost"
         );
     }
-    if let Some(provider) = meter_provider {
+    metrics_stop.cancel();
+    if let Some(metrics_served) = metrics_served
+        && tokio::time::timeout(METRICS_FLUSH_LIMIT, metrics_served)
+            .await
+            .is_err()
+    {
+        tracing::warn!("a scrape still open after {METRICS_FLUSH_LIMIT:?}: not waiting for it");
+    }
+    if let Exporting::Otlp(provider) = exporting {
         // Flushes the last export; blocking, so off the runtime's workers,
         // and bounded: a collector that doesn't answer mustn't hold the
         // exit for the exporter's own timeout (10 s by default).

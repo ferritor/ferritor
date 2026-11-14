@@ -148,6 +148,19 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #requests_per_second = 500
 #burst = 1000
 
+# Metrics (https://ferritor.dev/operations/running#metrics). Without this
+# section: OpenTelemetry pushed over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is
+# set, off otherwise. One exporter at a time. Read at startup only.
+#[metrics]
+#exporter = "prometheus"        # "otlp" (needs OTEL_EXPORTER_OTLP_ENDPOINT), "prometheus" or "none"
+# Prometheus only: GET /metrics on a listener of its own, never the main one
+# (no client certificate needed, no audit entry, no rate limit). Plaintext
+# on a loopback address; anywhere else TLS with the server's certificate
+# (secured mode), unless tls = false asks for plaintext there.
+#listen_addr = "0.0.0.0:9464"   # default 127.0.0.1:9464
+#tls = true                     # default: false on loopback, true elsewhere
+#client_ca = "/etc/ferritor/metrics-ca.pem"   # TLS only: scrapers present a certificate from this CA
+
 # Workload identity: short-lived client certificates (an hour by default)
 # in exchange for a token from an issuer trusted here: a Kubernetes
 # cluster's service account tokens, a CI system's OIDC tokens. Secured mode

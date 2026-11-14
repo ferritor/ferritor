@@ -119,6 +119,67 @@ pub struct Settings {
     /// shares alone. Read at startup only.
     #[serde(default)]
     pub seal: SealSettings,
+    /// How metrics leave the server ([`MetricsSettings`]); absent, OTLP if
+    /// its endpoint variable is set. Read at startup only.
+    #[serde(default)]
+    pub metrics: MetricsSettings,
+}
+
+/// `[metrics]`: `exporter = "otlp"` (pushed to a collector, configured by
+/// the standard `OTEL_EXPORTER_OTLP_*` variables, which must name an
+/// endpoint), `"prometheus"` (scraped from a listener of its own) or
+/// `"none"`. Without `exporter`, OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// (or its metrics variant) is set, off otherwise. One exporter at a time.
+/// Resolved and checked by [`Settings::metrics`].
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MetricsSettings {
+    pub exporter: Option<MetricsExporter>,
+    /// Prometheus only: where `GET /metrics` is served. Default
+    /// [`DEFAULT_METRICS_ADDR`]; never the main listener's or the
+    /// exchange's address.
+    pub listen_addr: Option<SocketAddr>,
+    /// Prometheus only: TLS with the server's certificate (secured mode).
+    /// Default: off on a loopback address, on anywhere else, so plaintext
+    /// off loopback is only ever asked for.
+    pub tls: Option<bool>,
+    /// Prometheus over TLS only: the CA (PEM) whose client certificates a
+    /// scraper must present. Without it, any scraper that reaches the port
+    /// may read the metrics.
+    pub client_ca: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MetricsExporter {
+    Otlp,
+    Prometheus,
+    None,
+}
+
+/// Where the Prometheus endpoint listens by default: loopback, and OpenTelemetry's
+/// usual Prometheus port.
+pub const DEFAULT_METRICS_ADDR: &str = "127.0.0.1:9464";
+
+/// `[metrics]` resolved by [`Settings::metrics`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Metrics {
+    /// No `exporter`: OTLP if the endpoint variable is set, off otherwise.
+    OtlpIfConfigured,
+    /// `exporter = "otlp"`: the endpoint variable is required.
+    Otlp,
+    Prometheus(PrometheusListener),
+    Off,
+}
+
+/// The Prometheus endpoint's listener, checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrometheusListener {
+    pub addr: SocketAddr,
+    /// With the server's certificate; `false`: plaintext.
+    pub tls: bool,
+    /// Scrapers must present a certificate from this CA (TLS only).
+    pub client_ca: Option<PathBuf>,
 }
 
 /// `[seal]`: `provider = "shamir"` (the default: operators' shares),
@@ -384,6 +445,7 @@ impl Settings {
         ensure_shutdown_delay(settings.shutdown_delay_secs)?;
         settings.limits().map_err(config::ConfigError::Message)?;
         settings.identity().map_err(config::ConfigError::Message)?;
+        settings.metrics().map_err(config::ConfigError::Message)?;
         match (&settings.tls, settings.policy.is_empty()) {
             (None, true) => ensure_loopback(settings.listen_addr)?,
             (Some(tls), false) => {
@@ -749,6 +811,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "rate_limit",
     "identity",
     "seal",
+    "metrics",
 ];
 
 /// Refuses a settings file with a top-level key [`Settings`] doesn't have:
@@ -812,6 +875,68 @@ fn ensure_timeouts(database_ms: u64, lock_ms: u64) -> Result<(), config::ConfigE
 }
 
 impl Settings {
+    /// `[metrics]`, checked (see [`MetricsSettings`]). The Prometheus
+    /// listener is the scrape's alone: on another address than the main
+    /// listener and the exchange; over TLS (by default off loopback) only in
+    /// secured mode, whose certificate it presents; a client CA only with TLS.
+    pub fn metrics(&self) -> Result<Metrics, String> {
+        let raw = &self.metrics;
+        let listener_set =
+            raw.listen_addr.is_some() || raw.tls.is_some() || raw.client_ca.is_some();
+        match raw.exporter {
+            Some(MetricsExporter::Prometheus) => {}
+            _ if listener_set => {
+                return Err(
+                    "metrics.listen_addr, metrics.tls and metrics.client_ca are for exporter = \
+                     \"prometheus\""
+                        .to_owned(),
+                );
+            }
+            None => return Ok(Metrics::OtlpIfConfigured),
+            Some(MetricsExporter::Otlp) => return Ok(Metrics::Otlp),
+            Some(MetricsExporter::None) => return Ok(Metrics::Off),
+        }
+        let addr = match raw.listen_addr {
+            Some(addr) => addr,
+            None => DEFAULT_METRICS_ADDR
+                .parse()
+                .map_err(|e| format!("the default metrics address: {e}"))?,
+        };
+        if addr == self.listen_addr {
+            return Err(
+                "metrics.listen_addr must differ from listen_addr: the scrape has a listener of \
+                 its own"
+                    .to_owned(),
+            );
+        }
+        if self
+            .identity
+            .as_ref()
+            .is_some_and(|identity| identity.listen_addr == addr)
+        {
+            return Err("metrics.listen_addr must differ from identity.listen_addr".to_owned());
+        }
+        let tls = raw.tls.unwrap_or(!is_loopback(addr.ip()));
+        if tls && self.tls.is_none() {
+            return Err(format!(
+                "metrics.listen_addr {addr} is served over TLS with the server's certificate, \
+                 which needs secured mode ([tls]); listen on a loopback address, or set \
+                 metrics.tls = false to serve plaintext there on purpose"
+            ));
+        }
+        if raw.client_ca.is_some() && !tls {
+            return Err(
+                "metrics.client_ca needs TLS: client certificates are part of the handshake"
+                    .to_owned(),
+            );
+        }
+        Ok(Metrics::Prometheus(PrometheusListener {
+            addr,
+            tls,
+            client_ca: raw.client_ca.clone(),
+        }))
+    }
+
     /// The rate limits as configured, the defaults filled in (see
     /// [`RateLimitSettings`]), or why they're invalid.
     /// `[identity]`, checked: `None` if it's absent. Secured mode only. Each
@@ -1450,16 +1575,24 @@ mod tests {
                 default_connection_age_grace_secs()
             )
         );
-        for key in KNOWN_KEYS
-            .iter()
-            .filter(|key| !["tls", "policy", "rate_limit", "identity", "seal"].contains(key))
-        {
+        for key in KNOWN_KEYS.iter().filter(|key| {
+            !["tls", "policy", "rate_limit", "identity", "seal", "metrics"].contains(key)
+        }) {
             assert!(
                 EXAMPLE.contains(&format!("{key} = ")),
                 "{key} isn't in the example"
             );
         }
         assert!(EXAMPLE.contains("#[seal.awskms]") && EXAMPLE.contains("#[seal.gcpkms]"));
+        assert_eq!(dev.metrics().unwrap(), Metrics::OtlpIfConfigured);
+        assert_eq!(
+            secured.metrics().unwrap(),
+            Metrics::Prometheus(PrometheusListener {
+                addr: "0.0.0.0:9464".parse().unwrap(),
+                tls: true,
+                client_ca: Some(PathBuf::from("/etc/ferritor/metrics-ca.pem")),
+            })
+        );
         assert!(matches!(
             secured.auto_unseal().unwrap(),
             Some(crate::auto_unseal::ProviderConfig::AwsKms(_))
@@ -1478,7 +1611,8 @@ mod tests {
              [rate_limit]\nserver_max_in_flight = 40\nmax_in_flight = 8\nrequests_per_second = 50\nburst = 60\n\
              [[rate_limit.identity]]\nidentity = \"apps/a\"\nmax_in_flight = 4\nrequests_per_second = 5\nburst = 6\n\
              {IDENTITY}\n\
-             [seal]\nprovider = \"shamir\"\n"
+             [seal]\nprovider = \"shamir\"\n\
+             [metrics]\nexporter = \"prometheus\"\nlisten_addr = \"0.0.0.0:9464\"\ntls = true\nclient_ca = \"ca.pem\"\n"
         );
         let all = parse(&all).unwrap();
         assert_eq!(all.rate_limit.identity.len(), 1);
@@ -1488,7 +1622,8 @@ mod tests {
         assert_eq!(parse("").unwrap().policy_refresh_secs, 5);
         assert_eq!(all.shutdown_delay_secs, 5);
         assert_eq!(parse("").unwrap().shutdown_delay_secs, 0);
-        assert_eq!(KNOWN_KEYS.len(), 18);
+        assert_eq!(KNOWN_KEYS.len(), 19);
+        assert!(matches!(all.metrics().unwrap(), Metrics::Prometheus(_)));
         assert_eq!(all.identity().unwrap().unwrap().issuers.len(), 1);
         assert_eq!(
             (
@@ -1512,6 +1647,88 @@ mod tests {
             parse("").unwrap().purge_retention(),
             Duration::from_secs(30 * 24 * 3600)
         );
+    }
+
+    /// `[metrics]`: the exporter as chosen; the Prometheus listener on
+    /// loopback by default, plaintext there, TLS elsewhere (secured mode
+    /// only) unless plaintext is asked for, and never on another listener's
+    /// address.
+    #[test]
+    fn the_metrics_exporter_and_its_listener() {
+        let metrics = |toml: &str| parse(toml).map(|s| s.metrics().unwrap());
+        assert_eq!(metrics("").unwrap(), Metrics::OtlpIfConfigured);
+        assert_eq!(
+            metrics("[metrics]\nexporter = \"otlp\"").unwrap(),
+            Metrics::Otlp
+        );
+        assert_eq!(
+            metrics("[metrics]\nexporter = \"none\"").unwrap(),
+            Metrics::Off
+        );
+        let prometheus = |addr: &str, tls| {
+            Metrics::Prometheus(PrometheusListener {
+                addr: addr.parse().unwrap(),
+                tls,
+                client_ca: None,
+            })
+        };
+        assert_eq!(
+            metrics("[metrics]\nexporter = \"prometheus\"").unwrap(),
+            prometheus(DEFAULT_METRICS_ADDR, false)
+        );
+        // Off loopback: TLS, which dev mode doesn't have, unless plaintext
+        // is asked for.
+        let anywhere = "[metrics]\nexporter = \"prometheus\"\nlisten_addr = \"0.0.0.0:9464\"";
+        assert!(
+            parse(anywhere)
+                .unwrap_err()
+                .contains("needs secured mode ([tls])")
+        );
+        assert_eq!(
+            metrics(&format!("{anywhere}\ntls = false")).unwrap(),
+            prometheus("0.0.0.0:9464", false)
+        );
+        assert_eq!(
+            metrics(&format!("{TLS}\n{POLICY}\n{anywhere}")).unwrap(),
+            prometheus("0.0.0.0:9464", true)
+        );
+        // TLS on loopback too, when asked, in secured mode only.
+        let loopback_tls = "[metrics]\nexporter = \"prometheus\"\ntls = true";
+        assert!(parse(loopback_tls).is_err());
+        assert_eq!(
+            metrics(&format!("{TLS}\n{POLICY}\n{loopback_tls}")).unwrap(),
+            prometheus(DEFAULT_METRICS_ADDR, true)
+        );
+        assert!(
+            parse("[metrics]\nexporter = \"prometheus\"\nclient_ca = \"ca.pem\"")
+                .unwrap_err()
+                .contains("metrics.client_ca needs TLS")
+        );
+        for refused in [
+            "[metrics]\nlisten_addr = \"127.0.0.1:9464\"",
+            "[metrics]\nexporter = \"otlp\"\ntls = false",
+            "[metrics]\nexporter = \"none\"\nclient_ca = \"ca.pem\"",
+        ] {
+            assert!(
+                parse(refused).unwrap_err().contains("are for exporter"),
+                "{refused}"
+            );
+        }
+        assert!(
+            parse("[metrics]\nexporter = \"prometheus\"\nlisten_addr = \"127.0.0.1:7070\"")
+                .unwrap_err()
+                .contains("must differ from listen_addr")
+        );
+        assert!(
+            parse(&format!(
+                "{TLS}\n{POLICY}\n{IDENTITY}\n[metrics]\nexporter = \"prometheus\"\n\
+                 listen_addr = \"127.0.0.1:7071\""
+            ))
+            .unwrap_err()
+            .contains("must differ from identity.listen_addr")
+        );
+        assert!(parse("[metrics]\nexporter = \"statsd\"").is_err());
+        assert!(parse("[metrics]\nexporter = \"prometheus\"\nport = 9464").is_err());
     }
 
     /// The audit key loads from PKCS#8 PEM (what `openssl genpkey
