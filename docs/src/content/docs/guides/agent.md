@@ -39,7 +39,7 @@ ferritor-agent run  --config /etc/ferritor-agent/app.toml   # render, then keep 
 | Mode | Does | Exits |
 |---|---|---|
 | `once` | renders every output once | 0 when every required secret is written; 1 at once if the server refuses a required one for good (permission denied, not found), or after `--wait-secs` (default 60) of transient failures (unreachable, sealed, rate-limited) |
-| `run` | renders, then polls every interval (and watches, below) and rewrites what changed. On Windows also a service's command line, and `--log-file` sends the logs to a file ([Windows](#windows)) | 0 on SIGTERM or SIGINT (Windows: Ctrl+C, Ctrl+Break, the console closing, a shutdown, the service's stop); the files stay as they are |
+| `run` | renders, then polls every interval (and watches, below) and rewrites what changed. On Windows also a service's command line, and `--log-file` sends the logs to a file ([Windows](#windows)) | 0 on SIGTERM or SIGINT (Windows: Ctrl+C, Ctrl+Break, the console closing, a shutdown, the service's stop), at once, also in the middle of a round against a server that doesn't answer; the files stay as they are |
 
 `--config` can also come from `FERRITOR_AGENT_CONFIG`. A configuration
 mistake refuses to start, saying what and where. Logs go to stderr

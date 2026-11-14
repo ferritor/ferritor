@@ -968,6 +968,64 @@ async fn run_hears_of_a_change_at_once() {
     env.destroy().await.unwrap();
 }
 
+/// `run` stops at once, also in the middle of a round: here against a
+/// server that accepts the connection and never answers, where the round
+/// would otherwise wait for the client's own timeouts. The files stay as
+/// they were.
+#[tokio::test]
+async fn run_stops_in_the_middle_of_a_round() {
+    let env = Env::new().await.unwrap();
+    env.grants.allow(AGENT, Action::Read, "billing/app");
+    env.put("billing/app/db", "v1").await.unwrap();
+    let out = env.out("app");
+    let outputs = output(&out, "", &["path = \"billing/app/db\""]);
+    env.agent("", &outputs).unwrap().poll(Instant::now()).await;
+    assert_eq!(read(&out, "db").as_deref(), Some("v1"));
+
+    // Accepts, then holds every connection without a word, telling the
+    // test of each.
+    let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let accepted = Arc::new(tokio::sync::Notify::new());
+    let holding = tokio::spawn({
+        let accepted = Arc::clone(&accepted);
+        async move {
+            let mut held = Vec::new();
+            while let Ok((connection, _)) = silent.accept().await {
+                held.push(connection);
+                accepted.notify_one();
+            }
+        }
+    });
+    let text = format!(
+        "server = \"https://localhost:{port}\"\nca = \"{dir}/ca.pem\"\n\
+         cert = \"{dir}/cert.pem\"\nkey = \"{dir}/key.pem\"\nwatch = false\n{outputs}",
+        dir = env.dir.display(),
+    );
+    let mut agent = Agent::new(Config::parse(&text).unwrap()).unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(async move {
+        ferritor_agent::run::run(&mut agent, async {
+            stopped.await.ok();
+        })
+        .await;
+    });
+    // In the round: connected, waiting for the server's answer.
+    tokio::time::timeout(Duration::from_secs(5), accepted.notified())
+        .await
+        .expect("the round never connected");
+    let asked = Instant::now();
+    stop.send(()).ok();
+    tokio::time::timeout(Duration::from_secs(1), running)
+        .await
+        .expect("run didn't stop in the middle of its round")
+        .unwrap();
+    assert!(asked.elapsed() < Duration::from_secs(1));
+    assert_eq!(read(&out, "db").as_deref(), Some("v1"));
+    holding.abort();
+    env.destroy().await.unwrap();
+}
+
 /// While a watch stream vouches for every secret, the rounds stretch to ten
 /// intervals (at most ten minutes, never below the interval); losing it
 /// brings the next round back within an interval.
