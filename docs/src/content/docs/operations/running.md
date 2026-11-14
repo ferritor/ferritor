@@ -57,46 +57,77 @@ delay plus the drain and the audit drain could exceed the default 30 s
 
 ## Metrics
 
-OpenTelemetry, pushed over OTLP/gRPC when `OTEL_EXPORTER_OTLP_ENDPOINT` (or
-`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) is set; off otherwise. The other
-standard variables apply too (`OTEL_METRIC_EXPORT_INTERVAL`, default 60 s;
-`OTEL_RESOURCE_ATTRIBUTES`; `OTEL_SERVICE_NAME`, default `ferritor-server`).
-`https://` (or no scheme, unless `OTEL_EXPORTER_OTLP_INSECURE=true`) is TLS
-with the public roots, plus `OTEL_EXPORTER_OTLP_CERTIFICATE` for a private
-CA and `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`/`_CLIENT_KEY` for mTLS;
-`http://` is plaintext, for a local agent.
+The same instruments leave the server one of two ways, chosen by
+`[metrics] exporter` ([configuration](/reference/configuration#metrics),
+read at startup): pushed over OTLP, or scraped by Prometheus. One at a
+time.
 
-| Instrument | Kind | Attributes |
-|---|---|---|
-| `ferritor.secret.requests` | counter | `operation`, `result` |
-| `ferritor.secret.request.duration` | histogram (s) | `operation`, `result` |
-| `ferritor.admin.outcomes` | counter | `operation`, `result` (succeeded, failed, unknown) |
-| `ferritor.authorization.decisions` | counter | `action`, `decision` (allowed, denied, sealed, unverified) |
-| `ferritor.audit.failures` | counter | `kind` (refused, lost) |
-| `ferritor.versions.trimmed` | counter | |
-| `ferritor.versions.purged` | counter | |
-| `ferritor.deks.rewrapped` | counter | |
-| `ferritor.tls.handshake.failures` | counter | `reason` (failed, timed_out) |
-| `ferritor.rate_limit.refused` | counter | `limit` (rate, in_flight, denied, unauthenticated; exchanges: a token exchange refused, too many for its identity; exchange_refused: a refused exchange's audit entry left out; server: no slot under the server-wide cap in time) |
-| `ferritor.identity.exchanges` | counter | `issuer` (a configured issuer's name, or unknown), `result` (issued, refused, unavailable, rate_limited) |
-| `ferritor.rate_limit.waited` | histogram (s) | the wait for a slot under the server-wide cap |
-| `ferritor.reloads` | counter | `kind` (policy, certificate, crl, keyring, policy_store, identity), `result` (policy_store: changed, unchanged, failed, integrity, rollback, recovered; counted on every attempt, while a failure is logged and audited only when it starts, changes or ends) |
-| `ferritor.policy.revision` | gauge | the stored policies' verified revision in force; absent unless one is |
-| `ferritor.policies` | gauge | stored policies in force; absent unless verified |
-| `ferritor.audit.queue.depth` | gauge | entries waiting for the writer |
-| `ferritor.in_flight` | gauge | calls in flight, every one (exempt admin calls too, which the server-wide cap doesn't count) |
-| `ferritor.sealed` | gauge | 1 sealed, 0 unsealed |
-| `ferritor.namespaces` | gauge | namespaces this server holds KEKs of; absent while sealed (a count, never names) |
-| `ferritor.seal.auto_unseal` | counter | `result`: ok, kms_unavailable, denied, mismatch, root_commitment, below_floor, no_wrap, held, failed (see [key management](/operations/key-management#auto-unseal)) |
-| `ferritor.seal.hold_pending` | gauge | auto-unseal hold (or release) writes being retried after a seal; 0 normally |
-| `ferritor.seal.floor_pending` | gauge | root-generation floor raises being retried after an init or a rekey; 0 normally (see [key management](/operations/key-management#the-root-commitment)) |
-| `ferritor.kek.vanished` | gauge | KEKs held for reading only because the keys database lost them; 0 normally (see [high availability](/operations/high-availability)) |
-| `ferritor.server_certificate.expiry` | gauge (unix s) | secured mode |
-| `ferritor.tls.crl.next_update` | gauge (unix s) | the earliest `nextUpdate` of the CRLs in force |
-| `ferritor.watch.streams` | gauge | [watch streams](/guides/secrets#watching) open (at most 4,096 per server) |
-| `ferritor.watch.feed.live` | gauge | 1 while the change feed polls the data database, 0 while it can't |
-| `ferritor.watch.feed.held_back` | gauge (s) | how long one open transaction has held the change feed back (below); 0 normally |
-| `ferritor.watch.resyncs` | counter | `reason` (too_many, restarted: every stream told at once; lagged: one stream fell behind) |
+**OTLP** (`exporter = "otlp"`, or no `[metrics]` section): OpenTelemetry,
+pushed over OTLP/gRPC to the collector `OTEL_EXPORTER_OTLP_ENDPOINT` (or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) names. Without the section and
+without that variable, metrics are off; `exporter = "otlp"` without it
+refuses to start. The other standard variables apply too
+(`OTEL_METRIC_EXPORT_INTERVAL`, default 60 s; `OTEL_RESOURCE_ATTRIBUTES`;
+`OTEL_SERVICE_NAME`, default `ferritor-server`). `https://` (or no scheme,
+unless `OTEL_EXPORTER_OTLP_INSECURE=true`) is TLS with the public roots,
+plus `OTEL_EXPORTER_OTLP_CERTIFICATE` for a private CA and
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`/`_CLIENT_KEY` for mTLS; `http://`
+is plaintext, for a local agent.
+
+**Prometheus** (`exporter = "prometheus"`): `GET /metrics` in the text
+format, on a listener of its own (`listen_addr`, default `127.0.0.1:9464`),
+never the main one: a scraper needs no client certificate, and a scrape
+is no request (no audit entry, no rate limit, not counted in
+`ferritor.in_flight`). It answers while sealed too. On a loopback
+address it's plaintext, answering only requests addressed to loopback (as
+dev mode does, against DNS rebinding); anywhere else it's TLS with the
+server's certificate (secured mode; renewed with it on SIGHUP), and with
+`client_ca` a scraper must present a certificate from that CA. Plaintext
+off loopback only with `tls = false`, which warns at startup. The `OTEL_*`
+variables are ignored then (a set endpoint warns).
+
+```sh
+curl -s http://127.0.0.1:9464/metrics | grep ferritor_sealed
+```
+
+Names follow OpenTelemetry's Prometheus conventions: dots become
+underscores, a unit adds its suffix (`_seconds`), a counter ends in
+`_total`, and a histogram is its `_bucket`, `_sum` and `_count` series.
+The table gives both names; a test holds it to what a scrape returns.
+Request durations are bucketed from 1 ms to 10 s, the wait for a slot
+from 0 to 10 s.
+
+| Instrument | Prometheus | Kind | Attributes |
+|---|---|---|---|
+| `ferritor.secret.requests` | `ferritor_secret_requests_total` | counter | `operation`, `result` |
+| `ferritor.secret.request.duration` | `ferritor_secret_request_duration_seconds` | histogram (s) | `operation`, `result` |
+| `ferritor.admin.outcomes` | `ferritor_admin_outcomes_total` | counter | `operation`, `result` (succeeded, failed, unknown) |
+| `ferritor.authorization.decisions` | `ferritor_authorization_decisions_total` | counter | `action`, `decision` (allowed, denied, sealed, unverified) |
+| `ferritor.audit.failures` | `ferritor_audit_failures_total` | counter | `kind` (refused, lost) |
+| `ferritor.versions.trimmed` | `ferritor_versions_trimmed_total` | counter | |
+| `ferritor.versions.purged` | `ferritor_versions_purged_total` | counter | |
+| `ferritor.deks.rewrapped` | `ferritor_deks_rewrapped_total` | counter | |
+| `ferritor.tls.handshake.failures` | `ferritor_tls_handshake_failures_total` | counter | `listener` (api, exchange, metrics: a scraper without the right certificate counts here, not as an API client), `reason` (failed, timed_out) |
+| `ferritor.rate_limit.refused` | `ferritor_rate_limit_refused_total` | counter | `limit` (rate, in_flight, denied, unauthenticated; exchanges: a token exchange refused, too many for its identity; exchange_refused: a refused exchange's audit entry left out; server: no slot under the server-wide cap in time) |
+| `ferritor.identity.exchanges` | `ferritor_identity_exchanges_total` | counter | `issuer` (a configured issuer's name, or unknown), `result` (issued, refused, unavailable, rate_limited) |
+| `ferritor.rate_limit.waited` | `ferritor_rate_limit_waited_seconds` | histogram (s) | the wait for a slot under the server-wide cap |
+| `ferritor.reloads` | `ferritor_reloads_total` | counter | `kind` (policy, certificate, crl, keyring, policy_store, identity), `result` (policy_store: changed, unchanged, failed, integrity, rollback, recovered; counted on every attempt, while a failure is logged and audited only when it starts, changes or ends) |
+| `ferritor.policy.revision` | `ferritor_policy_revision` | gauge | the stored policies' verified revision in force; absent unless one is |
+| `ferritor.policies` | `ferritor_policies` | gauge | stored policies in force; absent unless verified |
+| `ferritor.audit.queue.depth` | `ferritor_audit_queue_depth` | gauge | entries waiting for the writer |
+| `ferritor.in_flight` | `ferritor_in_flight` | gauge | calls in flight, every one (exempt admin calls too, which the server-wide cap doesn't count) |
+| `ferritor.sealed` | `ferritor_sealed` | gauge | 1 sealed, 0 unsealed |
+| `ferritor.namespaces` | `ferritor_namespaces` | gauge | namespaces this server holds KEKs of; absent while sealed (a count, never names) |
+| `ferritor.seal.auto_unseal` | `ferritor_seal_auto_unseal_total` | counter | `result`: ok, kms_unavailable, denied, mismatch, root_commitment, below_floor, no_wrap, held, failed (see [key management](/operations/key-management#auto-unseal)) |
+| `ferritor.seal.hold_pending` | `ferritor_seal_hold_pending` | gauge | auto-unseal hold (or release) writes being retried after a seal; 0 normally |
+| `ferritor.seal.floor_pending` | `ferritor_seal_floor_pending` | gauge | root-generation floor raises being retried after an init or a rekey; 0 normally (see [key management](/operations/key-management#the-root-commitment)) |
+| `ferritor.kek.vanished` | `ferritor_kek_vanished` | gauge | KEKs held for reading only because the keys database lost them; 0 normally (see [high availability](/operations/high-availability)) |
+| `ferritor.server_certificate.expiry` | `ferritor_server_certificate_expiry_seconds` | gauge (unix s) | secured mode |
+| `ferritor.tls.crl.next_update` | `ferritor_tls_crl_next_update_seconds` | gauge (unix s) | the earliest `nextUpdate` of the CRLs in force |
+| `ferritor.watch.streams` | `ferritor_watch_streams` | gauge | [watch streams](/guides/secrets#watching) open (at most 4,096 per server) |
+| `ferritor.watch.feed.live` | `ferritor_watch_feed_live` | gauge | 1 while the change feed polls the data database, 0 while it can't |
+| `ferritor.watch.feed.held_back` | `ferritor_watch_feed_held_back_seconds` | gauge (s) | how long one open transaction has held the change feed back (below); 0 normally |
+| `ferritor.watch.resyncs` | `ferritor_watch_resyncs_total` | counter | `reason` (too_many, restarted: every stream told at once; lagged: one stream fell behind) |
 
 Attributes are small fixed sets: never secret paths, identities or values.
 Worth alerting on: `ferritor.seal.hold_pending` above 0 (a sealed server a

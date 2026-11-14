@@ -1,10 +1,11 @@
-//! Metrics, the OpenTelemetry way: instruments on the global meter, pushed
-//! over OTLP/gRPC to a collector when an endpoint is configured, with the
-//! standard variables (`OTEL_EXPORTER_OTLP_ENDPOINT` or
+//! Metrics, the OpenTelemetry way: instruments on the global meter, read by
+//! the exporter `[metrics]` chose. Pushed over OTLP/gRPC ([`init`]) to a
+//! collector, with the standard variables (`OTEL_EXPORTER_OTLP_ENDPOINT` or
 //! `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`; also `OTEL_METRIC_EXPORT_INTERVAL`,
 //! default 60 s, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME`, default
-//! `ferritor-server`). Without an endpoint no provider is installed, and every
-//! instrument is a no-op.
+//! `ferritor-server`), or scraped by Prometheus ([`init_prometheus`], see
+//! [`crate::prometheus`] for the names there). With neither no provider is
+//! installed, and every instrument is a no-op.
 //!
 //! `https://` (or an endpoint without a scheme, per the OTLP spec, unless
 //! `OTEL_EXPORTER_OTLP_INSECURE=true`) uses TLS with the web PKI roots,
@@ -27,7 +28,7 @@
 //! | `ferritor.versions.trimmed` | counter | |
 //! | `ferritor.versions.purged` | counter | |
 //! | `ferritor.deks.rewrapped` | counter | |
-//! | `ferritor.tls.handshake.failures` | counter | `reason` (failed, timed_out) |
+//! | `ferritor.tls.handshake.failures` | counter | `listener` (api, exchange, metrics), `reason` (failed, timed_out) |
 //! | `ferritor.rate_limit.refused` | counter | `limit` (rate, in_flight, denied, unauthenticated; server: no slot under the server-wide cap in time) |
 //! | `ferritor.identity.exchanges` | counter | `issuer` (a configured issuer's name, or unknown), `result` (issued, refused, unavailable, rate_limited) |
 //! | `ferritor.rate_limit.waited` | histogram (s) | (the wait for a slot under the server-wide cap) |
@@ -65,6 +66,7 @@ use zeroize::Zeroizing;
 
 use crate::audit::Gate;
 use crate::policy_store::PolicyView;
+use crate::prometheus::Scrape;
 use crate::ratelimit;
 use crate::seal::Seal;
 use crate::tls::ServerTls;
@@ -109,6 +111,12 @@ fn var(name: &str) -> Option<String> {
         .into_iter()
         .find_map(|var| std::env::var(var).ok())
         .filter(|value| !value.trim().is_empty())
+}
+
+/// Whether an OTLP endpoint is configured (`OTEL_EXPORTER_OTLP_ENDPOINT`
+/// or its metrics variant), for a warning when another exporter is chosen.
+pub fn otlp_endpoint_set() -> bool {
+    var("OTEL_EXPORTER_OTLP_ENDPOINT").is_some()
 }
 
 impl Export {
@@ -201,6 +209,25 @@ pub fn init(export: Option<Export>) -> Result<Option<SdkMeterProvider>, MetricsE
         .build();
     global::set_meter_provider(provider.clone());
     Ok(Some(provider))
+}
+
+/// Serves the instruments for Prometheus to scrape instead
+/// (`[metrics] exporter = "prometheus"`): the returned [`Scrape`] renders
+/// them on demand. As with [`init`], before anything records; the provider
+/// needs no flush at exit (nothing is pushed), but stays alive as long as
+/// the scrape is served.
+pub fn init_prometheus() -> (SdkMeterProvider, Scrape) {
+    let scrape = Scrape::new();
+    let provider = SdkMeterProvider::builder()
+        .with_reader(scrape.reader())
+        .with_resource(
+            Resource::builder()
+                .with_service_name("ferritor-server")
+                .build(),
+        )
+        .build();
+    global::set_meter_provider(provider.clone());
+    (provider, scrape)
 }
 
 /// The instruments that record events, created on first use from the
@@ -395,9 +422,16 @@ impl Metrics {
         );
     }
 
-    pub fn handshake_failure(&self, reason: &'static str) {
-        self.handshake_failures
-            .add(1, &[KeyValue::new("reason", reason)]);
+    /// `listener`: api, exchange or metrics (a scraper without the right
+    /// certificate isn't a failing API client); `reason`: failed, timed_out.
+    pub fn handshake_failure(&self, listener: &'static str, reason: &'static str) {
+        self.handshake_failures.add(
+            1,
+            &[
+                KeyValue::new("listener", listener),
+                KeyValue::new("reason", reason),
+            ],
+        );
     }
 
     /// `reason`: too_many, restarted (the feed's, for every stream) or

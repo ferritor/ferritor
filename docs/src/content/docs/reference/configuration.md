@@ -167,12 +167,22 @@ makes the attempt `denied`, tried again every minute, and the server
 starts sealed meanwhile, so the shares still unseal it. Each KMS call ends
 within 5 seconds, its own retry (after 200 ms) included.
 
+<a id="metrics"></a>`[metrics]`: how metrics leave the server (see
+[operations](/operations/running#metrics)). Read at startup only.
+
+| Key | Default | |
+|---|---|---|
+| `exporter` | (none) | `otlp`: pushed over OTLP, configured by the standard `OTEL_EXPORTER_OTLP_*` variables; refuses to start without `OTEL_EXPORTER_OTLP_ENDPOINT`. `prometheus`: scraped from `listen_addr`. `none`: off. Without it, OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, off otherwise. |
+| `listen_addr` | `127.0.0.1:9464` | Prometheus only: `GET /metrics`, on a listener of its own. Never the main `listen_addr` or `[identity] listen_addr`. |
+| `tls` | `false` on loopback, `true` elsewhere | Prometheus only: TLS with the server's certificate, which needs secured mode. `false` off loopback serves plaintext there (a startup warning says so): only on a network you trust with what metrics show. |
+| `client_ca` | (none) | Prometheus over TLS only: the CA (PEM) whose client certificates scrapers present. Without it, anyone who reaches the port reads the metrics. |
+
 `[[policy]]`: the config rules, for the operators (see [policy](/guides/policy);
 the applications' grants are stored policies, managed over the API). Each
 may have a `name`, shown as `config:<name>`.
 
 A misspelled key in `ferritor.toml` refuses to start (unknown top-level keys,
-and unknown keys inside `[tls]`, `[rate_limit]`, `[identity]`, `[seal]` and `[[policy]]`). Environment variables get
+and unknown keys inside `[tls]`, `[rate_limit]`, `[identity]`, `[seal]`, `[metrics]` and `[[policy]]`). Environment variables get
 no such check: the CLI's `FERRITOR_ADDR`, `FERRITOR_CA`, `FERRITOR_CERT`,
 `FERRITOR_KEY`, `FERRITOR_TOKEN_FILE` and `FERRITOR_EXCHANGE` share the prefix and may be set in the same shell, so a
 misspelled `FERRITOR_…` variable is silently ignored.

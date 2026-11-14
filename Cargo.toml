@@ -81,7 +81,7 @@ mimalloc = { version = "0.1.52", default-features = false }
 opentelemetry = { version = "0.33.1", default-features = false, features = ["metrics"] }
 opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["grpc-tonic", "metrics", "internal-logs", "tls-ring", "tls-webpki-roots"] }
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic", "metrics"] }
-opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "internal-logs"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "internal-logs", "experimental_metrics_custom_reader"] }
 prost = "0.14.4"
 rcgen = "0.14.10"
 # Verifying workload tokens' signatures (RS256, ES256, EdDSA; see

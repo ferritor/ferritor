@@ -232,6 +232,9 @@ pub struct ServerTls {
     provider: Arc<CryptoProvider>,
     max_handshakes: usize,
     handshake_timeout: Duration,
+    /// Which listener this serves, for the handshake-failure metric:
+    /// `api`, `exchange` or `metrics`.
+    listener: &'static str,
 }
 
 impl ServerTls {
@@ -343,6 +346,44 @@ impl ServerTls {
             provider: Arc::clone(&self.provider),
             max_handshakes: self.max_handshakes,
             handshake_timeout: self.handshake_timeout,
+            listener: "exchange",
+        })
+    }
+
+    /// The same server certificate (reloaded with it) on the Prometheus
+    /// scrape listener ([`serve_metrics`]). With `client_ca_pem`, the
+    /// handshake requires a client certificate from that CA: the scraper's
+    /// credential, never a caller (no identity, no CRL, nothing audited);
+    /// without, none is asked for.
+    pub fn for_metrics(&self, client_ca_pem: Option<&[u8]>) -> Result<ServerTls, TlsSetupError> {
+        let builder = ServerConfig::builder_with_provider(Arc::clone(&self.provider))
+            .with_safe_default_protocol_versions()
+            .map_err(TlsSetupError::Identity)?;
+        let builder = match client_ca_pem {
+            None => builder.with_no_client_auth(),
+            Some(pem) => {
+                let (roots, _) = client_roots(pem)?;
+                builder.with_client_cert_verifier(
+                    WebPkiClientVerifier::builder_with_provider(
+                        Arc::new(roots),
+                        Arc::clone(&self.provider),
+                    )
+                    .build()
+                    .map_err(TlsSetupError::Verifier)?,
+                )
+            }
+        };
+        let mut config = builder
+            .with_cert_resolver(Arc::clone(&self.certificate) as Arc<dyn ResolvesServerCert>);
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        Ok(ServerTls {
+            acceptor: TlsAcceptor::from(Arc::new(config)),
+            certificate: Arc::clone(&self.certificate),
+            client_auth: Arc::clone(&self.client_auth),
+            provider: Arc::clone(&self.provider),
+            max_handshakes: self.max_handshakes,
+            handshake_timeout: self.handshake_timeout,
+            listener: "metrics",
         })
     }
 
@@ -413,16 +454,7 @@ pub fn server_tls(
     crl_pem: Option<&[u8]>,
 ) -> Result<ServerTls, TlsSetupError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let cas = CertificateDer::pem_slice_iter(client_ca_pem)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(TlsSetupError::ClientCa)?;
-    let mut roots = RootCertStore::empty();
-    for ca in &cas {
-        roots.add(ca.clone()).map_err(TlsSetupError::BadClientCa)?;
-    }
-    if roots.is_empty() {
-        return Err(TlsSetupError::NoClientCa);
-    }
+    let (roots, cas) = client_roots(client_ca_pem)?;
     let hints = roots.subjects();
     let roots = Arc::new(roots);
     let verifier = verifier(&roots, &cas, &provider, crl_pem)?;
@@ -451,7 +483,26 @@ pub fn server_tls(
         provider,
         max_handshakes: MAX_HANDSHAKES,
         handshake_timeout: HANDSHAKE_TIMEOUT,
+        listener: "api",
     })
+}
+
+/// The CA certificates in `client_ca_pem`, as roots and as read: at least
+/// one.
+fn client_roots(
+    client_ca_pem: &[u8],
+) -> Result<(RootCertStore, Vec<CertificateDer<'static>>), TlsSetupError> {
+    let cas = CertificateDer::pem_slice_iter(client_ca_pem)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(TlsSetupError::ClientCa)?;
+    let mut roots = RootCertStore::empty();
+    for ca in &cas {
+        roots.add(ca.clone()).map_err(TlsSetupError::BadClientCa)?;
+    }
+    if roots.is_empty() {
+        return Err(TlsSetupError::NoClientCa);
+    }
+    Ok((roots, cas))
 }
 
 /// A certificate chain (leaf first) and its key, checked to match.
@@ -829,6 +880,48 @@ pub async fn serve(
     served
 }
 
+/// Serves the Prometheus scrape (`routes`, see [`crate::prometheus`]) on
+/// `listener` until `shutdown`: over `tls` ([`ServerTls::for_metrics`]) or
+/// plaintext. Never through [`Detach`], so a scrape opens no request scope:
+/// it's outside every rate limit and the in-flight count, and the audit
+/// gate never hears of it. Plaintext on a loopback address answers only
+/// requests addressed to loopback, as dev mode does ([`serve`]: DNS
+/// rebinding); plaintext anywhere else was asked for by name
+/// (`metrics.tls = false`).
+pub async fn serve_metrics(
+    routes: axum::Router,
+    listener: TcpListener,
+    tls: Option<ServerTls>,
+    shutdown: impl Future<Output = ()>,
+) -> Result<(), tonic::transport::Error> {
+    let mut server = Server::builder().accept_http1(true);
+    match tls {
+        None => {
+            let on_loopback = listener
+                .local_addr()
+                .is_ok_and(|addr| crate::config::is_loopback(addr.ip()));
+            let routes = Routes::from(routes);
+            let routes = if on_loopback {
+                http::loopback_hosts_only(routes)
+            } else {
+                routes
+            };
+            server
+                .add_routes(routes)
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
+                .await
+        }
+        Some(tls) => {
+            let (connections, accepted) = mpsc::channel(16);
+            let _accepting = AbortOnDrop(tokio::spawn(accept(listener, tls, connections)));
+            server
+                .add_routes(Routes::from(routes))
+                .serve_with_incoming_shutdown(ReceiverStream::new(accepted), shutdown)
+                .await
+        }
+    }
+}
+
 /// Runs each request of the service it wraps in a task of its own (on
 /// `tasks`), as a `ratelimit` request (its admission lives as long as the
 /// call; a token tells its waits when the client left), and awaits it. Dropping the returned future, which hyper and h2
@@ -923,7 +1016,7 @@ async fn accept(
         };
         tcp.set_nodelay(true).ok();
         let (acceptor, connections) = (tls.acceptor.clone(), connections.clone());
-        let timeout = tls.handshake_timeout;
+        let (timeout, listener) = (tls.handshake_timeout, tls.listener);
         tokio::spawn(async move {
             let result = tokio::time::timeout(timeout, acceptor.accept(tcp)).await;
             drop(handshake);
@@ -933,11 +1026,11 @@ async fn accept(
                 }
                 Ok(Err(e)) => {
                     tracing::debug!(%peer, error = %e, "TLS handshake failed");
-                    crate::metrics::metrics().handshake_failure("failed");
+                    crate::metrics::metrics().handshake_failure(listener, "failed");
                 }
                 Err(_) => {
                     tracing::debug!(%peer, "TLS handshake timed out");
-                    crate::metrics::metrics().handshake_failure("timed_out");
+                    crate::metrics::metrics().handshake_failure(listener, "timed_out");
                 }
             }
         });
