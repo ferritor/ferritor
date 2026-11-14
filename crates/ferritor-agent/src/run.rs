@@ -125,15 +125,26 @@ impl Watching {
 }
 
 /// Renders, then keeps the files current, until `stop` resolves (the files
-/// stay as they are).
+/// stay as they are). `stop` ends it at once, also in the middle of a
+/// round, of opening the watch stream or of reading a change, rather than
+/// after it (a round against an unreachable server waits for the client's
+/// timeouts): their awaits are the server's calls, and the files are
+/// written only after them, without an await, so a step dropped there
+/// leaves the files as the last write left them.
 pub async fn run(agent: &mut Agent, stop: impl std::future::Future<Output = ()>) {
     tokio::pin!(stop);
     let mut watching = Watching::new();
     loop {
-        agent.poll(Instant::now()).await;
+        tokio::select! {
+            _ = agent.poll(Instant::now()) => {}
+            () = &mut stop => return,
+        }
         loop {
             if agent.watches() {
-                watching.keep_open(agent).await;
+                tokio::select! {
+                    () = watching.keep_open(agent) => {}
+                    () = &mut stop => return,
+                }
             }
             let wake = agent.next_wake(Instant::now());
             // A watch that can't be opened yet is tried again then too.
@@ -159,7 +170,10 @@ pub async fn run(agent: &mut Agent, stop: impl std::future::Future<Output = ()>)
                     Ok(Some(pb::WatchSecretsResponse { event: Some(Event::Changed(changed)) })) => {
                         if let Ok(path) = SecretPath::parse(&changed.path) {
                             let version = (changed.version > 0).then_some(changed.version);
-                            agent.changed(&path, version, Instant::now()).await;
+                            tokio::select! {
+                                _ = agent.changed(&path, version, Instant::now()) => {}
+                                () = &mut stop => return,
+                            }
                         }
                     }
                     // Changes may have been missed: a round reads them.
