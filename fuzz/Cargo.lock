@@ -1466,6 +1466,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferritor-metrics"
+version = "0.9.2"
+dependencies = [
+ "axum",
+ "ferritor-core",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "ferritor-server"
 version = "0.9.2"
 dependencies = [
@@ -1483,6 +1500,7 @@ dependencies = [
  "ferritor-core",
  "ferritor-datastore",
  "ferritor-keystore",
+ "ferritor-metrics",
  "getrandom 0.4.3",
  "google-cloud-auth",
  "http-body-util",
@@ -1490,7 +1508,6 @@ dependencies = [
  "hyper-util",
  "mimalloc",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "rcgen",
  "reqwest",

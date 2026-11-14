@@ -114,6 +114,15 @@ Top level:
 | `on_revoked` | the output's | `keep` or `remove` (below) |
 | `detect` | the top level's | per secret, e.g. `get` for one path under `list` |
 
+`[metrics]`, how metrics leave the agent ([below](#metrics)), read at
+startup:
+
+| Key | Default | |
+|---|---|---|
+| `exporter` | OTLP if `OTEL_EXPORTER_OTLP_ENDPOINT` is set, else none | `otlp`, `prometheus` or `none` |
+| `listen_addr` | `127.0.0.1:9465` | `prometheus` only: where `GET /metrics` is served |
+| `tls` | | `prometheus` only, and only `false`: required to serve off loopback, where it's plaintext |
+
 With `token_file`, the agent exchanges the token for a certificate before
 its first round, keeps the certificate and its key in memory only, and
 exchanges again two thirds into the certificate's life, and after any
@@ -283,6 +292,52 @@ replicas with a path they may not read from using up the shared budget of
 denials, after which the server would refuse their allowed reads too (and
 none would finish its first render). A rollout with a missing grant
 therefore costs one denied read per replica per backoff step.
+
+## Metrics
+
+The agent's metrics leave it as the server's do ([running](/operations/running#metrics)),
+chosen by `[metrics] exporter`: pushed over OTLP with the standard
+`OTEL_*` variables (`OTEL_SERVICE_NAME` defaults to `ferritor-agent`), or
+scraped by Prometheus, or off. Without the section, OTLP if
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, off otherwise. `once` pushes its
+last export at exit, and serves no scrape.
+
+The Prometheus endpoint is plaintext, the agent having no certificate to
+serve with: on `127.0.0.1:9465` by default (the server's `9464` is next
+to it), answering only requests addressed to loopback, against DNS
+rebinding. Off loopback, say `tls = false` (a sidecar scraped on its pod's
+address); it warns at startup. What it shows is counts, times and
+results: no path, identity or file name, and nothing of a value.
+
+```toml
+[metrics]
+exporter = "prometheus"
+listen_addr = "0.0.0.0:9465"
+tls = false
+```
+
+Request durations are bucketed from 1 ms to 10 s. A test holds the table
+to what a scrape returns.
+
+| Instrument | Prometheus | Kind | Attributes |
+|---|---|---|---|
+| `ferritor.agent.rounds` | `ferritor_agent_rounds_total` | counter | `result` (ok; transient: stopped by a transient refusal) |
+| `ferritor.agent.round.duration` | `ferritor_agent_round_duration_seconds` | histogram (s) | `result`; the round's writes, notifications and status files included |
+| `ferritor.agent.calls` | `ferritor_agent_calls_total` | counter | `call` (get, list, watch), `result` (ok, permission_denied, not_found, invalid, transient) |
+| `ferritor.agent.writes` | `ferritor_agent_writes_total` | counter | `result` (ok, failed): sets of files swapped in |
+| `ferritor.agent.notifications` | `ferritor_agent_notifications_total` | counter | `kind` (signal, command), `result` (ok, failed, timed_out: a command still running after 60 s). A signal counts once per process it's sent to |
+| `ferritor.agent.exchanges` | `ferritor_agent_exchanges_total` | counter | `result` (ok, failed): with `token_file` |
+| `ferritor.agent.watch.events` | `ferritor_agent_watch_events_total` | counter | `event` (ready, changed, resync, ended, failed) |
+| `ferritor.agent.secrets` | `ferritor_agent_secrets` | gauge | `state` (current: readable, its value in its file; refused: for good, its file per `on_revoked`; pending: neither yet, not read or not written: the first set waiting for a required secret, a write that failed) |
+| `ferritor.agent.last_success` | `ferritor_agent_last_success_seconds` | gauge (unix s) | when a round last succeeded; absent before the first |
+| `ferritor.agent.watch.ready` | `ferritor_agent_watch_ready` | gauge | 1 while a ready stream covers every watched secret |
+| `ferritor.agent.certificate.expiry` | `ferritor_agent_certificate_expiry_seconds` | gauge (unix s) | the client certificate in use: from its file, or as exchanged |
+
+Worth an alert: `time() - ferritor_agent_last_success_seconds` past a few
+intervals (the files have stopped following the server), any
+`ferritor_agent_secrets{state="refused"}` or `{state="pending"}` that
+lasts, a `ferritor_agent_certificate_expiry_seconds` near (a certificate
+from files nobody renews).
 
 ## Kubernetes
 

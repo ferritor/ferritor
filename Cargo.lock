@@ -1447,10 +1447,12 @@ dependencies = [
  "ferritor-core",
  "ferritor-datastore",
  "ferritor-keystore",
+ "ferritor-metrics",
  "ferritor-server",
  "ferritor-testkit",
  "ferritor-winsec",
  "hyper-util",
+ "opentelemetry",
  "prost",
  "rustix",
  "serde",
@@ -1468,6 +1470,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows-service",
+ "x509-parser",
  "zeroize",
 ]
 
@@ -1558,6 +1561,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferritor-metrics"
+version = "0.9.2"
+dependencies = [
+ "axum",
+ "ferritor-core",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "ferritor-server"
 version = "0.9.2"
 dependencies = [
@@ -1575,6 +1595,7 @@ dependencies = [
  "ferritor-core",
  "ferritor-datastore",
  "ferritor-keystore",
+ "ferritor-metrics",
  "ferritor-testkit",
  "getrandom 0.4.3",
  "google-cloud-auth",
@@ -1583,7 +1604,6 @@ dependencies = [
  "hyper-util",
  "mimalloc",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "proptest",

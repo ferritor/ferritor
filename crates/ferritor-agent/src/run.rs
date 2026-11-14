@@ -104,7 +104,14 @@ impl Watching {
         }
     }
 
+    /// Couldn't be opened.
     fn failed(&mut self, error: &str, interval: Duration) {
+        crate::metrics::agent().watch_event("failed");
+        self.ended(error, interval);
+    }
+
+    /// Gone (ended, failed, or never opened): tried again after the backoff.
+    fn ended(&mut self, error: &str, interval: Duration) {
         tracing::warn!(
             error,
             retry_in_s = self.backoff.as_secs(),
@@ -164,10 +171,12 @@ pub async fn run(agent: &mut Agent, stop: impl std::future::Future<Output = ()>)
                     // Subscribed: what changed before it is read by a round,
                     // and the rounds stretch while it lasts.
                     Ok(Some(pb::WatchSecretsResponse { event: Some(Event::Ready(_)) })) => {
+                        crate::metrics::agent().watch_event("ready");
                         agent.set_watched(true, Instant::now());
                         break;
                     }
                     Ok(Some(pb::WatchSecretsResponse { event: Some(Event::Changed(changed)) })) => {
+                        crate::metrics::agent().watch_event("changed");
                         if let Ok(path) = SecretPath::parse(&changed.path) {
                             let version = (changed.version > 0).then_some(changed.version);
                             tokio::select! {
@@ -177,15 +186,20 @@ pub async fn run(agent: &mut Agent, stop: impl std::future::Future<Output = ()>)
                         }
                     }
                     // Changes may have been missed: a round reads them.
-                    Ok(Some(pb::WatchSecretsResponse { event: Some(Event::Resync(_)) })) => break,
+                    Ok(Some(pb::WatchSecretsResponse { event: Some(Event::Resync(_)) })) => {
+                        crate::metrics::agent().watch_event("resync");
+                        break;
+                    }
                     Ok(Some(pb::WatchSecretsResponse { event: None })) => {}
                     Ok(None) => {
-                        watching.failed("the watch stream ended", agent.interval());
+                        crate::metrics::agent().watch_event("ended");
+                        watching.ended("the watch stream ended", agent.interval());
                         agent.set_watched(false, Instant::now());
                     }
                     Err(status) => {
                         let error = ferritor_client::ServerError::from(status).to_string();
-                        watching.failed(&error, agent.interval());
+                        crate::metrics::agent().watch_event("failed");
+                        watching.ended(&error, agent.interval());
                         agent.set_watched(false, Instant::now());
                     }
                 },

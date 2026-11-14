@@ -129,12 +129,15 @@ impl Connection {
                     not_after = ?issued.not_after,
                     "exchanged the token for a client certificate"
                 );
+                crate::metrics::agent().exchange(true);
+                crate::metrics::agent().certificate_expiry(issued.not_after);
                 self.issued = Some(issued);
                 self.retry_exchange = None;
                 self.client = None;
                 Ok(())
             }
             Err(e) if valid => {
+                crate::metrics::agent().exchange(false);
                 tracing::warn!(
                     error = %crate::agent::error_chain(&e),
                     retry_in_s = EXCHANGE_RETRY.as_secs(),
@@ -144,6 +147,7 @@ impl Connection {
                 Ok(())
             }
             Err(e) => {
+                crate::metrics::agent().exchange(false);
                 self.issued = None;
                 self.client = None;
                 Err(ConnectionError::Exchange(e))
@@ -184,7 +188,13 @@ impl Connection {
                 ca,
                 cert,
                 key,
-            } => Server::tls(addr, ca, cert, key)?,
+            } => {
+                let server = Server::tls(addr, ca, cert, key)?;
+                if let Some(not_after) = not_after(cert) {
+                    crate::metrics::agent().certificate_expiry(not_after);
+                }
+                server
+            }
             ServerSettings::Exchange { addr, source } => match &self.issued {
                 Some(issued) => Server::issued(addr, &source.ca, issued)?,
                 None => return Err(ConnectionError::NoCertificate),
@@ -196,4 +206,14 @@ impl Connection {
         self.client = Some(client.clone());
         Ok(client)
     }
+}
+
+/// When the certificate in the PEM file at `path` (its first) expires, for
+/// the metric: `None` if it can't be read (connecting says why).
+fn not_after(path: &Path) -> Option<SystemTime> {
+    let pem = std::fs::read(path).ok()?;
+    let (_, pem) = x509_parser::pem::parse_x509_pem(&pem).ok()?;
+    let certificate = pem.parse_x509().ok()?;
+    let secs = u64::try_from(certificate.validity().not_after.timestamp()).ok()?;
+    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
 }

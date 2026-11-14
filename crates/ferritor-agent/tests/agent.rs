@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use ferritor_agent::agent::{Agent, Revoked, Round};
+use ferritor_agent::agent::{Agent, Revoked, Round, SecretCounts};
 use ferritor_agent::config::Config;
 use ferritor_core::crypto::ShareParams;
 use ferritor_core::labels::Labels;
@@ -543,6 +543,16 @@ async fn a_denied_secret_fails_once_and_backs_off_long() {
             Revoked::PermissionDenied
         )]
     );
+    // The readable one is read but in no file (the first set waits for the
+    // refused one): pending, not current.
+    assert_eq!(
+        agent.secret_counts(),
+        SecretCounts {
+            current: 0,
+            refused: 1,
+            pending: 1
+        }
+    );
     // Before the interval: only the readable one is asked.
     assert_eq!(agent.poll(t0 + Duration::from_secs(1)).await.calls, 1);
     assert_eq!(agent.poll(t0 + Duration::from_secs(59)).await.calls, 1);
@@ -604,6 +614,54 @@ async fn transient_failures_keep_the_files_and_recover() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let unreachable = agent.poll(t0 + 2 * INTERVAL).await;
     assert!(unreachable.transient);
+    assert_eq!(read(&out, "db").as_deref(), Some("v2"));
+    env.destroy().await.unwrap();
+}
+
+/// A secret is current only once its value is in its file: a new version
+/// whose write fails is pending until a write succeeds.
+#[tokio::test]
+async fn a_secret_is_current_once_in_its_file() {
+    let env = Env::new().await.unwrap();
+    env.grants.allow(AGENT, Action::Read, "billing/app");
+    env.put("billing/app/db", "v1").await.unwrap();
+    let out = env.out("app");
+    let mut agent = env
+        .agent("", &output(&out, "", &["path = \"billing/app/db\""]))
+        .unwrap();
+    let t0 = Instant::now();
+    agent.poll(t0).await;
+    let current = SecretCounts {
+        current: 1,
+        refused: 0,
+        pending: 0,
+    };
+    assert_eq!(agent.secret_counts(), current);
+
+    // `..data` a directory: the swap can't rename the new link over it.
+    let data = out.join("..data");
+    let generation = std::fs::read_link(&data).unwrap();
+    std::fs::remove_file(&data).unwrap();
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(data.join("in-the-way"), "").unwrap();
+    env.put("billing/app/db", "v2").await.unwrap();
+    let failed = agent.poll(t0 + INTERVAL).await;
+    assert_eq!(failed.written, 0, "{failed:?}");
+    assert_eq!(
+        agent.secret_counts(),
+        SecretCounts {
+            current: 0,
+            refused: 0,
+            pending: 1
+        }
+    );
+
+    // Out of the way again: the next round writes it.
+    std::fs::remove_dir_all(&data).unwrap();
+    std::os::unix::fs::symlink(&generation, &data).unwrap();
+    let written = agent.poll(t0 + 2 * INTERVAL).await;
+    assert_eq!(written.written, 1, "{written:?}");
+    assert_eq!(agent.secret_counts(), current);
     assert_eq!(read(&out, "db").as_deref(), Some("v2"));
     env.destroy().await.unwrap();
 }

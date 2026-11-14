@@ -22,7 +22,8 @@ pub mod namespaces;
 pub mod policies;
 pub mod policy;
 pub mod policy_store;
-pub mod prometheus;
+/// The Prometheus text format and its reader, shared with the agent.
+pub use ferritor_metrics::prometheus;
 pub mod purge;
 pub mod ratelimit;
 pub mod rewrap;

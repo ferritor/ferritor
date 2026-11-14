@@ -33,6 +33,7 @@ use zeroize::Zeroizing;
 use crate::config::{Config, Detect, OnRevoked, Output, Secret, ServerSettings};
 use crate::connection::Connection;
 use crate::files::{FilesError, OutputFile, Writer};
+use crate::metrics::{self, call_result};
 use crate::notify;
 
 /// The most a listing page holds (the server's maximum).
@@ -105,6 +106,9 @@ struct SecretState {
     config: Secret,
     delivered: Option<Delivered>,
     refused: Option<Refused>,
+    /// `delivered` is what its file holds: set by a successful write,
+    /// cleared when a new value comes in or the value goes.
+    in_file: bool,
 }
 
 impl SecretState {
@@ -136,6 +140,18 @@ impl OutputState {
             .iter()
             .all(|s| !s.config.required || s.delivered.is_some())
     }
+}
+
+/// The configured secrets by state ([`Agent::secret_counts`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SecretCounts {
+    /// Readable, and its value in its file.
+    pub current: u64,
+    /// Refused for good; its file per `on_revoked`.
+    pub refused: u64,
+    /// Neither yet: not read, or not written (the first set incomplete, a
+    /// write that failed).
+    pub pending: u64,
 }
 
 /// What a round did, for the loop and the tests.
@@ -184,6 +200,7 @@ impl Agent {
                     config,
                     delivered: None,
                     refused: None,
+                    in_file: false,
                 })
                 .collect();
             outputs.push(OutputState {
@@ -238,6 +255,7 @@ impl Agent {
     /// (`run` says so at its `ready`, and when it ends). Losing one brings
     /// the next round within an interval of `now`.
     pub fn set_watched(&mut self, watched: bool, now: Instant) {
+        metrics::agent().watch_ready(watched);
         if self.watched && !watched {
             let soon = now + self.jitter.spread(self.interval);
             self.next_round = Some(self.next_round.map_or(soon, |at| at.min(soon)));
@@ -283,6 +301,8 @@ impl Agent {
         if self.retry.is_some_and(|(at, _)| now < at) {
             return round;
         }
+        // Measured on the clock, for the metric only: nothing is decided by it.
+        let started = Instant::now();
         match self.fetch(now, &mut round).await {
             Ok(()) => {
                 self.retry = None;
@@ -305,18 +325,51 @@ impl Agent {
             }
         }
         self.next_round = Some(now + self.jitter.spread(self.round_interval()));
+        self.write_changed(&mut round);
+        // The writes, their notifications and the status files included.
+        metrics::agent().round(round.transient, started.elapsed());
+        round
+    }
+
+    /// Writes every set that changed, and each output's status file.
+    fn write_changed(&mut self, round: &mut Round) {
         for output in &mut self.outputs {
             match write_if_changed(output) {
-                Ok(true) => round.written += 1,
+                Ok(true) => {
+                    round.written += 1;
+                    metrics::agent().write(true);
+                }
                 Ok(false) => {}
                 Err(e) => {
+                    metrics::agent().write(false);
                     tracing::error!(dir = %output.config.dir.display(), error = %error_chain(&e), "writing the files failed");
                     self.last_error = Some(error_chain(&e));
                 }
             }
             write_status(output, self.last_success, self.last_error.as_deref());
         }
-        round
+        self.count_secrets();
+    }
+
+    /// The secrets' states, for the gauge.
+    fn count_secrets(&self) {
+        let counts = self.secret_counts();
+        metrics::agent().secrets(counts.current, counts.refused, counts.pending);
+    }
+
+    /// The secrets by state, as `ferritor.agent.secrets` shows them: current
+    /// only once its value is in its file (not while the first set waits
+    /// for a required secret, nor after a write that failed).
+    pub fn secret_counts(&self) -> SecretCounts {
+        let mut counts = SecretCounts::default();
+        for secret in self.outputs.iter().flat_map(|o| &o.secrets) {
+            match (&secret.refused, secret.in_file) {
+                (Some(_), _) => counts.refused += 1,
+                (None, true) => counts.current += 1,
+                (None, false) => counts.pending += 1,
+            }
+        }
+        counts
     }
 
     /// What a watch stream should cover: every secret that can change (not
@@ -346,14 +399,16 @@ impl Agent {
             .client()
             .await
             .map_err(|e| error_chain(&e))?;
-        client
+        let opened = client
             .watch_secrets(pb::WatchSecretsRequest {
                 paths,
                 prefixes: Vec::new(),
             })
             .await
             .map(tonic::Response::into_inner)
-            .map_err(|status| ServerError::from(status).to_string())
+            .map_err(ServerError::from);
+        metrics::agent().call("watch", call_result(opened.as_ref().map(|_| ())));
+        opened.map_err(|e| e.to_string())
     }
 
     /// The watch said `path`'s live version is `version` now (`None`: no
@@ -393,6 +448,7 @@ impl Agent {
                 })
                 .await,
         );
+        metrics::agent().call("get", call_result(reply.as_ref().map(|_| ())));
         let interval = self.interval;
         for output in &mut self.outputs {
             for secret in output
@@ -417,17 +473,7 @@ impl Agent {
             }
             self.connection.reset();
         }
-        for output in &mut self.outputs {
-            match write_if_changed(output) {
-                Ok(true) => round.written += 1,
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::error!(dir = %output.config.dir.display(), error = %error_chain(&e), "writing the files failed");
-                    self.last_error = Some(error_chain(&e));
-                }
-            }
-            write_status(output, self.last_success, self.last_error.as_deref());
-        }
+        self.write_changed(&mut round);
         round
     }
 
@@ -482,6 +528,7 @@ impl Agent {
                         })
                         .await,
                 );
+                metrics::agent().call("get", call_result(reply.as_ref().map(|_| ())));
                 match reply {
                     Ok(reply) => accept(secret, reply, &mut output.dirty),
                     Err(e) => match classify(&e) {
@@ -550,6 +597,7 @@ async fn list(
                     })
                     .await,
             );
+            metrics::agent().call("list", call_result(reply.as_ref().map(|_| ())));
             let page = match reply {
                 Ok(page) => page,
                 Err(e) => match classify(&e) {
@@ -605,6 +653,7 @@ fn accept(secret: &mut SecretState, reply: pb::GetSecretResponse, dirty: &mut bo
     if changed {
         tracing::info!(path = %secret.config.path, version, "new version");
         secret.delivered = Some(Delivered { version, value });
+        secret.in_file = false;
         *dirty = true;
     }
 }
@@ -637,6 +686,7 @@ fn refuse(
         next_try: now + backoff,
     });
     if secret.config.on_revoked == OnRevoked::Remove && secret.delivered.take().is_some() {
+        secret.in_file = false;
         *dirty = true;
     }
 }
@@ -660,6 +710,9 @@ fn write_if_changed(output: &mut OutputState) -> Result<bool, FilesError> {
         })
         .collect();
     output.writer.write(&files)?;
+    for secret in &mut output.secrets {
+        secret.in_file = secret.delivered.is_some();
+    }
     let first = !output.written;
     output.written = true;
     output.dirty = false;

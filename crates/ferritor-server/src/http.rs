@@ -67,7 +67,6 @@ use std::sync::Arc;
 
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, Request, State};
-use axum::http::uri::Authority;
 use axum::http::{Extensions, HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -94,7 +93,7 @@ use crate::health::Readiness;
 use crate::policies::{self, Policies};
 use crate::secrets::{MAX_VALUE_SIZE, Secrets, SecretsError};
 use crate::tls;
-use crate::{config, error_chain, grpc};
+use crate::{error_chain, grpc};
 
 /// The JSON API's routes, to serve next to the gRPC services, with the
 /// readiness check answered from `readiness`.
@@ -273,7 +272,7 @@ const BODY_LIMIT: usize = 2 * MAX_VALUE_SIZE.div_ceil(3) * 4
 const POLICY_BODY_LIMIT: usize = 2 * ferritor_core::policy::MAX_APPLY_BYTES;
 
 /// Every route of `routes` (gRPC's too) refuses requests not addressed to
-/// `localhost` or a loopback IP (any port; by [`config::is_loopback`], the
+/// `localhost` or a loopback IP (any port; by [`crate::config::is_loopback`], the
 /// rule for where dev mode may listen), with 421: the defence against DNS
 /// rebinding for plaintext dev mode (see `tls::serve`). The
 /// name comes from the URI's authority (HTTP/2's `:authority`, or an
@@ -305,37 +304,10 @@ async fn require_loopback_host(request: Request, next: Next) -> Response {
     .into_response()
 }
 
-fn addressed_to_loopback<B>(request: &axum::http::Request<B>) -> bool {
-    let mut hosts = Vec::new();
-    if let Some(authority) = request.uri().authority() {
-        hosts.push(authority.host().to_owned());
-    }
-    for value in request.headers().get_all(header::HOST) {
-        let Some(authority) = value
-            .to_str()
-            .ok()
-            .and_then(|host| host.parse::<Authority>().ok())
-        else {
-            return false;
-        };
-        hosts.push(authority.host().to_owned());
-    }
-    !hosts.is_empty() && hosts.iter().all(|host| is_loopback_host(host))
-}
+/// One check for every plaintext listener (`ferritor_metrics`).
+use ferritor_metrics::addressed_to_loopback;
 
-/// `localhost`, or an IP literal (IPv6 in `[ ]`) that's loopback by the
-/// same rule as where dev mode may listen ([`config::is_loopback`]). Any IP
-/// literal is safe here: DNS rebinding needs a name the attacker controls.
-pub(crate) fn is_loopback_host(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    let literal = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-    literal.parse().is_ok_and(config::is_loopback)
-}
+pub(crate) use ferritor_core::net::is_loopback_host;
 
 /// Secrets, and errors about them, must not end up in any cache.
 async fn no_store(mut response: Response) -> Response {
