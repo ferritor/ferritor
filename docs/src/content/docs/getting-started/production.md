@@ -91,9 +91,7 @@ Expand-Archive $f -DestinationPath .   # ferritor-cli-0.9.2-x86_64-pc-windows-gn
 They're cross-built and not notarized or signed by a publisher: fetched
 with `curl` they run as they are, but downloaded with a browser macOS
 refuses to start the binary until `xattr -d com.apple.quarantine ferritor`,
-and Windows SmartScreen asks first. On Windows, mind where `ferritor login
---key-out` writes its key
-([workload identity](/guides/workload-identity#the-cli)).
+and Windows SmartScreen asks first.
 
 ## 2. Databases
 

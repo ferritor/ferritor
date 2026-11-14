@@ -34,6 +34,11 @@ toml.workspace = true
 tonic.workspace = true
 zeroize.workspace = true
 
+# Windows: `login --key-out`'s owner-only access list (the workspace's one
+# crate allowed `unsafe`; the CLI has none of its own).
+[target.'cfg(windows)'.dependencies]
+ferritor-winsec.workspace = true
+
 # The server crates are for the end-to-end tests only (a server in process).
 # Never make them normal dependencies: the CLI talks to the server over gRPC
 # only.

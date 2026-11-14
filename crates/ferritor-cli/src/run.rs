@@ -116,24 +116,34 @@ async fn login(
     Ok(())
 }
 
-/// Writes `contents` to `path` with mode 0600, replacing what's there
-/// (removed first, so an existing file's wider mode isn't kept). On
-/// Windows the new file takes its directory's inherited ACL.
+/// Writes `contents` to `path` readable by the user alone, replacing what's
+/// there (removed first, so an existing file's wider access isn't kept):
+/// mode 0600 on Unix; on Windows a protected access list of the user,
+/// SYSTEM and Administrators, never the folder's inherited one
+/// (`ferritor_winsec::create_private_file`: the file is created with it).
 fn write_private(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
+    let mut file = create_private(path)?;
     file.write_all(contents)?;
     file.sync_all()
+}
+
+#[cfg(unix)]
+fn create_private(path: &std::path::Path) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn create_private(path: &std::path::Path) -> io::Result<std::fs::File> {
+    ferritor_winsec::create_private_file(path)
 }
 
 /// A short rate limit being waited out (`ferritor_client::retry`), on stderr.
