@@ -13,6 +13,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "ferritor"
 path = "src/main.rs"
+# Its docs would be `main` alone (the library has the rest), and would land
+# in target/doc/ferritor/, the root `ferritor` package's place: cargo warns
+# of the collision (rust-lang/cargo#6313).
+doc = false
 
 [dependencies]
 ferritor-client.workspace = true
