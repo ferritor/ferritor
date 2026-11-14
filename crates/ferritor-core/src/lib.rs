@@ -5,6 +5,7 @@ pub mod audit_chain;
 pub mod crypto;
 pub mod labels;
 pub mod messages;
+pub mod net;
 pub mod path;
 pub mod policy;
 

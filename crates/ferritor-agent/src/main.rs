@@ -6,6 +6,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use ferritor_agent::agent::{Agent, error_chain};
 use ferritor_agent::config::Config;
+use ferritor_agent::metrics;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(windows)]
@@ -166,6 +167,27 @@ async fn serve_until(
         outputs = config.outputs.len(),
         "starting"
     );
+    // Before anything records: the instruments bind to the provider there
+    // is at their first use.
+    let metrics = match metrics::start(&config.metrics, "ferritor-agent", once.is_none()).await {
+        Ok(metrics) => metrics,
+        Err(e) => {
+            fail(&format!("metrics: {e}"));
+            return ExitCode::FAILURE;
+        }
+    };
+    let code = run_agent(config, once, stop, fail).await;
+    metrics.finish().await;
+    code
+}
+
+/// Renders once, or keeps the files current until `stop`.
+async fn run_agent(
+    config: Config,
+    once: Option<Duration>,
+    stop: impl Future<Output = ()>,
+    fail: fn(&str),
+) -> ExitCode {
     let mut agent = match Agent::new(config) {
         Ok(agent) => agent,
         Err(e) => {

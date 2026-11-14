@@ -21,7 +21,7 @@
 //! so the tests can run backoffs without waiting.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use ferritor_client::exchange::{self, ExchangeError, Issued};
@@ -40,6 +40,7 @@ use super::proto;
 use super::request::{self, Source, Volume};
 use crate::agent::{Refusal, Revoked, classify, error_chain};
 use crate::config::OnRevoked;
+use crate::metrics::{self, call_result};
 
 /// The most a listing page holds (the server's maximum).
 const PAGE_SIZE: u32 = 1000;
@@ -193,12 +194,57 @@ pub struct Provider {
     /// One exchange at a time per token: a pod's volumes mount together,
     /// with the same token, and must not each exchange it.
     exchanging: Mutex<HashMap<TokenHash, Arc<tokio::sync::Mutex<()>>>>,
+    /// Observed from `state` at each collection. Dropping them doesn't
+    /// unregister their callbacks: those hold only a `Weak` of the state,
+    /// so once the provider is gone they observe nothing.
+    _gauges: Vec<opentelemetry::metrics::ObservableGauge<u64>>,
 }
 
 /// What reading one secret gave.
 enum Outcome {
     Read(Read),
     Refused(Revoked, String),
+}
+
+/// The gauges observed from the provider's state: counts only, never who.
+fn observe(state: Weak<Mutex<State>>) -> Vec<opentelemetry::metrics::ObservableGauge<u64>> {
+    let meter = metrics::provider_meter();
+    let gauge = |name: &'static str, description: &'static str, count: fn(&State) -> usize| {
+        let state = Weak::clone(&state);
+        meter
+            .u64_observable_gauge(name)
+            .with_description(description)
+            .with_callback(move |gauge| {
+                if let Some(state) = state.upgrade() {
+                    let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+                    gauge.observe(u64::try_from(count(&state)).unwrap_or(u64::MAX), &[]);
+                }
+            })
+            .build()
+    };
+    vec![
+        gauge(
+            "ferritor.csi.identities",
+            "Identities the provider holds a certificate for",
+            |state| state.identities.len(),
+        ),
+        gauge(
+            "ferritor.csi.volumes",
+            "Volumes remembered (mounted within forget_volumes_after_secs)",
+            |state| state.volumes.len(),
+        ),
+        gauge(
+            "ferritor.csi.watch.streams",
+            "Identities' watch streams open and ready",
+            |state| {
+                state
+                    .watches
+                    .values()
+                    .filter(|w| w.ready && !w.ended)
+                    .count()
+            },
+        ),
+    ]
 }
 
 fn hash(token: &str) -> TokenHash {
@@ -211,9 +257,11 @@ fn transient(e: &ServerError) -> Failed {
 
 impl Provider {
     pub fn new(config: ProviderConfig) -> Self {
+        let state = Arc::new(Mutex::new(State::default()));
         Self {
             config,
-            state: Arc::new(Mutex::new(State::default())),
+            _gauges: observe(Arc::downgrade(&state)),
+            state,
             exchanging: Mutex::new(HashMap::new()),
         }
     }
@@ -228,10 +276,24 @@ impl Provider {
         request: &proto::MountRequest,
         now: Instant,
     ) -> Result<proto::MountResponse, Status> {
-        let (volume, expires) =
-            request::parse(request, &self.config.audience).map_err(Failed::Invalid)?;
+        // Measured on the clock, for the metric only: nothing is decided by it.
+        let started = Instant::now();
+        let (volume, expires) = match request::parse(request, &self.config.audience) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                metrics::provider().mount("invalid", started.elapsed());
+                return Err(Failed::Invalid(e).into());
+            }
+        };
         self.forget_idle(now);
         let result = self.mount_volume(&volume, expires, now).await;
+        let outcome = match &result {
+            Ok(_) => "ok",
+            Err(Failed::Transient(_)) => "failed",
+            Err(Failed::Refused(_)) => "refused",
+            Err(Failed::Invalid(_)) => "invalid",
+        };
+        metrics::provider().mount(outcome, started.elapsed());
         match &result {
             Ok(response) => {
                 tracing::debug!(pod = volume.pod, files = response.files.len(), "mounted")
@@ -455,6 +517,7 @@ impl Provider {
                     return Ok(identity.clone());
                 }
                 Some(TokenEntry::Refused(refused)) if now < refused.next_try => {
+                    metrics::provider().answered_from_memory("refusal");
                     return Err(Failed::Refused(refused.message.clone()));
                 }
                 Some(TokenEntry::Refused(refused)) => Some(refused.clone()),
@@ -464,6 +527,7 @@ impl Provider {
         match exchange::exchange_token(&self.config.exchange, &self.config.ca, &volume.token).await
         {
             Ok(issued) => {
+                metrics::provider().exchange("issued");
                 let identity = issued.identity.clone();
                 let until = expires
                     .map(SystemTime::from)
@@ -482,10 +546,8 @@ impl Provider {
                 Ok(identity)
             }
             Err(e) => {
-                let refused = e.server().is_some_and(|server| {
-                    server.reason.as_deref() == Some(reason::TOKEN_REFUSED)
-                        || server.code == Code::Unauthenticated
-                });
+                let refused = token_refused(&e);
+                metrics::provider().exchange(if refused { "refused" } else { "failed" });
                 if refused {
                     let message = format!("the pod's token was refused: {}", error_chain(&e));
                     let entry = Refused::next(
@@ -522,9 +584,15 @@ impl Provider {
             (Arc::clone(&entry.issued), entry.client.clone(), due)
         };
         if due {
-            match exchange::exchange_token(&self.config.exchange, &self.config.ca, &volume.token)
-                .await
-            {
+            let renewed =
+                exchange::exchange_token(&self.config.exchange, &self.config.ca, &volume.token)
+                    .await;
+            metrics::provider().exchange(match &renewed {
+                Ok(_) => "issued",
+                Err(e) if token_refused(e) => "refused",
+                Err(_) => "failed",
+            });
+            match renewed {
                 Ok(renewed) if renewed.identity == identity => {
                     adopt(&mut self.state(), renewed);
                     return Box::pin(self.client(identity, volume)).await;
@@ -683,6 +751,7 @@ impl Provider {
             if let Some(refused) = state.refusals.get(&key)
                 && now < refused.next_try
             {
+                metrics::provider().answered_from_memory("refusal");
                 return Ok(Err((refused.kind, refused.message.clone())));
             }
             if let Some(cached) = state.listings.get(&key)
@@ -695,6 +764,7 @@ impl Provider {
                     self.config.share_reads,
                 )
             {
+                metrics::provider().answered_from_memory("listing");
                 return Ok(Ok(cached.value.clone()));
             }
             state.refusals.get(&key).cloned()
@@ -713,6 +783,7 @@ impl Provider {
                     })
                     .await,
             );
+            metrics::provider().call("list", call_result(page.as_ref().map(|_| ())));
             let page = match page {
                 Ok(page) => page,
                 Err(e) => {
@@ -780,12 +851,14 @@ impl Provider {
             if let Some(refused) = state.refusals.get(&key)
                 && now < refused.next_try
             {
+                metrics::provider().answered_from_memory("refusal");
                 return Ok(Outcome::Refused(refused.kind, refused.message.clone()));
             }
             if let Some(cached) = state.reads.get(&key)
                 && fresh(&state, identity, path, cached, now, self.config.share_reads)
                 && listed.is_none_or(|version| version == cached.value.version)
             {
+                metrics::provider().answered_from_memory("read");
                 return Ok(Outcome::Read(cached.value.clone()));
             }
             state.refusals.get(&key).cloned()
@@ -799,6 +872,7 @@ impl Provider {
                 })
                 .await,
         );
+        metrics::provider().call("get", call_result(reply.as_ref().map(|_| ())));
         match reply {
             Ok(reply) => {
                 let Some(secret) = reply.secret else {
@@ -954,6 +1028,15 @@ fn adopt(state: &mut State, issued: Issued) {
     }
 }
 
+/// The exchange refused the pod's token (authoritative), rather than
+/// failing for now.
+fn token_refused(e: &ExchangeError) -> bool {
+    e.server().is_some_and(|server| {
+        server.reason.as_deref() == Some(reason::TOKEN_REFUSED)
+            || server.code == Code::Unauthenticated
+    })
+}
+
 fn exchange_failed(e: &ExchangeError) -> Failed {
     Failed::Transient(format!("exchanging the pod's token: {}", error_chain(e)))
 }
@@ -1063,7 +1146,12 @@ async fn watch_stream(
         paths: paths.iter().map(|p| p.as_str().to_owned()).collect(),
         prefixes: prefixes.iter().map(|p| p.as_str().to_owned()).collect(),
     };
-    let ended = match client.watch_secrets(request).await {
+    let opened = client
+        .watch_secrets(request)
+        .await
+        .map_err(ServerError::from);
+    metrics::provider().call("watch", call_result(opened.as_ref().map(|_| ())));
+    let ended = match opened {
         Ok(response) => {
             let mut stream = response.into_inner();
             loop {
@@ -1079,12 +1167,14 @@ async fn watch_stream(
                         }
                         match message.event {
                             Some(Event::Ready(_)) => {
+                                metrics::provider().watch_event("ready");
                                 tracing::info!(identity, "watching for changes");
                                 if let Some(watch) = state.watches.get_mut(&identity) {
                                     watch.ready = true;
                                 }
                             }
                             Some(Event::Changed(changed)) => {
+                                metrics::provider().watch_event("changed");
                                 if let Ok(path) = SecretPath::parse(&changed.path) {
                                     state.reads.remove(&(identity.clone(), path.clone()));
                                     state.listings.retain(|(who, prefix), _| {
@@ -1097,6 +1187,7 @@ async fn watch_stream(
                                 }
                             }
                             Some(Event::Resync(_)) => {
+                                metrics::provider().watch_event("resync");
                                 state.reads.retain(|(who, _), _| who != &identity);
                                 state.listings.retain(|(who, _), _| who != &identity);
                                 if let Some(watch) = state.watches.get_mut(&identity) {
@@ -1106,12 +1197,21 @@ async fn watch_stream(
                             None => {}
                         }
                     }
-                    Ok(None) => break "the stream ended".to_owned(),
-                    Err(status) => break ServerError::from(status).to_string(),
+                    Ok(None) => {
+                        metrics::provider().watch_event("ended");
+                        break "the stream ended".to_owned();
+                    }
+                    Err(status) => {
+                        metrics::provider().watch_event("failed");
+                        break ServerError::from(status).to_string();
+                    }
                 }
             }
         }
-        Err(status) => ServerError::from(status).to_string(),
+        Err(e) => {
+            metrics::provider().watch_event("failed");
+            e.to_string()
+        }
     };
     tracing::info!(
         identity,

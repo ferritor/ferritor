@@ -59,6 +59,7 @@ changelog_include = [
     "ferritor-keystore",
     "ferritor-datastore",
     "ferritor-client",
+    "ferritor-metrics",
     "ferritor-cli",
     "ferritor-agent",
 ]
@@ -94,6 +95,10 @@ version_group = "ferritor"
 
 [[package]]
 name = "ferritor-client"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-metrics"
 version_group = "ferritor"
 
 [[package]]

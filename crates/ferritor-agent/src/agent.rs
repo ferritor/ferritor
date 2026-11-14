@@ -33,6 +33,7 @@ use zeroize::Zeroizing;
 use crate::config::{Config, Detect, OnRevoked, Output, Secret, ServerSettings};
 use crate::connection::Connection;
 use crate::files::{FilesError, OutputFile, Writer};
+use crate::metrics::{self, call_result};
 use crate::notify;
 
 /// The most a listing page holds (the server's maximum).
@@ -238,6 +239,7 @@ impl Agent {
     /// (`run` says so at its `ready`, and when it ends). Losing one brings
     /// the next round within an interval of `now`.
     pub fn set_watched(&mut self, watched: bool, now: Instant) {
+        metrics::agent().watch_ready(watched);
         if self.watched && !watched {
             let soon = now + self.jitter.spread(self.interval);
             self.next_round = Some(self.next_round.map_or(soon, |at| at.min(soon)));
@@ -283,6 +285,8 @@ impl Agent {
         if self.retry.is_some_and(|(at, _)| now < at) {
             return round;
         }
+        // Measured on the clock, for the metric only: nothing is decided by it.
+        let started = Instant::now();
         match self.fetch(now, &mut round).await {
             Ok(()) => {
                 self.retry = None;
@@ -304,19 +308,43 @@ impl Agent {
                 self.retry = Some((now + wait, backoff));
             }
         }
+        metrics::agent().round(round.transient, started.elapsed());
         self.next_round = Some(now + self.jitter.spread(self.round_interval()));
+        self.write_changed(&mut round);
+        round
+    }
+
+    /// Writes every set that changed, and each output's status file.
+    fn write_changed(&mut self, round: &mut Round) {
         for output in &mut self.outputs {
             match write_if_changed(output) {
-                Ok(true) => round.written += 1,
+                Ok(true) => {
+                    round.written += 1;
+                    metrics::agent().write(true);
+                }
                 Ok(false) => {}
                 Err(e) => {
+                    metrics::agent().write(false);
                     tracing::error!(dir = %output.config.dir.display(), error = %error_chain(&e), "writing the files failed");
                     self.last_error = Some(error_chain(&e));
                 }
             }
             write_status(output, self.last_success, self.last_error.as_deref());
         }
-        round
+        self.count_secrets();
+    }
+
+    /// The secrets' states, for the gauge.
+    fn count_secrets(&self) {
+        let (mut current, mut refused, mut pending) = (0, 0, 0);
+        for secret in self.outputs.iter().flat_map(|o| &o.secrets) {
+            match (&secret.refused, &secret.delivered) {
+                (Some(_), _) => refused += 1,
+                (None, Some(_)) => current += 1,
+                (None, None) => pending += 1,
+            }
+        }
+        metrics::agent().secrets(current, refused, pending);
     }
 
     /// What a watch stream should cover: every secret that can change (not
@@ -346,14 +374,16 @@ impl Agent {
             .client()
             .await
             .map_err(|e| error_chain(&e))?;
-        client
+        let opened = client
             .watch_secrets(pb::WatchSecretsRequest {
                 paths,
                 prefixes: Vec::new(),
             })
             .await
             .map(tonic::Response::into_inner)
-            .map_err(|status| ServerError::from(status).to_string())
+            .map_err(ServerError::from);
+        metrics::agent().call("watch", call_result(opened.as_ref().map(|_| ())));
+        opened.map_err(|e| e.to_string())
     }
 
     /// The watch said `path`'s live version is `version` now (`None`: no
@@ -393,6 +423,7 @@ impl Agent {
                 })
                 .await,
         );
+        metrics::agent().call("get", call_result(reply.as_ref().map(|_| ())));
         let interval = self.interval;
         for output in &mut self.outputs {
             for secret in output
@@ -417,17 +448,7 @@ impl Agent {
             }
             self.connection.reset();
         }
-        for output in &mut self.outputs {
-            match write_if_changed(output) {
-                Ok(true) => round.written += 1,
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::error!(dir = %output.config.dir.display(), error = %error_chain(&e), "writing the files failed");
-                    self.last_error = Some(error_chain(&e));
-                }
-            }
-            write_status(output, self.last_success, self.last_error.as_deref());
-        }
+        self.write_changed(&mut round);
         round
     }
 
@@ -482,6 +503,7 @@ impl Agent {
                         })
                         .await,
                 );
+                metrics::agent().call("get", call_result(reply.as_ref().map(|_| ())));
                 match reply {
                     Ok(reply) => accept(secret, reply, &mut output.dirty),
                     Err(e) => match classify(&e) {
@@ -550,6 +572,7 @@ async fn list(
                     })
                     .await,
             );
+            metrics::agent().call("list", call_result(reply.as_ref().map(|_| ())));
             let page = match reply {
                 Ok(page) => page,
                 Err(e) => match classify(&e) {

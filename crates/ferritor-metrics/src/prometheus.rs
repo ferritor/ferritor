@@ -1,9 +1,9 @@
-//! The Prometheus side of [`crate::metrics`]: the same instruments, read
-//! when scraped instead of pushed. A [`Scrape`] is the meter provider's
-//! reader (the SDK's `ManualReader`); each `GET /metrics` collects from it
-//! and writes the Prometheus text format (version 0.0.4), served on a
-//! listener of its own (`[metrics] listen_addr`, see `main` and
-//! [`crate::tls::serve_metrics`]), never the main one.
+//! The Prometheus side: the same instruments, read when scraped instead of
+//! pushed. A [`Scrape`] is the meter provider's reader (the SDK's
+//! `ManualReader`, see [`crate::init_prometheus`]); each `GET /metrics`
+//! collects from it and writes the Prometheus text format (version 0.0.4),
+//! served on a listener of its own (`[metrics] listen_addr`), never a
+//! binary's main one.
 //!
 //! Names follow OpenTelemetry's Prometheus conventions: every character but
 //! letters, digits, `_` and `:` becomes `_` (`ferritor.secret.requests` →
