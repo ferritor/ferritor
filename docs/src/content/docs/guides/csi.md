@@ -320,7 +320,7 @@ to what a scrape returns.
 | `ferritor.csi.mounts` | `ferritor_csi_mounts_total` | counter | `result` (ok, refused, failed: transient, the volume as it is; invalid: the `SecretProviderClass`) |
 | `ferritor.csi.mount.duration` | `ferritor_csi_mount_duration_seconds` | histogram (s) | `result` |
 | `ferritor.csi.calls` | `ferritor_csi_calls_total` | counter | `call` (get, list, watch), `result` (ok, permission_denied, not_found, invalid, transient) |
-| `ferritor.csi.from_memory` | `ferritor_csi_from_memory_total` | counter | `kind` (read, listing: shared, or vouched for by a watch; refusal: remembered, backing off): answered without the server |
+| `ferritor.csi.from_memory` | `ferritor_csi_from_memory_total` | counter | `kind` (read: shared, vouched for by a watch, or the volume's own value at the version its listing shows; listing: shared, or vouched for by a watch; refusal: remembered, backing off): answered without the server |
 | `ferritor.csi.exchanges` | `ferritor_csi_exchanges_total` | counter | `result` (issued, refused, failed): pods' tokens, renewals included |
 | `ferritor.csi.watch.events` | `ferritor_csi_watch_events_total` | counter | `event` (ready, changed, resync, ended, failed) |
 | `ferritor.csi.identities` | `ferritor_csi_identities` | gauge | identities with a certificate on this node |

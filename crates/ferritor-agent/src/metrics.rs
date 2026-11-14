@@ -257,7 +257,7 @@ impl AgentMetrics {
             round_duration: meter
                 .f64_histogram("ferritor.agent.round.duration")
                 .with_unit("s")
-                .with_description("Time a round took, by result")
+                .with_description("Time a round took (its writes included), by result")
                 .with_boundaries(DURATION_BUCKETS.to_vec())
                 .build(),
             calls: meter
@@ -288,8 +288,8 @@ impl AgentMetrics {
             secrets: meter
                 .u64_gauge("ferritor.agent.secrets")
                 .with_description(
-                    "Configured secrets, by state (current: delivered and readable; refused: \
-                     refused for good, its file per on_revoked; pending: neither yet)",
+                    "Configured secrets, by state (current: readable, its value in its file; \
+                     refused: refused for good, its file per on_revoked; pending: neither yet)",
                 )
                 .build(),
             last_success: meter
@@ -430,8 +430,9 @@ impl ProviderMetrics {
             from_memory: meter
                 .u64_counter("ferritor.csi.from_memory")
                 .with_description(
-                    "Answers from memory instead of the server, by kind (read, listing: shared or \
-                     vouched for by a watch; refusal: remembered, backing off)",
+                    "Answers from memory instead of the server, by kind (read: shared, vouched \
+                     for by a watch, or the volume's own at the listed version; listing: shared \
+                     or vouched for by a watch; refusal: remembered, backing off)",
                 )
                 .build(),
             exchanges: meter

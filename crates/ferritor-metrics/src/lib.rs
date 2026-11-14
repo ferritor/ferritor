@@ -80,13 +80,41 @@ pub enum MetricsError {
 }
 
 /// The metrics-specific variable, else the general one (the OTLP spec's
-/// precedence).
+/// precedence). One set but empty counts as unset, so the general one
+/// still applies.
 fn var(name: &str) -> Option<String> {
+    var_in(name, |var| std::env::var(var).ok())
+}
+
+/// [`var`], looking variables up with `get`.
+fn var_in(name: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
     let specific = name.replacen("OTEL_EXPORTER_OTLP_", "OTEL_EXPORTER_OTLP_METRICS_", 1);
     [specific.as_str(), name]
         .into_iter()
-        .find_map(|var| std::env::var(var).ok())
-        .filter(|value| !value.trim().is_empty())
+        .find_map(|var| get(var).filter(|value| !value.trim().is_empty()))
+}
+
+/// The resource the metrics carry: the SDK's (`OTEL_SERVICE_NAME`,
+/// `OTEL_RESOURCE_ATTRIBUTES`), with `service` as the service name only
+/// when neither names one.
+fn resource(service: &'static str) -> Resource {
+    if names_a_service(|var| std::env::var(var).ok()) {
+        Resource::builder().build()
+    } else {
+        Resource::builder().with_service_name(service).build()
+    }
+}
+
+/// Whether the variables (looked up with `get`) name the service:
+/// `OTEL_SERVICE_NAME`, or `service.name` in `OTEL_RESOURCE_ATTRIBUTES`.
+fn names_a_service(get: impl Fn(&str) -> Option<String>) -> bool {
+    get("OTEL_SERVICE_NAME").is_some_and(|name| !name.trim().is_empty())
+        || get("OTEL_RESOURCE_ATTRIBUTES").is_some_and(|attributes| {
+            attributes
+                .split(',')
+                .filter_map(|pair| pair.split_once('='))
+                .any(|(key, value)| key.trim() == "service.name" && !value.trim().is_empty())
+        })
 }
 
 /// Whether an OTLP endpoint is configured (`OTEL_EXPORTER_OTLP_ENDPOINT`
@@ -181,7 +209,7 @@ pub fn init(
     }
     let provider = SdkMeterProvider::builder()
         .with_periodic_exporter(exporter.build().map_err(MetricsError::Exporter)?)
-        .with_resource(Resource::builder().with_service_name(service).build())
+        .with_resource(resource(service))
         .build();
     global::set_meter_provider(provider.clone());
     Ok(Some(provider))
@@ -196,7 +224,7 @@ pub fn init_prometheus(service: &'static str) -> (SdkMeterProvider, Scrape) {
     let scrape = Scrape::new();
     let provider = SdkMeterProvider::builder()
         .with_reader(scrape.reader())
-        .with_resource(Resource::builder().with_service_name(service).build())
+        .with_resource(resource(service))
         .build();
     global::set_meter_provider(provider.clone());
     (provider, scrape)
@@ -402,5 +430,50 @@ mod tests {
         // The scheme wins over the flag.
         assert!(export("https://collector:4317", true).uses_tls());
         assert!(!Export::default().uses_tls());
+    }
+
+    /// An empty metrics-specific variable doesn't hide the general one; a
+    /// set one wins.
+    #[test]
+    fn an_empty_specific_variable_falls_back_to_the_general_one() {
+        let env = |specific: Option<&'static str>| {
+            move |name: &str| match name {
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" => specific.map(str::to_owned),
+                "OTEL_EXPORTER_OTLP_ENDPOINT" => Some("http://collector:4317".to_owned()),
+                _ => None,
+            }
+        };
+        let endpoint = |specific| var_in("OTEL_EXPORTER_OTLP_ENDPOINT", env(specific));
+        assert_eq!(endpoint(None).as_deref(), Some("http://collector:4317"));
+        assert_eq!(
+            endpoint(Some(" ")).as_deref(),
+            Some("http://collector:4317")
+        );
+        assert_eq!(
+            endpoint(Some("http://metrics:4317")).as_deref(),
+            Some("http://metrics:4317")
+        );
+        assert_eq!(var_in("OTEL_EXPORTER_OTLP_ENDPOINT", |_| None), None);
+    }
+
+    /// The binary's name is the service name only when the variables give
+    /// none.
+    #[test]
+    fn the_variables_name_the_service_before_the_binary() {
+        let env = |name: Option<&'static str>, attributes: Option<&'static str>| {
+            move |var: &str| match var {
+                "OTEL_SERVICE_NAME" => name.map(str::to_owned),
+                "OTEL_RESOURCE_ATTRIBUTES" => attributes.map(str::to_owned),
+                _ => None,
+            }
+        };
+        assert!(!names_a_service(env(None, None)));
+        assert!(!names_a_service(env(Some(""), Some("team=billing"))));
+        assert!(names_a_service(env(Some("billing-worker"), None)));
+        assert!(names_a_service(env(
+            None,
+            Some("team=billing, service.name=api-sidecar")
+        )));
+        assert!(!names_a_service(env(None, Some("service.name="))));
     }
 }

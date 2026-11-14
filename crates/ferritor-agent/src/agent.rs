@@ -106,6 +106,9 @@ struct SecretState {
     config: Secret,
     delivered: Option<Delivered>,
     refused: Option<Refused>,
+    /// `delivered` is what its file holds: set by a successful write,
+    /// cleared when a new value comes in or the value goes.
+    in_file: bool,
 }
 
 impl SecretState {
@@ -137,6 +140,18 @@ impl OutputState {
             .iter()
             .all(|s| !s.config.required || s.delivered.is_some())
     }
+}
+
+/// The configured secrets by state ([`Agent::secret_counts`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct SecretCounts {
+    /// Readable, and its value in its file.
+    pub current: u64,
+    /// Refused for good; its file per `on_revoked`.
+    pub refused: u64,
+    /// Neither yet: not read, or not written (the first set incomplete, a
+    /// write that failed).
+    pub pending: u64,
 }
 
 /// What a round did, for the loop and the tests.
@@ -185,6 +200,7 @@ impl Agent {
                     config,
                     delivered: None,
                     refused: None,
+                    in_file: false,
                 })
                 .collect();
             outputs.push(OutputState {
@@ -308,9 +324,10 @@ impl Agent {
                 self.retry = Some((now + wait, backoff));
             }
         }
-        metrics::agent().round(round.transient, started.elapsed());
         self.next_round = Some(now + self.jitter.spread(self.round_interval()));
         self.write_changed(&mut round);
+        // The writes, their notifications and the status files included.
+        metrics::agent().round(round.transient, started.elapsed());
         round
     }
 
@@ -336,15 +353,23 @@ impl Agent {
 
     /// The secrets' states, for the gauge.
     fn count_secrets(&self) {
-        let (mut current, mut refused, mut pending) = (0, 0, 0);
+        let counts = self.secret_counts();
+        metrics::agent().secrets(counts.current, counts.refused, counts.pending);
+    }
+
+    /// The secrets by state, as `ferritor.agent.secrets` shows them: current
+    /// only once its value is in its file (not while the first set waits
+    /// for a required secret, nor after a write that failed).
+    pub fn secret_counts(&self) -> SecretCounts {
+        let mut counts = SecretCounts::default();
         for secret in self.outputs.iter().flat_map(|o| &o.secrets) {
-            match (&secret.refused, &secret.delivered) {
-                (Some(_), _) => refused += 1,
-                (None, Some(_)) => current += 1,
-                (None, None) => pending += 1,
+            match (&secret.refused, secret.in_file) {
+                (Some(_), _) => counts.refused += 1,
+                (None, true) => counts.current += 1,
+                (None, false) => counts.pending += 1,
             }
         }
-        metrics::agent().secrets(current, refused, pending);
+        counts
     }
 
     /// What a watch stream should cover: every secret that can change (not
@@ -628,6 +653,7 @@ fn accept(secret: &mut SecretState, reply: pb::GetSecretResponse, dirty: &mut bo
     if changed {
         tracing::info!(path = %secret.config.path, version, "new version");
         secret.delivered = Some(Delivered { version, value });
+        secret.in_file = false;
         *dirty = true;
     }
 }
@@ -660,6 +686,7 @@ fn refuse(
         next_try: now + backoff,
     });
     if secret.config.on_revoked == OnRevoked::Remove && secret.delivered.take().is_some() {
+        secret.in_file = false;
         *dirty = true;
     }
 }
@@ -683,6 +710,9 @@ fn write_if_changed(output: &mut OutputState) -> Result<bool, FilesError> {
         })
         .collect();
     output.writer.write(&files)?;
+    for secret in &mut output.secrets {
+        secret.in_file = secret.delivered.is_some();
+    }
     let first = !output.written;
     output.written = true;
     output.dirty = false;

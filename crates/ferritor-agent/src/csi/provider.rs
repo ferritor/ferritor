@@ -394,6 +394,7 @@ impl Provider {
             let outcome = match (listed, &kept_here) {
                 // Listed at the version this volume already has.
                 (Some(version), Some(read)) if read.version == version => {
+                    metrics::provider().answered_from_memory("read");
                     Outcome::Read(read.clone())
                 }
                 _ => self.read(identity, &path, listed, client, now).await?,

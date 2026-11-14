@@ -322,13 +322,13 @@ to what a scrape returns.
 | Instrument | Prometheus | Kind | Attributes |
 |---|---|---|---|
 | `ferritor.agent.rounds` | `ferritor_agent_rounds_total` | counter | `result` (ok; transient: stopped by a transient refusal) |
-| `ferritor.agent.round.duration` | `ferritor_agent_round_duration_seconds` | histogram (s) | `result` |
+| `ferritor.agent.round.duration` | `ferritor_agent_round_duration_seconds` | histogram (s) | `result`; the round's writes, notifications and status files included |
 | `ferritor.agent.calls` | `ferritor_agent_calls_total` | counter | `call` (get, list, watch), `result` (ok, permission_denied, not_found, invalid, transient) |
 | `ferritor.agent.writes` | `ferritor_agent_writes_total` | counter | `result` (ok, failed): sets of files swapped in |
 | `ferritor.agent.notifications` | `ferritor_agent_notifications_total` | counter | `kind` (signal, command), `result` (ok, failed, timed_out: a command still running after 60 s). A signal counts once per process it's sent to |
 | `ferritor.agent.exchanges` | `ferritor_agent_exchanges_total` | counter | `result` (ok, failed): with `token_file` |
 | `ferritor.agent.watch.events` | `ferritor_agent_watch_events_total` | counter | `event` (ready, changed, resync, ended, failed) |
-| `ferritor.agent.secrets` | `ferritor_agent_secrets` | gauge | `state` (current; refused: for good, its file per `on_revoked`; pending: neither yet) |
+| `ferritor.agent.secrets` | `ferritor_agent_secrets` | gauge | `state` (current: readable, its value in its file; refused: for good, its file per `on_revoked`; pending: neither yet, not read or not written: the first set waiting for a required secret, a write that failed) |
 | `ferritor.agent.last_success` | `ferritor_agent_last_success_seconds` | gauge (unix s) | when a round last succeeded; absent before the first |
 | `ferritor.agent.watch.ready` | `ferritor_agent_watch_ready` | gauge | 1 while a ready stream covers every watched secret |
 | `ferritor.agent.certificate.expiry` | `ferritor_agent_certificate_expiry_seconds` | gauge (unix s) | the client certificate in use: from its file, or as exchanged |

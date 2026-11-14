@@ -58,6 +58,9 @@ impl Authorizer for Grants {
             (Caller::Identity(_), Action::Read, Target::Path(path)) => {
                 SecretPath::parse("billing/app").is_ok_and(|prefix| path.is_under(&prefix))
             }
+            (Caller::Identity(_), Action::List, Target::Below(path)) => {
+                SecretPath::parse("billing/app").is_ok_and(|prefix| *path == prefix)
+            }
             _ => false,
         };
         if allowed {
@@ -122,14 +125,22 @@ async fn a_scrape_holds_every_documented_metric_and_no_name() {
         )
         .unwrap();
     provider.mount_at(&request, Instant::now()).await.unwrap();
+    // Another pod's prefix volume, twice, nothing changed: the first lists
+    // and takes the read the first pod's mount shares; the second takes the
+    // listing from memory and keeps the volume's own value at the listed
+    // version.
+    let prefix = env
+        .request("api-2", &token, &[("prefix", "billing/app")])
+        .unwrap();
+    for _ in 0..2 {
+        provider.mount_at(&prefix, Instant::now()).await.unwrap();
+    }
 
     // What this test doesn't make happen, recorded by hand so it shows.
     let agent_metrics = metrics::agent();
     agent_metrics.notification("command", "ok");
     agent_metrics.watch_event("ready");
-    let provider_metrics = metrics::provider();
-    provider_metrics.answered_from_memory("read");
-    provider_metrics.watch_event("ready");
+    metrics::provider().watch_event("ready");
 
     let (status, body) = get(addr, "127.0.0.1").await.unwrap();
     assert_eq!(status, 200, "{body}");
@@ -150,11 +161,14 @@ async fn a_scrape_holds_every_documented_metric_and_no_name() {
         "ferritor_agent_exchanges_total{result=\"ok\"} 1",
         "ferritor_agent_secrets{state=\"current\"} 1",
         "ferritor_agent_watch_ready 0",
-        "ferritor_csi_mounts_total{result=\"ok\"} 1",
+        "ferritor_csi_mounts_total{result=\"ok\"} 3",
         "ferritor_csi_calls_total{call=\"get\",result=\"ok\"} 1",
+        "ferritor_csi_calls_total{call=\"list\",result=\"ok\"} 1",
+        "ferritor_csi_from_memory_total{kind=\"read\"} 2",
+        "ferritor_csi_from_memory_total{kind=\"listing\"} 1",
         "ferritor_csi_exchanges_total{result=\"issued\"} 1",
         "ferritor_csi_identities 1",
-        "ferritor_csi_volumes 1",
+        "ferritor_csi_volumes 2",
         "ferritor_csi_watch_streams 0",
     ] {
         assert!(body.lines().any(|l| l == line), "no {line:?} in:\n{body}");
