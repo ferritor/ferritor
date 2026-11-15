@@ -58,8 +58,8 @@ accordingly.
 | Client hosts (where the CLI or an application runs) | the values they read, the shares typed into them, their certificate's key | what that identity may do, and the shares entered there |
 | Database administrators, backups | one database each, or both | wrapped keys only, never a usable one; integrity and availability (below) |
 | The network | | nothing: TLS with a client certificate on every connection to the API |
-| Whoever reaches the Prometheus port (`[metrics] exporter = "prometheus"`) | the metrics | the sealed state, counts (namespaces, stored policies, the policy revision) and rates (requests, denials, refusals): never a path, an identity, a namespace's name or a value. Loopback by default; elsewhere TLS, with `client_ca` to say who may scrape ([operations](/operations/running#metrics)) |
-| Whoever reaches an agent's or a CSI provider's Prometheus port | their metrics | counts, times and results (rounds, calls and refusals by kind, secrets refused, mounts, certificate expiry): never a path, an identity, a pod, a file name or a value. Plaintext: loopback by default, elsewhere only with `tls = false` ([agent](/guides/agent#metrics), [CSI](/guides/csi#metrics)) |
+| Whoever reaches the Prometheus port (`[metrics] exporter = "prometheus"`) | the metrics | the sealed state, counts (namespaces, stored policies, the policy revision) and rates (requests, denials, refusals): never a path, an identity, a namespace's name or a value. Loopback by default; elsewhere TLS, with `client_ca` to say who may scrape ([monitoring](/operations/monitoring#choosing-an-exporter)) |
+| Whoever reaches an agent's or a CSI provider's Prometheus port | their metrics | counts, times and results (rounds, calls and refusals by kind, secrets refused, mounts, certificate expiry): never a path, an identity, a pod, a file name or a value. Plaintext: loopback by default, elsewhere only with `tls = false` ([monitoring](/operations/monitoring#choosing-an-exporter)) |
 
 The boundaries that matter: the server process (keys exist in usable form
 only inside it), the client CA (it decides who exists), the shares (they

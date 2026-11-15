@@ -124,7 +124,8 @@ What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
 | Topic | |
 |---|---|
-| [Operations](docs/src/content/docs/operations/running.md) | health and readiness, shutdown, metrics, routine and recovery tasks |
+| [Operations](docs/src/content/docs/operations/running.md) | health and readiness, shutdown, rate limits, routine and recovery tasks |
+| [Monitoring](docs/src/content/docs/operations/monitoring.md) | metrics from the server, the agent and the CSI provider (OTLP or Prometheus), what to alert on, Grafana dashboards |
 | [Key management](docs/src/content/docs/operations/key-management.md) | seal and unseal, namespaces, rekey, rotate, rewrap, destroying KEKs, keyring refresh |
 | [Audit log](docs/src/content/docs/operations/audit.md) | what's recorded, the hash chain and signatures, `ferritor audit verify` |
 | [Backup and restore](docs/src/content/docs/operations/backup-restore.md) | backing up two databases that must match, and the shares |
@@ -152,6 +153,7 @@ crates/ferritor-keystore    the keys database: migrations and queries
 crates/ferritor-datastore   the data database: migrations and queries
 crates/ferritor-server      the server (library + binary)
 crates/ferritor-client      talking to a server over gRPC: the library the CLI and the agent share
+crates/ferritor-metrics     metrics for every binary: OTLP or a Prometheus scrape
 crates/ferritor-cli         the `ferritor` CLI (library + binary)
 crates/ferritor-agent       keeps an application's secrets current as files (`ferritor-agent`)
 crates/ferritor-testkit     test helpers: throwaway databases, a test CA

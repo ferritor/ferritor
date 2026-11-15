@@ -1,8 +1,8 @@
 //! The agent's and the CSI provider's metrics for Prometheus end to end: a
 //! round and a mount against a real server in process (with its token
 //! exchange), scraped from the listener `[metrics]` starts. The families a
-//! scrape returns are exactly the ones `agent.md`'s and `csi.md`'s tables
-//! name, so the docs can't drift; no path, identity or pod is in it. One
+//! scrape returns are exactly the ones `monitoring.md`'s agent and CSI
+//! provider tables name, so the docs can't drift; no path, identity or pod is in it. One
 //! test in its own binary, since the meter provider is process-wide.
 //!
 //! Unix only: the server, in process here, runs on Unix.
@@ -43,8 +43,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tonic::service::Routes;
 
 /// The documentation the scrape is held to.
-const AGENT_MD: &str = include_str!("../../../docs/src/content/docs/guides/agent.md");
-const CSI_MD: &str = include_str!("../../../docs/src/content/docs/guides/csi.md");
+const MONITORING: &str = include_str!("../../../docs/src/content/docs/operations/monitoring.md");
 
 const WRITER: &str = "ops/writer";
 
@@ -148,9 +147,9 @@ async fn a_scrape_holds_every_documented_metric_and_no_name() {
         .into_iter()
         .filter(|f| f.starts_with("ferritor_agent_") || f.starts_with("ferritor_csi_"))
         .collect();
-    let documented: BTreeSet<String> = documented_families(AGENT_MD, "ferritor.agent.")
+    let documented: BTreeSet<String> = documented_families("The agent", "ferritor.agent.")
         .into_iter()
-        .chain(documented_families(CSI_MD, "ferritor.csi."))
+        .chain(documented_families("The CSI provider", "ferritor.csi."))
         .collect();
     assert_eq!(scraped, documented);
     // What happened, as counted.
@@ -211,12 +210,12 @@ fn families(body: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The Prometheus column of a doc's metrics table (its "Metrics" section,
-/// rows of instruments starting with `prefix`).
-fn documented_families(doc: &str, prefix: &str) -> BTreeSet<String> {
-    let section = doc
+/// The Prometheus column of `monitoring.md`'s table in section `title`
+/// (rows of instruments starting with `prefix`).
+fn documented_families(title: &str, prefix: &str) -> BTreeSet<String> {
+    let section = MONITORING
         .split("\n## ")
-        .find(|s| s.starts_with("Metrics\n"))
+        .find(|s| s.starts_with(&format!("{title}\n")))
         .unwrap_or_default();
     section
         .lines()

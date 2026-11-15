@@ -297,39 +297,11 @@ anything.
 
 ## Metrics
 
-The provider's metrics leave it as the agent's and the server's do
-([agent](/guides/agent#metrics), [running](/operations/running#metrics)),
-chosen by `[metrics] exporter`: `otlp` (the standard `OTEL_*` variables;
-`OTEL_SERVICE_NAME` defaults to `ferritor-csi-provider`), `prometheus` or
-`none`; without the section, OTLP if `OTEL_EXPORTER_OTLP_ENDPOINT` is
-set, off otherwise. Read at startup.
-
-The Prometheus endpoint is plaintext: on `127.0.0.1:9466` by default
-(answering only requests addressed to loopback), anywhere else only with
-`tls = false` said, which warns at startup. For Prometheus in the cluster
-to scrape it on the pod's address, listen on `0.0.0.0:9466` with
-`tls = false`, and give the container that port. What it shows is counts,
-times and results: no pod, identity, path or file name, and nothing of a
-token or value.
-
-Request durations are bucketed from 1 ms to 10 s. A test holds the table
-to what a scrape returns.
-
-| Instrument | Prometheus | Kind | Attributes |
-|---|---|---|---|
-| `ferritor.csi.mounts` | `ferritor_csi_mounts_total` | counter | `result` (ok, refused, failed: transient, the volume as it is; invalid: the `SecretProviderClass`) |
-| `ferritor.csi.mount.duration` | `ferritor_csi_mount_duration_seconds` | histogram (s) | `result` |
-| `ferritor.csi.calls` | `ferritor_csi_calls_total` | counter | `call` (get, list, watch), `result` (ok, permission_denied, not_found, invalid, transient) |
-| `ferritor.csi.from_memory` | `ferritor_csi_from_memory_total` | counter | `kind` (read: shared, vouched for by a watch, or the volume's own value at the version its listing shows; listing: shared, or vouched for by a watch; refusal: remembered, backing off): answered without the server |
-| `ferritor.csi.exchanges` | `ferritor_csi_exchanges_total` | counter | `result` (issued, refused, failed): pods' tokens, renewals included |
-| `ferritor.csi.watch.events` | `ferritor_csi_watch_events_total` | counter | `event` (ready, changed, resync, ended, failed) |
-| `ferritor.csi.identities` | `ferritor_csi_identities` | gauge | identities with a certificate on this node |
-| `ferritor.csi.volumes` | `ferritor_csi_volumes` | gauge | volumes remembered |
-| `ferritor.csi.watch.streams` | `ferritor_csi_watch_streams` | gauge | identities' watch streams open and ready |
-
-Worth an alert: `ferritor_csi_mounts_total{result="failed"}` rising (pods
-waiting on a server they can't reach, or a sealed one), and
-`{result="refused"}` after a policy change.
+`[metrics]` in the provider's config chooses how its metrics leave it, as
+the server's do: OTLP, Prometheus (plaintext, `127.0.0.1:9466` by default)
+or none. Its instruments (mounts, calls, answers from memory, identities,
+volumes), what to alert on, a `PodMonitor` and a Grafana dashboard:
+[monitoring](/operations/monitoring#the-csi-provider).
 
 ## Security
 

@@ -168,7 +168,7 @@ starts sealed meanwhile, so the shares still unseal it. Each KMS call ends
 within 5 seconds, its own retry (after 200 ms) included.
 
 <a id="metrics"></a>`[metrics]`: how metrics leave the server (see
-[operations](/operations/running#metrics)). Read at startup only.
+[monitoring](/operations/monitoring#the-server)). Read at startup only.
 
 | Key | Default | |
 |---|---|---|

@@ -1,7 +1,7 @@
 //! Metrics for Prometheus end to end: real operations through `Secrets`,
 //! scraped from the metrics listener in plaintext (loopback) and over TLS
 //! with a client CA. The families a scrape returns are exactly the ones
-//! `running.md`'s table names, so the two can't drift. One test in its own
+//! `monitoring.md`'s server table names, so the two can't drift. One test in its own
 //! binary, since the meter provider is process-wide.
 
 use std::collections::BTreeSet;
@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 const ANON: Caller = Caller::Unauthenticated;
 
 /// The documentation the scrape is held to.
-const RUNNING: &str = include_str!("../../../docs/src/content/docs/operations/running.md");
+const MONITORING: &str = include_str!("../../../docs/src/content/docs/operations/monitoring.md");
 
 /// Allows everything but deleting.
 struct NoDeletes;
@@ -208,13 +208,13 @@ fn families(body: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The Prometheus column of `running.md`'s metrics table (its "Metrics"
-/// section only).
+/// The Prometheus column of `monitoring.md`'s server table (its "The
+/// server" section only).
 fn documented_families() -> TestResult<BTreeSet<String>> {
-    let section = RUNNING
+    let section = MONITORING
         .split("\n## ")
-        .find(|s| s.starts_with("Metrics\n"))
-        .ok_or("running.md has no Metrics section")?;
+        .find(|s| s.starts_with("The server\n"))
+        .ok_or("monitoring.md has no \"The server\" section")?;
     Ok(section
         .lines()
         .filter(|line| line.starts_with("| `ferritor."))

@@ -93,6 +93,7 @@ export default defineConfig({
 					label: 'Operations',
 					items: [
 						{ label: 'Operations', slug: 'operations/running' },
+						{ label: 'Monitoring', slug: 'operations/monitoring' },
 						{ label: 'Key management', slug: 'operations/key-management' },
 						{ label: 'Audit log', slug: 'operations/audit' },
 						{ label: 'Backup and restore', slug: 'operations/backup-restore' },
