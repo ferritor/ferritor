@@ -325,7 +325,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(ferritor_csi_mounts_total{result=\"ok\", pod=~\"$pod\"}[1h])) / sum(increase(ferritor_csi_mounts_total{result=~\"ok|failed\", pod=~\"$pod\"}[1h]))",
+          "expr": "(sum(increase(ferritor_csi_mounts_total{result=\"ok\", pod=~\"$pod\"}[1h])) or vector(0)) / sum(increase(ferritor_csi_mounts_total{result=~\"ok|failed\", pod=~\"$pod\"}[1h]))",
           "instant": true,
           "refId": "A"
         }

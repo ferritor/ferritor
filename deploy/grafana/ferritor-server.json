@@ -228,7 +228,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "The stored policies' verified revision: compare across servers",
+      "description": "The stored policies' verified revision, per server: one differing from the others for long is a rollback",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -259,7 +259,7 @@
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "auto",
-        "textMode": "value",
+        "textMode": "value_and_name",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -274,9 +274,10 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(ferritor_policy_revision{pod=~\"$pod\"})",
+          "expr": "max by (pod) (ferritor_policy_revision{pod=~\"$pod\"})",
           "instant": true,
-          "refId": "A"
+          "refId": "A",
+          "legendFormat": "{{pod}}"
         }
       ],
       "title": "Policy rev.",

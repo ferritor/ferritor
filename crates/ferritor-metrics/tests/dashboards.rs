@@ -5,7 +5,7 @@
 //! Each panel asks for the dashboard's data source variable, and each
 //! dashboard has its own uid.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MONITORING: &str = include_str!("../../../docs/src/content/docs/operations/monitoring.md");
 
@@ -24,13 +24,19 @@ const DASHBOARDS: [(&str, &str); 3] = [
     ),
 ];
 
-/// Every Prometheus family the monitoring page's tables name.
-fn documented() -> BTreeSet<String> {
+/// Every Prometheus family the monitoring page's tables name, with its
+/// kind as the table says it (`counter`, `gauge`, `histogram (s)`…).
+fn documented() -> BTreeMap<String, String> {
     MONITORING
         .lines()
         .filter(|line| line.starts_with("| `ferritor."))
-        .filter_map(|line| line.split('|').nth(2))
-        .map(|cell| cell.trim().trim_matches('`').to_owned())
+        .filter_map(|line| {
+            let cells: Vec<&str> = line.split('|').collect();
+            Some((
+                cells.get(2)?.trim().trim_matches('`').to_owned(),
+                cells.get(3)?.trim().to_owned(),
+            ))
+        })
         .collect()
 }
 
@@ -50,14 +56,19 @@ fn metrics_in(expr: &str) -> BTreeSet<String> {
 }
 
 /// The documented family `name` belongs to: itself, or for a histogram's
-/// series (`_bucket`, `_sum`, `_count`) the histogram.
-fn family<'a>(name: &str, documented: &'a BTreeSet<String>) -> Option<&'a String> {
-    documented.get(name).or_else(|| {
-        ["_bucket", "_sum", "_count"]
-            .iter()
-            .find_map(|suffix| name.strip_suffix(suffix))
-            .and_then(|family| documented.get(family))
-    })
+/// series (`_bucket`, `_sum`, `_count`) the histogram, never another kind.
+fn family<'a>(name: &str, documented: &'a BTreeMap<String, String>) -> Option<&'a String> {
+    documented
+        .get_key_value(name)
+        .map(|(family, _)| family)
+        .or_else(|| {
+            ["_bucket", "_sum", "_count"]
+                .iter()
+                .find_map(|suffix| name.strip_suffix(suffix))
+                .and_then(|base| documented.get_key_value(base))
+                .filter(|(_, kind)| kind.starts_with("histogram"))
+                .map(|(family, _)| family)
+        })
 }
 
 /// Every panel, rows' nested ones included.
@@ -118,13 +129,18 @@ fn a_query_names_its_families() {
             "ferritor_csi_volumes"
         ]
     );
-    let documented: BTreeSet<String> = [
-        "ferritor_csi_mount_duration_seconds",
-        "ferritor_csi_volumes",
+    let documented: BTreeMap<String, String> = [
+        ("ferritor_csi_mount_duration_seconds", "histogram (s)"),
+        ("ferritor_csi_volumes", "gauge"),
+        ("ferritor_csi_mounts_total", "counter"),
     ]
-    .map(str::to_owned)
+    .map(|(name, kind)| (name.to_owned(), kind.to_owned()))
     .into();
     assert!(found.iter().all(|m| family(m, &documented).is_some()));
     // A name ending in _count is its own unless only the histogram is known.
     assert!(family("ferritor_csi_volume_count", &documented).is_none());
+    // A histogram's suffix on a counter or a gauge isn't a series of it.
+    assert!(family("ferritor_csi_volumes_count", &documented).is_none());
+    assert!(family("ferritor_csi_mounts_total_bucket", &documented).is_none());
+    assert!(family("ferritor_csi_mount_duration_seconds_sum", &documented).is_some());
 }

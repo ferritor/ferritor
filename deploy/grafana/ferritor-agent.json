@@ -881,8 +881,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (pod) (ferritor_agent_watch_ready{namespace=~\"$namespace\", app=~\"$app\", pod=~\"$pod\"})",
-          "legendFormat": "{{pod}}",
+          "expr": "max by (namespace, pod) (ferritor_agent_watch_ready{namespace=~\"$namespace\", app=~\"$app\", pod=~\"$pod\"})",
+          "legendFormat": "{{namespace}}/{{pod}}",
           "refId": "A"
         }
       ],
