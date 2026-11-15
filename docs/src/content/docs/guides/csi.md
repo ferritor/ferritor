@@ -1,5 +1,5 @@
 ---
-title: 'The CSI provider'
+title: 'CSI provider'
 description: 'Secrets as files in Kubernetes pods through the Secrets Store CSI Driver, one provider per node, each pod reading with its own identity.'
 seo:
   title: 'The ferritor CSI provider: secrets as files in pods'

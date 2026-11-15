@@ -117,8 +117,9 @@ What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 | [Policy](docs/src/content/docs/guides/policy.md) | who may do what, on which paths: config rules and stored policies, `ferritor policy` and its APIs |
 | [TLS and identity](docs/src/content/docs/guides/tls.md) | client certificates, `ferritor://` identities, expiry and CRL revocation |
 | [Workload identity](docs/src/content/docs/guides/workload-identity.md) | platform tokens exchanged for short-lived certificates: issuers, mappings, revoking, the CLI and the agent |
-| [The agent](docs/src/content/docs/guides/agent.md) | secrets as files: `ferritor-agent` as a Kubernetes sidecar, a systemd service or a Windows service, its settings, reading the files, failures |
-| [The CSI provider](docs/src/content/docs/guides/csi.md) | secrets as files in Kubernetes pods, one provider per node: the volume, refreshing, failures, running it |
+| [Agent on Linux](docs/src/content/docs/guides/agent.md) | secrets as files: `ferritor-agent` as a Kubernetes sidecar or a systemd service (the settings both platforms share are here), its settings, reading the files, failures |
+| [Agent on Windows Server](docs/src/content/docs/guides/agent-windows.md) | the agent on Windows Server: access lists, links, the process lock, as a Windows service |
+| [CSI provider](docs/src/content/docs/guides/csi.md) | secrets as files in Kubernetes pods, one provider per node: the volume, refreshing, failures, running it |
 
 **Operations**
 

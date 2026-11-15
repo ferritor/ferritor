@@ -448,7 +448,7 @@ None of these is fixed yet.
    writes a dump of it if `LocalDumps` is configured (it isn't by
    default). The agent sets each file's access list itself, but not its
    own key file's: whatever created that decides
-   ([the agent](/guides/agent#windows)).
+   ([agent on Windows Server](/guides/agent-windows)).
 
 ## Checklist
 

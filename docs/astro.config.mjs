@@ -85,8 +85,17 @@ export default defineConfig({
 						{ label: 'Policy', slug: 'guides/policy' },
 						{ label: 'TLS and identity', slug: 'guides/tls' },
 						{ label: 'Workload identity', slug: 'guides/workload-identity' },
-						{ label: 'The agent', slug: 'guides/agent' },
-						{ label: 'The CSI provider', slug: 'guides/csi' },
+						{
+							label: 'Linux',
+							items: [
+								{ label: 'Agent', slug: 'guides/agent' },
+								{ label: 'CSI provider', slug: 'guides/csi' },
+							],
+						},
+						{
+							label: 'Windows Server',
+							items: [{ label: 'Agent', slug: 'guides/agent-windows' }],
+						},
 					],
 				},
 				{
