@@ -131,7 +131,9 @@ RSA-2048 key for the RS256 and RSA-CSR tests (`ring` can't generate RSA
 keys), which signs nothing outside them. Audit entries are read through
 `ferritor_testkit::Captured::lines`, which hides the hash chain's own lines and
 fields (`Captured::raw` has the bytes). CLI tests run the real `ferritor`
-binary against an in-process server. The metrics test has its own binary,
+binary against an in-process server. The metrics tests (the server's
+`tests/prometheus.rs` and `tests/metrics.rs`, the agent's and the CSI
+provider's `ferritor-agent/tests/metrics.rs`) each have their own binary,
 since the OpenTelemetry provider is process-wide.
 
 Auto-unseal is tested with `MemoryKms`, a provider that keeps its key in

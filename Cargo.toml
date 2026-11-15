@@ -33,6 +33,7 @@ ferritor-client = { path = "crates/ferritor-client" }
 ferritor-core = { path = "crates/ferritor-core" }
 ferritor-datastore = { path = "crates/ferritor-datastore" }
 ferritor-keystore = { path = "crates/ferritor-keystore" }
+ferritor-metrics = { path = "crates/ferritor-metrics" }
 # Only a dev-dependency of the CLI (its end-to-end tests run a server in
 # process); the CLI itself must talk to the server over gRPC only.
 ferritor-server = { path = "crates/ferritor-server" }

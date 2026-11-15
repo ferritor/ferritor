@@ -11,6 +11,8 @@ use ferritor_client::exchange::TokenSource;
 use ferritor_core::path::SecretPath;
 use serde::Deserialize;
 
+use crate::metrics::{MetricsConfig, RawMetrics};
+
 /// The default poll interval (`interval_secs`), and its bounds.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
 pub const MIN_INTERVAL: Duration = Duration::from_secs(5);
@@ -169,6 +171,8 @@ pub struct Config {
     /// rather than at the next round.
     pub watch: bool,
     pub outputs: Vec<Output>,
+    /// `[metrics]`: the exporter, and where the scrape is served.
+    pub metrics: MetricsConfig,
 }
 
 #[derive(Deserialize)]
@@ -186,6 +190,7 @@ struct RawConfig {
     detect: Detect,
     #[serde(default)]
     output: Vec<RawOutput>,
+    metrics: Option<RawMetrics>,
 }
 
 #[derive(Deserialize)]
@@ -271,11 +276,14 @@ impl Config {
             }
             outputs.push(output);
         }
+        let metrics = crate::metrics::resolve(raw.metrics, ferritor_metrics::DEFAULT_AGENT_ADDR)
+            .map_err(invalid)?;
         Ok(Self {
             server,
             interval,
             watch: raw.watch.unwrap_or(true),
             outputs,
+            metrics,
         })
     }
 }

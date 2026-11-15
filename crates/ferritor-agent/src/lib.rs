@@ -9,5 +9,6 @@ mod connection;
 #[cfg(unix)]
 pub mod csi;
 pub mod files;
+pub mod metrics;
 mod notify;
 pub mod run;

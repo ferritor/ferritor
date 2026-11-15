@@ -20,7 +20,7 @@
 //! and may well be set in the same shell or `.env`, so a misspelled
 //! `FERRITOR_…` variable is silently ignored.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -159,7 +159,7 @@ pub enum MetricsExporter {
 
 /// Where the Prometheus endpoint listens by default: loopback, and OpenTelemetry's
 /// usual Prometheus port.
-pub const DEFAULT_METRICS_ADDR: &str = "127.0.0.1:9464";
+pub const DEFAULT_METRICS_ADDR: &str = ferritor_metrics::DEFAULT_SERVER_ADDR;
 
 /// `[metrics]` resolved by [`Settings::metrics`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1185,10 +1185,9 @@ fn ensure_loopback(addr: SocketAddr) -> Result<(), config::ConfigError> {
 /// The one loopback rule, for where dev mode may listen and for the hosts
 /// it answers (`http::loopback_hosts_only`), so a server can't bind to an
 /// address its own requests are then refused for. 127.0.0.0/8, `::1`, and
-/// either as an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`).
-pub fn is_loopback(ip: IpAddr) -> bool {
-    ip.to_canonical().is_loopback()
-}
+/// either as an IPv4-mapped IPv6 address (`::ffff:127.0.0.1`): every
+/// ferritor binary's (`ferritor_core::net`).
+pub use ferritor_core::net::is_loopback;
 
 #[cfg(test)]
 mod tests {

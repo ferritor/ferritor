@@ -11,6 +11,7 @@ use ferritor_agent::agent::error_chain;
 use ferritor_agent::csi::config::ProviderConfig;
 use ferritor_agent::csi::proto::csi_driver_provider_server::CsiDriverProviderServer;
 use ferritor_agent::csi::provider::Provider;
+use ferritor_agent::metrics;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
 use tracing_subscriber::EnvFilter;
@@ -53,7 +54,18 @@ pub async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match serve(config).await {
+    // Before anything records: the instruments bind to the provider there
+    // is at their first use.
+    let metrics = match metrics::start(&config.metrics, "ferritor-csi-provider", true).await {
+        Ok(metrics) => metrics,
+        Err(e) => {
+            eprintln!("error: metrics: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let served = serve(config).await;
+    metrics.finish().await;
+    match served {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");

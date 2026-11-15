@@ -58,11 +58,7 @@ use std::time::Duration;
 
 use opentelemetry::metrics::{Counter, Histogram, Meter, ObservableGauge};
 use opentelemetry::{KeyValue, global};
-use opentelemetry_otlp::{ExporterBuildError, MetricExporter, WithExportConfig, WithTonicConfig};
-use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
-use tonic::transport::{Certificate, ClientTlsConfig, Identity};
-use zeroize::Zeroizing;
 
 use crate::audit::Gate;
 use crate::policy_store::PolicyView;
@@ -72,162 +68,30 @@ use crate::seal::Seal;
 use crate::tls::ServerTls;
 use crate::watch::Watch;
 
-/// Where and how to export: built from the standard variables
-/// ([`Export::from_env`]) or directly (tests).
-#[derive(Default)]
-pub struct Export {
-    /// As given; `None`: the exporter's default (`http://localhost:4317`).
-    pub endpoint: Option<String>,
-    /// `OTEL_EXPORTER_OTLP_INSECURE`: a scheme-less endpoint is plaintext.
-    pub insecure: bool,
-    /// Trusted for the collector's certificate, besides the public roots
-    /// (`OTEL_EXPORTER_OTLP_CERTIFICATE`: a private CA, PEM).
-    pub ca_pem: Option<Vec<u8>>,
-    /// Presented to the collector (mTLS: `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE`
-    /// and `OTEL_EXPORTER_OTLP_CLIENT_KEY`, PEM, both or neither).
-    pub client: Option<(Vec<u8>, Zeroizing<Vec<u8>>)>,
-}
+pub use ferritor_metrics::{
+    Chosen, Export, Exporting, MetricsError, StartError, otlp_endpoint_set,
+};
 
-#[derive(Debug, thiserror::Error)]
-pub enum MetricsError {
-    #[error("reading {var} ({path})")]
-    Read {
-        var: &'static str,
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE and OTEL_EXPORTER_OTLP_CLIENT_KEY go together")]
-    HalfAClientIdentity,
-    #[error("building the OTLP exporter")]
-    Exporter(#[source] ExporterBuildError),
-}
+/// The service name the exporters report unless `OTEL_SERVICE_NAME` says
+/// otherwise.
+const SERVICE: &str = "ferritor-server";
 
-/// The metrics-specific variable, else the general one (the OTLP spec's
-/// precedence).
-fn var(name: &str) -> Option<String> {
-    let specific = name.replacen("OTEL_EXPORTER_OTLP_", "OTEL_EXPORTER_OTLP_METRICS_", 1);
-    [specific.as_str(), name]
-        .into_iter()
-        .find_map(|var| std::env::var(var).ok())
-        .filter(|value| !value.trim().is_empty())
-}
-
-/// Whether an OTLP endpoint is configured (`OTEL_EXPORTER_OTLP_ENDPOINT`
-/// or its metrics variant), for a warning when another exporter is chosen.
-pub fn otlp_endpoint_set() -> bool {
-    var("OTEL_EXPORTER_OTLP_ENDPOINT").is_some()
-}
-
-impl Export {
-    /// From the standard variables; `None` if no endpoint is set (metrics
-    /// off). The exporter reads the endpoint itself too; the TLS settings
-    /// it doesn't implement, so they're applied here.
-    pub fn from_env() -> Result<Option<Self>, MetricsError> {
-        let Some(endpoint) = var("OTEL_EXPORTER_OTLP_ENDPOINT") else {
-            return Ok(None);
-        };
-        let read = |var_name: &'static str| -> Result<Option<Vec<u8>>, MetricsError> {
-            var(var_name)
-                .map(|path| {
-                    std::fs::read(&path).map_err(|source| MetricsError::Read {
-                        var: var_name,
-                        path,
-                        source,
-                    })
-                })
-                .transpose()
-        };
-        let client = match (
-            read("OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE")?,
-            read("OTEL_EXPORTER_OTLP_CLIENT_KEY")?,
-        ) {
-            (Some(cert), Some(key)) => Some((cert, Zeroizing::new(key))),
-            (None, None) => None,
-            _ => return Err(MetricsError::HalfAClientIdentity),
-        };
-        Ok(Some(Self {
-            endpoint: Some(endpoint),
-            insecure: var("OTEL_EXPORTER_OTLP_INSECURE")
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
-            ca_pem: read("OTEL_EXPORTER_OTLP_CERTIFICATE")?,
-            client,
-        }))
-    }
-
-    /// Whether the collector is reached over TLS, as the OTLP spec says:
-    /// by the scheme, and without one unless insecure.
-    fn uses_tls(&self) -> bool {
-        match self.endpoint.as_deref() {
-            None => false,
-            Some(endpoint) if endpoint.starts_with("https://") => true,
-            Some(endpoint) if endpoint.contains("://") => false,
-            Some(_) => !self.insecure,
-        }
-    }
-
-    /// The TLS to reach the collector with: the public (webpki) roots, a
-    /// private CA if given, and a client certificate for mTLS. Applied by
-    /// us because the exporter's own default for https enables no roots at
-    /// all in tonic 0.14, so it couldn't verify any collector.
-    fn tls(&self) -> ClientTlsConfig {
-        let mut tls = ClientTlsConfig::new().with_webpki_roots();
-        if let Some(ca) = &self.ca_pem {
-            tls = tls.ca_certificate(Certificate::from_pem(ca));
-        }
-        if let Some((cert, key)) = &self.client {
-            tls = tls.identity(Identity::from_pem(cert, key.as_slice()));
-        }
-        tls
-    }
-}
-
-/// Starts exporting as `export` says; `None` when there's nothing to
-/// export to (metrics off). Must run before anything records (see
-/// [`metrics`]), inside the tokio runtime (the exporter uses tonic), and the
-/// returned provider must be shut down at exit to flush.
+/// Starts exporting over OTLP as `export` says ([`ferritor_metrics::init`]);
+/// `None` when there's nothing to export to (metrics off). Before anything
+/// records ([`metrics`]); the provider must be shut down at exit to flush.
 pub fn init(export: Option<Export>) -> Result<Option<SdkMeterProvider>, MetricsError> {
-    let Some(export) = export else {
-        return Ok(None);
-    };
-    let mut exporter = MetricExporter::builder().with_tonic();
-    if let Some(endpoint) = &export.endpoint {
-        // Scheme-less endpoints get theirs from the exporter (insecure:
-        // http, else https), which `uses_tls` mirrors.
-        exporter = exporter.with_endpoint(endpoint);
-    }
-    if export.uses_tls() {
-        exporter = exporter.with_tls_config(export.tls());
-    }
-    let provider = SdkMeterProvider::builder()
-        .with_periodic_exporter(exporter.build().map_err(MetricsError::Exporter)?)
-        .with_resource(
-            Resource::builder()
-                .with_service_name("ferritor-server")
-                .build(),
-        )
-        .build();
-    global::set_meter_provider(provider.clone());
-    Ok(Some(provider))
+    ferritor_metrics::init(export, SERVICE)
+}
+
+/// Installs the exporter `chosen` names ([`ferritor_metrics::start`]).
+pub fn start(chosen: Chosen) -> Result<Exporting, StartError> {
+    ferritor_metrics::start(chosen, SERVICE)
 }
 
 /// Serves the instruments for Prometheus to scrape instead
-/// (`[metrics] exporter = "prometheus"`): the returned [`Scrape`] renders
-/// them on demand. As with [`init`], before anything records; the provider
-/// needs no flush at exit (nothing is pushed), but stays alive as long as
-/// the scrape is served.
+/// ([`ferritor_metrics::init_prometheus`]).
 pub fn init_prometheus() -> (SdkMeterProvider, Scrape) {
-    let scrape = Scrape::new();
-    let provider = SdkMeterProvider::builder()
-        .with_reader(scrape.reader())
-        .with_resource(
-            Resource::builder()
-                .with_service_name("ferritor-server")
-                .build(),
-        )
-        .build();
-    global::set_meter_provider(provider.clone());
-    (provider, scrape)
+    ferritor_metrics::init_prometheus(SERVICE)
 }
 
 /// The instruments that record events, created on first use from the
@@ -638,27 +502,4 @@ pub fn observe(
         );
     }
     gauges
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// TLS or not, as the OTLP spec says: by the scheme, and for an
-    /// endpoint without one, unless `OTEL_EXPORTER_OTLP_INSECURE`.
-    #[test]
-    fn the_scheme_decides_tls_and_none_means_tls_unless_insecure() {
-        let export = |endpoint: &str, insecure| Export {
-            endpoint: Some(endpoint.to_owned()),
-            insecure,
-            ..Export::default()
-        };
-        assert!(export("https://collector:4317", false).uses_tls());
-        assert!(!export("http://localhost:4317", false).uses_tls());
-        assert!(export("collector:4317", false).uses_tls());
-        assert!(!export("collector:4317", true).uses_tls());
-        // The scheme wins over the flag.
-        assert!(export("https://collector:4317", true).uses_tls());
-        assert!(!Export::default().uses_tls());
-    }
 }

@@ -18,9 +18,9 @@ use ferritor_server::crl::StaleWatch;
 use ferritor_server::destroy::Destroy;
 use ferritor_server::health::Readiness;
 use ferritor_server::identity::exchange::{self, Exchange};
+use ferritor_server::metrics::{Chosen, Exporting};
 use ferritor_server::namespaces::Namespaces;
 use ferritor_server::policies::Policies;
-use ferritor_server::prometheus::Scrape;
 use ferritor_server::purge::Purge;
 use ferritor_server::rewrap::Rewrap;
 use ferritor_server::seal::{Seal, SealError};
@@ -29,7 +29,6 @@ use ferritor_server::tls;
 use ferritor_server::tls::ServerTls;
 use ferritor_server::watch::Watch;
 use ferritor_server::{error_chain, grpc, http, keyring, metrics};
-use opentelemetry_sdk::metrics::SdkMeterProvider;
 use secrecy::{ExposeSecret, SecretString};
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -168,64 +167,23 @@ const DRAIN_LIMIT: Duration = Duration::from_secs(15);
 /// the audit drain could together take longer.
 const KUBERNETES_GRACE: Duration = Duration::from_secs(30);
 
-/// How long shutdown waits for the last metrics export, or the last scrape.
-const METRICS_FLUSH_LIMIT: Duration = Duration::from_secs(3);
+/// How long shutdown waits for the last scrape (the last export:
+/// `ferritor_metrics::FLUSH_LIMIT`).
+const METRICS_FLUSH_LIMIT: Duration = ferritor_metrics::FLUSH_LIMIT;
 
-/// The metrics exporter in use.
-enum Exporting {
-    /// Pushing: flushed at exit.
-    Otlp(SdkMeterProvider),
-    /// Scraped: the provider lives as long as the scrape is served.
-    Prometheus {
-        _provider: SdkMeterProvider,
-        scrape: Scrape,
-        listener: PrometheusListener,
-    },
-    Off,
-}
-
-/// Installs the exporter `[metrics]` chose (see `config::MetricsSettings`).
-fn start_metrics(chosen: &config::Metrics) -> anyhow::Result<Exporting> {
-    let otlp = |export: metrics::Export| -> anyhow::Result<Exporting> {
-        let provider = metrics::init(Some(export))
-            .context("starting the OTLP metrics exporter")?
-            .context("the OTLP exporter wasn't installed")?;
-        tracing::info!("exporting metrics over OTLP (OTEL_EXPORTER_OTLP_* settings)");
-        Ok(Exporting::Otlp(provider))
+/// Installs the exporter `[metrics]` chose (see `config::MetricsSettings`),
+/// with the Prometheus listener's settings if that's the one.
+fn start_metrics(
+    chosen: &config::Metrics,
+) -> anyhow::Result<(Exporting, Option<PrometheusListener>)> {
+    let (exporter, listener) = match chosen {
+        config::Metrics::OtlpIfConfigured => (Chosen::OtlpIfConfigured, None),
+        config::Metrics::Otlp => (Chosen::Otlp, None),
+        config::Metrics::Prometheus(listener) => (Chosen::Prometheus, Some(listener.clone())),
+        config::Metrics::Off => (Chosen::Off, None),
     };
-    match chosen {
-        config::Metrics::OtlpIfConfigured => match metrics::Export::from_env()? {
-            Some(export) => otlp(export),
-            None => {
-                tracing::info!(
-                    "metrics off: no OTEL_EXPORTER_OTLP_ENDPOINT, no [metrics] exporter"
-                );
-                Ok(Exporting::Off)
-            }
-        },
-        config::Metrics::Otlp => otlp(metrics::Export::from_env()?.context(
-            "[metrics] exporter = \"otlp\" needs OTEL_EXPORTER_OTLP_ENDPOINT (or \
-             OTEL_EXPORTER_OTLP_METRICS_ENDPOINT)",
-        )?),
-        config::Metrics::Prometheus(listener) => {
-            if metrics::otlp_endpoint_set() {
-                tracing::warn!(
-                    "OTEL_EXPORTER_OTLP_ENDPOINT is set, but [metrics] exporter = \"prometheus\": \
-                     nothing is pushed over OTLP"
-                );
-            }
-            let (provider, scrape) = metrics::init_prometheus();
-            Ok(Exporting::Prometheus {
-                _provider: provider,
-                scrape,
-                listener: listener.clone(),
-            })
-        }
-        config::Metrics::Off => {
-            tracing::info!("metrics off ([metrics] exporter = \"none\")");
-            Ok(Exporting::Off)
-        }
-    }
+    let exporting = metrics::start(exporter).context("starting the metrics exporter")?;
+    Ok((exporting, listener))
 }
 
 /// How long a second signal waits for the audit log before exiting.
@@ -566,7 +524,7 @@ async fn main() -> anyhow::Result<()> {
         .context("setting up TLS and the policy")?;
     // Before anything records (nothing above does): instruments bind to the
     // provider in place when they're created.
-    let exporting = start_metrics(&settings.metrics().map_err(anyhow::Error::msg)?)?;
+    let (exporting, prometheus) = start_metrics(&settings.metrics().map_err(anyhow::Error::msg)?)?;
     let (database_timeout, lock_timeout) = (settings.database_timeout(), settings.lock_timeout());
     migrate(&settings.keys_database_url, &ferritor_keystore::MIGRATOR)
         .await
@@ -695,10 +653,8 @@ async fn main() -> anyhow::Result<()> {
         _ => None,
     };
     // The Prometheus scrape's own listener (see `tls::serve_metrics`).
-    let metrics_serving = match &exporting {
-        Exporting::Prometheus {
-            listener, scrape, ..
-        } => {
+    let metrics_serving = match (exporting.scrape(), &prometheus) {
+        (Some(scrape), Some(listener)) => {
             let addr = listener.addr;
             let tls = if listener.tls {
                 let server_tls = security
@@ -951,25 +907,7 @@ async fn main() -> anyhow::Result<()> {
     {
         tracing::warn!("a scrape still open after {METRICS_FLUSH_LIMIT:?}: not waiting for it");
     }
-    if let Exporting::Otlp(provider) = exporting {
-        // Flushes the last export; blocking, so off the runtime's workers,
-        // and bounded: a collector that doesn't answer mustn't hold the
-        // exit for the exporter's own timeout (10 s by default).
-        let flushed = tokio::time::timeout(
-            METRICS_FLUSH_LIMIT,
-            tokio::task::spawn_blocking(move || provider.shutdown()),
-        )
-        .await;
-        match flushed {
-            Ok(Ok(Ok(()))) => {}
-            Ok(Ok(Err(e))) => tracing::warn!(error = %e, "flushing metrics at shutdown failed"),
-            Ok(Err(e)) => tracing::warn!(error = %e, "flushing metrics at shutdown failed"),
-            Err(_) => tracing::warn!(
-                "the metrics collector didn't answer within {METRICS_FLUSH_LIMIT:?}; the last \
-                 export is lost"
-            ),
-        }
-    }
+    exporting.finish().await;
     tracing::info!("shut down");
     Ok(())
 }

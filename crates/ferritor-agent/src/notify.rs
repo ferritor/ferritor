@@ -50,6 +50,7 @@ pub fn changed(notify: &Notify) {
                     Ok(text) => text.trim().parse::<i32>().ok().into_iter().collect(),
                     Err(e) => {
                         tracing::warn!(pid_file = %path.display(), error = %e, "no process to signal");
+                        crate::metrics::agent().notification("signal", "failed");
                         return;
                     }
                 },
@@ -57,15 +58,20 @@ pub fn changed(notify: &Notify) {
             };
             if pids.is_empty() {
                 tracing::warn!(?target, "no process to signal");
+                crate::metrics::agent().notification("signal", "failed");
             }
             for pid in pids {
                 let sent = Pid::from_raw(pid)
                     .ok_or_else(|| std::io::Error::other("pid 0"))
                     .and_then(|pid| kill_process(pid, raw(*signal)).map_err(Into::into));
                 match sent {
-                    Ok(()) => tracing::info!(pid, ?signal, "signalled the application"),
+                    Ok(()) => {
+                        tracing::info!(pid, ?signal, "signalled the application");
+                        crate::metrics::agent().notification("signal", "ok");
+                    }
                     Err(e) => {
-                        tracing::warn!(pid, ?signal, error = %e, "signalling the application failed")
+                        tracing::warn!(pid, ?signal, error = %e, "signalling the application failed");
+                        crate::metrics::agent().notification("signal", "failed");
                     }
                 }
             }
@@ -76,18 +82,25 @@ pub fn changed(notify: &Notify) {
                 let Some((program, args)) = command.split_first() else {
                     return;
                 };
-                match run(program, args).await {
-                    Ran::Success => tracing::info!(?command, "on_change command ran"),
+                let result = match run(program, args).await {
+                    Ran::Success => {
+                        tracing::info!(?command, "on_change command ran");
+                        "ok"
+                    }
                     Ran::Failed(status) => {
-                        tracing::warn!(?command, %status, "on_change command failed")
+                        tracing::warn!(?command, %status, "on_change command failed");
+                        "failed"
                     }
                     Ran::NotStarted(e) => {
-                        tracing::warn!(?command, error = %e, "on_change command didn't start")
+                        tracing::warn!(?command, error = %e, "on_change command didn't start");
+                        "failed"
                     }
                     Ran::StillRunning => {
-                        tracing::warn!(?command, "on_change command still running; left to itself")
+                        tracing::warn!(?command, "on_change command still running; left to itself");
+                        "timed_out"
                     }
-                }
+                };
+                crate::metrics::agent().notification("command", result);
             });
         }
     }

@@ -1,0 +1,26 @@
+[package]
+name = "ferritor-metrics"
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+edition.workspace = true
+
+# Metrics for every ferritor binary that serves any (the server, the agent,
+# the CSI provider): the OpenTelemetry meter provider, pushed over OTLP or
+# scraped by Prometheus (the text format, written here), and the plaintext
+# scrape listener. Each binary keeps its own instruments and settings.
+[dependencies]
+ferritor-core.workspace = true
+axum.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

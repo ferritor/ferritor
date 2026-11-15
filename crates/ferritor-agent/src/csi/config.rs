@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::config::ConfigError;
+use crate::metrics::{MetricsConfig, RawMetrics};
 
 /// Where the driver looks for providers' sockets: its chart's main
 /// directory (it also looks in `/etc/kubernetes/secrets-store-csi-providers`).
@@ -46,6 +47,8 @@ pub struct ProviderConfig {
     /// Keep a watch stream open per identity, so a read stays valid until
     /// it changes rather than for `share_reads` only.
     pub watch: bool,
+    /// `[metrics]`: the exporter, and where the scrape is served.
+    pub metrics: MetricsConfig,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +64,7 @@ struct Raw {
     forget_volumes_after_secs: Option<u64>,
     max_volume_bytes: Option<usize>,
     watch: Option<bool>,
+    metrics: Option<RawMetrics>,
 }
 
 fn invalid(message: impl Into<String>) -> ConfigError {
@@ -151,6 +155,11 @@ impl ProviderConfig {
             forget_volumes_after,
             max_volume_bytes,
             watch: raw.watch.unwrap_or(true),
+            metrics: crate::metrics::resolve(
+                raw.metrics,
+                ferritor_metrics::DEFAULT_CSI_PROVIDER_ADDR,
+            )
+            .map_err(invalid)?,
         })
     }
 }

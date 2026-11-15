@@ -886,35 +886,23 @@ pub async fn serve(
 /// it's outside every rate limit and the in-flight count, and the audit
 /// gate never hears of it. Plaintext on a loopback address answers only
 /// requests addressed to loopback, as dev mode does ([`serve`]: DNS
-/// rebinding); plaintext anywhere else was asked for by name
-/// (`metrics.tls = false`).
+/// rebinding), through [`ferritor_metrics::serve_plaintext`], as the
+/// agent's and the provider's scrapes are; plaintext anywhere else was
+/// asked for by name (`metrics.tls = false`).
 pub async fn serve_metrics(
     routes: axum::Router,
     listener: TcpListener,
     tls: Option<ServerTls>,
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), tonic::transport::Error> {
-    let mut server = Server::builder().accept_http1(true);
     match tls {
-        None => {
-            let on_loopback = listener
-                .local_addr()
-                .is_ok_and(|addr| crate::config::is_loopback(addr.ip()));
-            let routes = Routes::from(routes);
-            let routes = if on_loopback {
-                http::loopback_hosts_only(routes)
-            } else {
-                routes
-            };
-            server
-                .add_routes(routes)
-                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
-                .await
-        }
+        // The agent's and the provider's listener too.
+        None => ferritor_metrics::serve_plaintext(routes, listener, shutdown).await,
         Some(tls) => {
             let (connections, accepted) = mpsc::channel(16);
             let _accepting = AbortOnDrop(tokio::spawn(accept(listener, tls, connections)));
-            server
+            Server::builder()
+                .accept_http1(true)
                 .add_routes(Routes::from(routes))
                 .serve_with_incoming_shutdown(ReceiverStream::new(accepted), shutdown)
                 .await
