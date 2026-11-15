@@ -76,8 +76,8 @@ sha256sum -c SHA256SUMS --ignore-missing &&
   tar -xzf "$dir.tar.gz" && export PATH="$PWD/$dir:$PATH"
 curl -fsSLO "https://raw.githubusercontent.com/ferritor/ferritor/v$version/compose.yaml"
 docker compose up -d                      # the keys and data databases
-until docker compose exec -T keys-db pg_isready -U ferritor -q &&
-  docker compose exec -T data-db pg_isready -U ferritor -q; do sleep 1; done
+until docker compose exec -T keys-db pg_isready -h 127.0.0.1 -U ferritor -q &&
+  docker compose exec -T data-db pg_isready -h 127.0.0.1 -U ferritor -q; do sleep 1; done
 
 export FERRITOR_KEYS_DATABASE_URL=postgres://ferritor:ferritor@localhost:5433/ferritor_keys
 export FERRITOR_DATA_DATABASE_URL=postgres://ferritor:ferritor@localhost:5434/ferritor_data

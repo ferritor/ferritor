@@ -84,7 +84,9 @@ PowerShell:
 New-Item -ItemType Directory C:\ProgramData\ferritor -Force
 # Only SYSTEM and Administrators: the agent's key and config are in here.
 icacls C:\ProgramData\ferritor /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"
+icacls C:\ProgramData\ferritor /setowner Administrators   # an owner may change the list, whatever it says
 icacls C:\ProgramData\ferritor   # exactly those two: remove any other with /remove:g <name>
+(Get-Acl C:\ProgramData\ferritor).Owner   # BUILTIN\Administrators
 Copy-Item ferritor-agent.exe C:\ProgramData\ferritor\
 
 New-Service -Name ferritor-agent-app -StartupType Automatic `
@@ -110,9 +112,12 @@ The agent's own key file isn't the agent's to protect: whatever
 created it decides who can read it, and a folder under `C:\ProgramData`
 inherits a list that lets every user read. Lock the folder down as above
 before putting the key in it. A file moved there (rather than copied, or
-created there) keeps the list it had, so give it the folder's:
+created there) keeps the list it had and its owner, who may change that
+list whatever it says, so give it the folder's list and owner:
 
 ```powershell
 icacls C:\ProgramData\ferritor\agent.key /reset   # the folder's list: SYSTEM and Administrators
+icacls C:\ProgramData\ferritor\agent.key /setowner Administrators
 icacls C:\ProgramData\ferritor\agent.key          # check: exactly those two
+(Get-Acl C:\ProgramData\ferritor\agent.key).Owner   # BUILTIN\Administrators
 ```

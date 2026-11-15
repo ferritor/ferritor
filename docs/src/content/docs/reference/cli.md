@@ -38,7 +38,9 @@ cosign verify-blob "$f" --bundle "$f.sigstore.json" \
 ferritor --version
 ```
 
-On Windows, in PowerShell:
+On Windows, in an elevated PowerShell (Run as administrator), since it
+installs under Program Files; without one, use a folder of your own, such
+as `$env:LOCALAPPDATA\Programs\ferritor`, in its place:
 
 ```powershell
 $version = "0.9.2"
@@ -52,9 +54,10 @@ cosign verify-blob $f --bundle "$f.sigstore.json" `
 if ($LASTEXITCODE -ne 0) { throw "the signature doesn't verify" }
 $want = (Select-String -Path SHA256SUMS -SimpleMatch " $f").Line.Split(" ")[0]
 if ((Get-FileHash $f).Hash -ne $want) { throw "the checksum doesn't match" }   # -ne ignores case
-Expand-Archive $f -DestinationPath .   # ferritor-cli-$version-x86_64-pc-windows-gnu\ferritor.exe
+$out = New-Item -ItemType Directory (Join-Path $env:TEMP "ferritor-cli-$([guid]::NewGuid())")   # fresh, empty
+Expand-Archive $f -DestinationPath $out -ErrorAction Stop   # …\ferritor-cli-$version-x86_64-pc-windows-gnu\ferritor.exe
 New-Item -ItemType Directory "$env:ProgramFiles\ferritor" -Force | Out-Null
-Copy-Item "ferritor-cli-$version-x86_64-pc-windows-gnu\ferritor.exe" "$env:ProgramFiles\ferritor\"
+Copy-Item "$out\ferritor-cli-$version-x86_64-pc-windows-gnu\ferritor.exe" "$env:ProgramFiles\ferritor\" -ErrorAction Stop
 $env:Path += ";$env:ProgramFiles\ferritor"   # this shell; for good: System Properties, Environment Variables
 ferritor --version
 ```

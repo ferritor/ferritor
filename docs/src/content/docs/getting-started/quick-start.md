@@ -55,12 +55,14 @@ neither one alone opens anything (see [architecture](/concepts/architecture)).
 
 ```sh
 docker compose up -d          # keys database on 5433, data database on 5434
-until docker compose exec -T keys-db pg_isready -U ferritor -q &&
-  docker compose exec -T data-db pg_isready -U ferritor -q; do sleep 1; done
+until docker compose exec -T keys-db pg_isready -h 127.0.0.1 -U ferritor -q &&
+  docker compose exec -T data-db pg_isready -h 127.0.0.1 -U ferritor -q; do sleep 1; done
 ```
 
-The loop waits until both accept connections: the server applies their
-migrations when it starts, and doesn't wait for them.
+The loop waits until both accept connections over TCP, as the server
+will connect (on its first start Postgres runs a while on its socket
+alone, setting up): the server applies their migrations when it starts,
+and doesn't wait for them.
 
 ## 2. The server
 
