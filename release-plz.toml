@@ -60,6 +60,7 @@ changelog_include = [
     "ferritor-datastore",
     "ferritor-client",
     "ferritor-metrics",
+    "ferritor-winsec",
     "ferritor-cli",
     "ferritor-agent",
 ]
@@ -99,6 +100,10 @@ version_group = "ferritor"
 
 [[package]]
 name = "ferritor-metrics"
+version_group = "ferritor"
+
+[[package]]
+name = "ferritor-winsec"
 version_group = "ferritor"
 
 [[package]]
