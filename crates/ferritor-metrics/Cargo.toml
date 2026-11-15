@@ -22,5 +22,9 @@ tonic.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
 
+[dev-dependencies]
+# The dashboards' test reads their JSON.
+serde_json.workspace = true
+
 [lints]
 workspace = true

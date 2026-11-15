@@ -134,7 +134,11 @@ fields (`Captured::raw` has the bytes). CLI tests run the real `ferritor`
 binary against an in-process server. The metrics tests (the server's
 `tests/prometheus.rs` and `tests/metrics.rs`, the agent's and the CSI
 provider's `ferritor-agent/tests/metrics.rs`) each have their own binary,
-since the OpenTelemetry provider is process-wide.
+since the OpenTelemetry provider is process-wide. Each holds a table in
+[monitoring](/operations/monitoring) to what a scrape returns, and
+`ferritor-metrics/tests/dashboards.rs` holds the Grafana dashboards in
+`deploy/grafana/` to those tables: a dashboard may query only a documented
+metric.
 
 Auto-unseal is tested with `MemoryKms`, a provider that keeps its key in
 memory (and can be switched off or slowed). The AWS client itself has one
