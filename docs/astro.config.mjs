@@ -113,6 +113,7 @@ export default defineConfig({
 				{
 					label: 'Reference',
 					items: [
+						{ label: 'CLI', slug: 'reference/cli' },
 						{ label: 'Configuration', slug: 'reference/configuration' },
 						{ label: 'HTTP API', slug: 'reference/http-api' },
 					],

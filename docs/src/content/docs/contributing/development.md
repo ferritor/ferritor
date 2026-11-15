@@ -447,6 +447,12 @@ tags and creates the GitHub release (`release-plz.toml`,
 `.github/workflows/release-plz.yml`). Nothing goes to crates.io: versions
 come from git tags (`git_only`).
 
+- **Before a release**, a pull request of its own moves the version the
+  docs download to the one about to be released: `version=` in the
+  README's quick start, the quick start, production and the CLI reference,
+  and the image tag `kubernetes.md` verifies. Every one is the current
+  version written out, so `grep -rnF 0.9.2 README.md docs/src/content/docs
+  --exclude-dir=contributing` (with the current version) finds them all.
 - **The release pull request.** `release-pr` opens or updates it when
   started by hand: Actions, Release-plz, **Run workflow**, on `main`. It
   holds the next version and the changelogs' new section, which can be

@@ -29,69 +29,38 @@ puts the same pieces in a cluster.
 - **Operators** to hold the unseal shares: by default 5, any 3 of which
   unseal. The server starts sealed after every restart, so they must be
   reachable whenever it restarts.
-- Rust (edition 2024) and `protoc` to build, on the build machine only.
+- `curl` and [cosign](https://docs.sigstore.dev/cosign/system_config/installation/),
+  to fetch a release and verify it.
 
-## 1. Build
+## 1. The binaries
 
-```sh
-SQLX_OFFLINE=true cargo build --release --locked -p ferritor-server -p ferritor-cli
-# target/release/ferritor-server  the server
-# target/release/ferritor         the CLI, for operators and scripts
-```
-
-`SQLX_OFFLINE=true` builds from the committed query caches, without any
-database. A release build never reads a `.env` file (see
-[configuration](/reference/configuration)). For containers, the
-repository's `Dockerfile` builds an image per binary
-([development](/contributing/development#images)).
-
-Or take a release's binaries: each [GitHub
-release](https://github.com/ferritor/ferritor/releases) has an archive per
-architecture (`ferritor-<version>-x86_64-unknown-linux-musl.tar.gz`, and
-`aarch64`), static, so they run on any Linux. Verify it before you
-unpack it: its cosign bundle must name the release workflow, and its
-checksum must match.
+Each [GitHub release](https://github.com/ferritor/ferritor/releases) has
+an archive per architecture, `x86_64` and `aarch64`, of the four static
+binaries (`ferritor-server`, `ferritor`, `ferritor-agent`,
+`ferritor-csi-provider`, any Linux), with a cosign signature and the
+release's checksums. Verify it before it's unpacked: its signature must
+name ferritor's release workflow, and its checksum match.
 
 ```sh
-f=ferritor-0.9.2-x86_64-unknown-linux-musl.tar.gz
-cosign verify-blob "$f" --bundle "$f.sigstore.json" \
+version=0.9.2
+dir=ferritor-$version-$(uname -m)-unknown-linux-musl
+for f in "$dir.tar.gz" "$dir.tar.gz.sigstore.json" SHA256SUMS; do
+  curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$f"
+done
+cosign verify-blob "$dir.tar.gz" --bundle "$dir.tar.gz.sigstore.json" \
   --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf "$f"   # ferritor-server, ferritor-csi-provider, ferritor-agent, ferritor
+tar -xzf "$dir.tar.gz"
+sudo install -m 0755 "$dir/ferritor-server" "$dir/ferritor" /usr/local/bin/
 ```
 
-The CLI alone runs on macOS and Windows too, for operators' machines:
-`ferritor-cli-<version>-aarch64-apple-darwin.tar.gz` (Apple silicon),
-`ferritor-cli-<version>-x86_64-apple-darwin.tar.gz` (Intel Macs) and
-`ferritor-cli-<version>-x86_64-pc-windows-gnu.zip`, verified the same way.
-On macOS:
-
-```sh
-f=ferritor-cli-0.9.2-aarch64-apple-darwin.tar.gz
-cosign verify-blob "$f" --bundle "$f.sigstore.json" \
-  --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-grep " $f\$" SHA256SUMS | shasum -a 256 -c -
-tar -xzf "$f"   # ferritor-cli-0.9.2-aarch64-apple-darwin/ferritor
-```
-
-On Windows, in PowerShell:
-
-```powershell
-$f = "ferritor-cli-0.9.2-x86_64-pc-windows-gnu.zip"
-cosign verify-blob $f --bundle "$f.sigstore.json" `
-  --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main `
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-$want = (Select-String -Path SHA256SUMS -SimpleMatch " $f").Line.Split(" ")[0]
-(Get-FileHash $f).Hash -eq $want   # True (-eq ignores case)
-Expand-Archive $f -DestinationPath .   # ferritor-cli-0.9.2-x86_64-pc-windows-gnu\ferritor.exe
-```
-
-They're cross-built and not notarized or signed by a publisher: fetched
-with `curl` they run as they are, but downloaded with a browser macOS
-refuses to start the binary until `xattr -d com.apple.quarantine ferritor`,
-and Windows SmartScreen asks first.
+The server needs `ferritor-server`; operators and scripts need `ferritor`,
+the CLI, which also runs on macOS and Windows Server: its own archives,
+verified the same way ([CLI](/reference/cli#install)). In containers, the
+release's signed images are the same binaries
+([Kubernetes](/getting-started/kubernetes#what-you-need)). To build from
+source instead, see [development](/contributing/development).
 
 ## 2. Databases
 

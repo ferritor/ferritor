@@ -18,32 +18,58 @@ the CLI and the JSON API, and an agent keeping them current as files.
 
 ## What you need
 
-- Rust (edition 2024) and `protoc` on your `PATH`, to build ferritor;
+- Linux, x86_64 or arm64: the server and the agent are released as static
+  Linux binaries (the CLI also runs on macOS and Windows Server: see
+  [CLI](/reference/cli#install));
 - Docker or Podman with compose, for the two Postgres databases;
-- `curl`, for the JSON API;
-- a clone of the repository; every command below runs from its root.
+- `curl`.
 
-## 1. The databases
+To build ferritor from source instead, see
+[development](/contributing/development).
+
+## 1. The binaries and the databases
+
+The release's archive for your machine, checked against its checksums,
+and the databases' `compose.yaml` from the same release:
+
+```sh
+mkdir ferritor-quickstart && cd ferritor-quickstart
+version=0.9.2
+dir=ferritor-$version-$(uname -m)-unknown-linux-musl
+curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
+curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing     # …-unknown-linux-musl.tar.gz: OK
+tar -xzf "$dir.tar.gz"                       # ferritor-server, ferritor, ferritor-agent, ferritor-csi-provider
+export PATH="$PWD/$dir:$PATH"
+curl -fsSLO "https://raw.githubusercontent.com/ferritor/ferritor/v$version/compose.yaml"
+```
+
+The checksum shows the archive arrived whole; that it's the release
+workflow's own build, its cosign signature shows
+([production](/getting-started/production#1-the-binaries)).
 
 ferritor keeps its keys and its secrets in two separate databases, so that
 neither one alone opens anything (see [architecture](/concepts/architecture)).
-`compose.yaml` starts both, and `.env.example` points at them:
+`compose.yaml` starts both:
 
 ```sh
-cp .env.example .env
 docker compose up -d          # keys database on 5433, data database on 5434
 ```
 
 ## 2. The server
 
 ```sh
-cargo run -p ferritor-server > audit.log
+export FERRITOR_KEYS_DATABASE_URL=postgres://ferritor:ferritor@localhost:5433/ferritor_keys
+export FERRITOR_DATA_DATABASE_URL=postgres://ferritor:ferritor@localhost:5434/ferritor_data
+ferritor-server > audit.log
 ```
 
-A debug build reads `.env`, so it finds the databases, applies their
-migrations and serves gRPC and the JSON API on `127.0.0.1:7070`. Its log goes
-to stderr; stdout carries the [audit log](/operations/audit) and nothing else,
-hence the redirect. Without a `ferritor.toml` it's in dev mode, and says so:
+It applies the databases' migrations and serves gRPC and the JSON API on
+`127.0.0.1:7070`. Every setting can come from the environment like these
+two, `FERRITOR_` and the key in capitals ([configuration](/reference/configuration)).
+Its log goes to stderr; stdout carries the [audit log](/operations/audit)
+and nothing else, hence the redirect. Without a `ferritor.toml` it's in
+dev mode, and says so:
 
 ```
 WARN dev mode without audit_signing_key: the audit log is chained but unsigned, so edits to it can't be proven
@@ -54,15 +80,17 @@ It starts **sealed**: nothing that needs a key works until it's unsealed.
 
 ## 3. The CLI
 
-In another shell, install the `ferritor` CLI:
+In another shell, in the same directory, put the binaries on the `PATH`
+again:
 
 ```sh
-cargo install --path crates/ferritor-cli     # or every command as: cargo run -p ferritor-cli -- <args>
+cd ferritor-quickstart
+export PATH="$PWD/$(echo ferritor-*-unknown-linux-musl):$PATH"
 ferritor status                              # not initialized
 ```
 
 It talks to `http://127.0.0.1:7070` unless told otherwise (`--addr`, or
-`FERRITOR_ADDR`).
+`FERRITOR_ADDR`; see [CLI](/reference/cli)).
 
 ## 4. Initialize and unseal
 
@@ -200,7 +228,6 @@ Most applications read their configuration from files. `ferritor-agent`
 keeps secrets current as files next to them:
 
 ```sh
-cargo build -p ferritor-agent
 cat > agent.toml <<'EOF'
 server = "http://127.0.0.1:7070"
 
@@ -213,7 +240,7 @@ path = "app/db"
 [[output.secret]]
 path = "app/api-key"
 EOF
-./target/debug/ferritor-agent run --config agent.toml
+ferritor-agent run --config agent.toml
 ```
 
 ```
@@ -278,4 +305,5 @@ application reading its secret over mTLS.
 
 ```sh
 docker compose down -v        # both databases, and everything in them
+cd .. && rm -rf ferritor-quickstart
 ```

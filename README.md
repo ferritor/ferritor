@@ -64,15 +64,24 @@ DEK       encrypts the secret value     -> data database
 > Dev mode is plaintext, lets everyone do everything, and only listens on
 > loopback: for trying ferritor out and development, never for real secrets.
 
-Needs Rust (edition 2024), `protoc`, and Docker or Podman.
+Needs Linux (x86_64 or arm64), Docker or Podman with compose, and `curl`:
+a release's binaries and the databases' `compose.yaml`, nothing to build.
 
 ```sh
-cp .env.example .env
+version=0.9.2
+dir=ferritor-$version-$(uname -m)-unknown-linux-musl
+curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
+curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf "$dir.tar.gz" && export PATH="$PWD/$dir:$PATH"
+curl -fsSLO "https://raw.githubusercontent.com/ferritor/ferritor/v$version/compose.yaml"
 docker compose up -d                      # the keys and data databases
-cargo run -p ferritor-server > audit.log  # gRPC and the JSON API on 127.0.0.1:7070; stdout is the audit log
 
-# in another shell: the `ferritor` CLI, used as plain `ferritor` throughout the docs
-cargo install --path crates/ferritor-cli  # or: cargo run -p ferritor-cli -- <args>
+export FERRITOR_KEYS_DATABASE_URL=postgres://ferritor:ferritor@localhost:5433/ferritor_keys
+export FERRITOR_DATA_DATABASE_URL=postgres://ferritor:ferritor@localhost:5434/ferritor_data
+ferritor-server > audit.log               # gRPC and the JSON API on 127.0.0.1:7070; stdout is the audit log
+
+# in another shell, with the same PATH:
 ferritor init --shares 5 --threshold 3    # prints 5 shares, once
 ferritor unseal                           # three times, one share each: the hex after the colon (stdin)
 ferritor namespace create app             # nothing can be stored outside a namespace
@@ -137,6 +146,7 @@ What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
 | Topic | |
 |---|---|
+| [CLI](docs/src/content/docs/reference/cli.md) | `ferritor`: installing it, connecting, conventions and exit codes, every command and option |
 | [Configuration](docs/src/content/docs/reference/configuration.md) | dev and secured mode, every setting, reloading on SIGHUP |
 | [HTTP API](docs/src/content/docs/reference/http-api.md) | the JSON API reference: mTLS authentication with curl, Python, Node and Go examples, every endpoint and error code; [OpenAPI spec](docs/openapi.json) |
 

@@ -218,7 +218,8 @@ openssl pkey -in audit-key.pem -pubout -out audit.pub.pem
 ```
 
 The CLI over TLS: `--addr https://…` with `--ca`, `--cert` and `--key` (or
-`FERRITOR_ADDR`, `FERRITOR_CA`, `FERRITOR_CERT`, `FERRITOR_KEY`).
+`FERRITOR_ADDR`, `FERRITOR_CA`, `FERRITOR_CERT`, `FERRITOR_KEY`; see
+[CLI](/reference/cli#connecting)).
 
 ## Reloading without a restart
 

@@ -65,7 +65,7 @@ read the files under it.
 
 Each release has `ferritor-agent-<version>-x86_64-pc-windows-gnu.zip`
 (the agent alone, x86_64), verified like the CLI's archives
-([production](/getting-started/production#1-build)). It isn't signed by a
+([production](/getting-started/production#1-the-binaries)). It isn't signed by a
 publisher, so SmartScreen asks first for a browser's download; on Windows
 Server there's nothing else in the way.
 
