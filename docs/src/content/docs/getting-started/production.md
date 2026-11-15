@@ -49,11 +49,14 @@ for f in "$dir.tar.gz" "$dir.tar.gz.sigstore.json" SHA256SUMS; do
 done
 cosign verify-blob "$dir.tar.gz" --bundle "$dir.tar.gz.sigstore.json" \
   --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf "$dir.tar.gz"
-sudo install -m 0755 "$dir/ferritor-server" "$dir/ferritor" /usr/local/bin/
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com &&
+  sha256sum -c SHA256SUMS --ignore-missing &&
+  tar -xzf "$dir.tar.gz" &&
+  sudo install -m 0755 "$dir/ferritor-server" "$dir/ferritor" /usr/local/bin/
 ```
+
+Each step runs only if the one before succeeded: a signature or a
+checksum that doesn't match stops it before anything is unpacked.
 
 The server needs `ferritor-server`; operators and scripts need `ferritor`,
 the CLI, which also runs on macOS and Windows Server: its own archives,

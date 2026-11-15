@@ -38,13 +38,14 @@ version=0.9.2
 dir=ferritor-$version-$(uname -m)-unknown-linux-musl
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"
-sha256sum -c SHA256SUMS --ignore-missing     # …-unknown-linux-musl.tar.gz: OK
-tar -xzf "$dir.tar.gz"                       # ferritor-server, ferritor, ferritor-agent, ferritor-csi-provider
-export PATH="$PWD/$dir:$PATH"
+sha256sum -c SHA256SUMS --ignore-missing &&  # …-unknown-linux-musl.tar.gz: OK
+  tar -xzf "$dir.tar.gz" &&                  # ferritor-server, ferritor, ferritor-agent, ferritor-csi-provider
+  export PATH="$PWD/$dir:$PATH"
 curl -fsSLO "https://raw.githubusercontent.com/ferritor/ferritor/v$version/compose.yaml"
 ```
 
-The checksum shows the archive arrived whole; that it's the release
+Nothing is unpacked unless the checksum matches: it shows the archive
+arrived whole; that it's the release
 workflow's own build, its cosign signature shows
 ([production](/getting-started/production#1-the-binaries)).
 
@@ -54,7 +55,12 @@ neither one alone opens anything (see [architecture](/concepts/architecture)).
 
 ```sh
 docker compose up -d          # keys database on 5433, data database on 5434
+until docker compose exec -T keys-db pg_isready -U ferritor -q &&
+  docker compose exec -T data-db pg_isready -U ferritor -q; do sleep 1; done
 ```
+
+The loop waits until both accept connections: the server applies their
+migrations when it starts, and doesn't wait for them.
 
 ## 2. The server
 

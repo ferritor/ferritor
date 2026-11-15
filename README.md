@@ -72,10 +72,12 @@ version=0.9.2
 dir=ferritor-$version-$(uname -m)-unknown-linux-musl
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"
-sha256sum -c SHA256SUMS --ignore-missing
-tar -xzf "$dir.tar.gz" && export PATH="$PWD/$dir:$PATH"
+sha256sum -c SHA256SUMS --ignore-missing &&
+  tar -xzf "$dir.tar.gz" && export PATH="$PWD/$dir:$PATH"
 curl -fsSLO "https://raw.githubusercontent.com/ferritor/ferritor/v$version/compose.yaml"
 docker compose up -d                      # the keys and data databases
+until docker compose exec -T keys-db pg_isready -U ferritor -q &&
+  docker compose exec -T data-db pg_isready -U ferritor -q; do sleep 1; done
 
 export FERRITOR_KEYS_DATABASE_URL=postgres://ferritor:ferritor@localhost:5433/ferritor_keys
 export FERRITOR_DATA_DATABASE_URL=postgres://ferritor:ferritor@localhost:5434/ferritor_data

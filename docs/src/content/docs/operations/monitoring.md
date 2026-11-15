@@ -33,8 +33,9 @@ identity, a pod, a file name or a value.
   variables are ignored then (a set endpoint warns).
 - **`none`**: off.
 
-Without `exporter`, it's OTLP if `OTEL_EXPORTER_OTLP_ENDPOINT` is set, off
-otherwise. One exporter at a time.
+Without `exporter`, it's OTLP if `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set (and not empty), off if neither is.
+One exporter at a time.
 
 The Prometheus listener, per binary:
 

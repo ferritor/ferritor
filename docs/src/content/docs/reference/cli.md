@@ -31,9 +31,11 @@ for a in "$f" "$f.sigstore.json" SHA256SUMS; do
 done
 cosign verify-blob "$f" --bundle "$f.sigstore.json" \
   --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-grep " $f\$" SHA256SUMS | shasum -a 256 -c -
-tar -xzf "$f"   # ferritor-cli-$version-aarch64-apple-darwin/ferritor
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com &&
+  grep " $f\$" SHA256SUMS | shasum -a 256 -c - &&
+  tar -xzf "$f" &&                                      # ferritor-cli-$version-aarch64-apple-darwin/ferritor
+  sudo install -m 0755 "${f%.tar.gz}/ferritor" /usr/local/bin/
+ferritor --version
 ```
 
 On Windows, in PowerShell:
@@ -47,12 +49,18 @@ foreach ($a in $f, "$f.sigstore.json", "SHA256SUMS") {
 cosign verify-blob $f --bundle "$f.sigstore.json" `
   --certificate-identity https://github.com/ferritor/ferritor/.github/workflows/release-plz.yml@refs/heads/main `
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+if ($LASTEXITCODE -ne 0) { throw "the signature doesn't verify" }
 $want = (Select-String -Path SHA256SUMS -SimpleMatch " $f").Line.Split(" ")[0]
-(Get-FileHash $f).Hash -eq $want   # True (-eq ignores case)
+if ((Get-FileHash $f).Hash -ne $want) { throw "the checksum doesn't match" }   # -ne ignores case
 Expand-Archive $f -DestinationPath .   # ferritor-cli-$version-x86_64-pc-windows-gnu\ferritor.exe
+New-Item -ItemType Directory "$env:ProgramFiles\ferritor" -Force | Out-Null
+Copy-Item "ferritor-cli-$version-x86_64-pc-windows-gnu\ferritor.exe" "$env:ProgramFiles\ferritor\"
+$env:Path += ";$env:ProgramFiles\ferritor"   # this shell; for good: System Properties, Environment Variables
+ferritor --version
 ```
 
-They're cross-built and not notarized or signed by a publisher: fetched
+Either stops before unpacking if the signature or the checksum doesn't
+match. They're cross-built and not notarized or signed by a publisher: fetched
 with `curl` they run as they are, but downloaded with a browser macOS
 refuses to start the binary until `xattr -d com.apple.quarantine ferritor`,
 and Windows SmartScreen asks first. On Windows, Windows Server is the
