@@ -83,10 +83,15 @@ PowerShell:
 ```powershell
 New-Item -ItemType Directory C:\ProgramData\ferritor -Force
 # Only SYSTEM and Administrators: the agent's key and config are in here.
-icacls C:\ProgramData\ferritor /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"
-icacls C:\ProgramData\ferritor /setowner Administrators   # an owner may change the list, whatever it says
-icacls C:\ProgramData\ferritor   # exactly those two: remove any other with /remove:g <name>
-(Get-Acl C:\ProgramData\ferritor).Owner   # BUILTIN\Administrators
+# By SID (*S-1-5-18 SYSTEM, *S-1-5-32-544 Administrators): the names are translated.
+icacls C:\ProgramData\ferritor /reset   # drops any entry of its own: only what it inherits is left
+icacls C:\ProgramData\ferritor /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
+icacls C:\ProgramData\ferritor /setowner "*S-1-5-32-544"   # an owner may change the list, whatever it says
+$acl = Get-Acl C:\ProgramData\ferritor
+$sids = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+  ForEach-Object { $_.IdentityReference.Value } | Sort-Object -Unique
+if (Compare-Object @($sids) @('S-1-5-18', 'S-1-5-32-544')) { throw "other entries: $sids" }
+if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw "wrong owner" }
 Copy-Item ferritor-agent.exe C:\ProgramData\ferritor\
 
 New-Service -Name ferritor-agent-app -StartupType Automatic `
@@ -117,7 +122,7 @@ list whatever it says, so give it the folder's list and owner:
 
 ```powershell
 icacls C:\ProgramData\ferritor\agent.key /reset   # the folder's list: SYSTEM and Administrators
-icacls C:\ProgramData\ferritor\agent.key /setowner Administrators
+icacls C:\ProgramData\ferritor\agent.key /setowner "*S-1-5-32-544"   # Administrators
 icacls C:\ProgramData\ferritor\agent.key          # check: exactly those two
-(Get-Acl C:\ProgramData\ferritor\agent.key).Owner   # BUILTIN\Administrators
+(Get-Acl C:\ProgramData\ferritor\agent.key).GetOwner([Security.Principal.SecurityIdentifier]).Value   # S-1-5-32-544
 ```
