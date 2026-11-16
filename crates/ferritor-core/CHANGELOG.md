@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/ferritor/ferritor/compare/ferritor-core-v0.9.2...ferritor-core-v0.9.3) - 2026-11-16
+
+### Added
+
+- *(agent)* metrics for the agent and the CSI provider, OTLP or Prometheus
+
 ## [0.9.2](https://github.com/ferritor/ferritor/compare/ferritor-core-v0.9.1...ferritor-core-v0.9.2) - 2026-11-08
 
 ### Other

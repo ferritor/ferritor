@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3](https://github.com/ferritor/ferritor/compare/ferritor-agent-v0.9.2...ferritor-agent-v0.9.3) - 2026-11-16
+
+### Added
+
+- *(agent)* metrics for the agent and the CSI provider, OTLP or Prometheus
+- *(agent)* the agent on Windows
+
+### Fixed
+
+- *(agent)* metrics count what's in the files, and honour OTEL_SERVICE_NAME
+- *(agent)* stop the test's run once its round has connected
+- *(agent)* stop at once, also in the middle of a round
+
+### Other
+
+- one Monitoring page for the server's, the agent's and the provider's metrics
+
 ## [0.9.2](https://github.com/ferritor/ferritor/compare/ferritor-agent-v0.9.1...ferritor-agent-v0.9.2) - 2026-11-08
 
 ### Other
