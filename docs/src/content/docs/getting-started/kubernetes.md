@@ -332,7 +332,7 @@ ferritor namespace create billing
 **After every restart of the pod** (a node drain, an upgrade, a crash) the
 server is sealed again: three operators run `ferritor unseal` before anything
 can read. Alert on `ferritor.sealed`
-([operations](/operations/running#metrics)).
+([monitoring](/operations/monitoring#the-server)).
 
 ## 5. Access, and the first secret
 
@@ -523,7 +523,7 @@ once it's readable, the next retry mounts it.
   (off loopback it always is), which only scrapers with a certificate from
   a CA of their own may read: any pod in the cluster can reach the port,
   and the metrics show the sealed state and the denial rates
-  ([operations](/operations/running#metrics)). The scrapers' CA, and
+  ([monitoring](/operations/monitoring#the-server)). The scrapers' CA, and
   Prometheus's certificate from it:
 
   ```sh
@@ -585,7 +585,7 @@ once it's readable, the next retry mounts it.
   `prometheus.prometheusSpec.serviceMonitorSelectorNilUsesHelmValues=false`.
   Keep `scrapers-ca-key.pem` off the cluster, like `ca-key.pem`. Then alert
   on `ferritor_sealed`, `ferritor_kek_vanished` and the rest of
-  [operations](/operations/running#metrics)' list.
+  [monitoring](/operations/monitoring#what-to-alert-on)'s list.
 - **Certificates**: renew the server's (`ferritor.server_certificate.expiry`)
   and send SIGHUP, or restart and unseal; keep operators' short-lived.
 - **The token exchange**: one issuer per cluster, mappings as narrow as

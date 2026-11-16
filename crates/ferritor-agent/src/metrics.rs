@@ -1,8 +1,9 @@
 //! Metrics, for both binaries: the `[metrics]` section (the server's
 //! choice of exporter, `ferritor_metrics`), the scrape's listener, and the
 //! instruments ([`agent`] for `ferritor-agent`, `provider`, on Unix only,
-//! for `ferritor-csi-provider`). Their tables, with the Prometheus names, are in
-//! `agent.md` and `csi.md`, held to a scrape by `tests/metrics.rs`.
+//! for `ferritor-csi-provider`). Their tables, with the Prometheus names,
+//! are in `operations/monitoring.md`, held to a scrape by
+//! `tests/metrics.rs`.
 //!
 //! Attributes are small fixed sets (result, call, state, event, kind):
 //! never a path, an identity, a pod, a file or a value. The Prometheus

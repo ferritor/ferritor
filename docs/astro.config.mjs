@@ -85,14 +85,24 @@ export default defineConfig({
 						{ label: 'Policy', slug: 'guides/policy' },
 						{ label: 'TLS and identity', slug: 'guides/tls' },
 						{ label: 'Workload identity', slug: 'guides/workload-identity' },
-						{ label: 'The agent', slug: 'guides/agent' },
-						{ label: 'The CSI provider', slug: 'guides/csi' },
+						{
+							label: 'Linux',
+							items: [
+								{ label: 'Agent', slug: 'guides/agent' },
+								{ label: 'CSI provider', slug: 'guides/csi' },
+							],
+						},
+						{
+							label: 'Windows Server',
+							items: [{ label: 'Agent', slug: 'guides/agent-windows' }],
+						},
 					],
 				},
 				{
 					label: 'Operations',
 					items: [
 						{ label: 'Operations', slug: 'operations/running' },
+						{ label: 'Monitoring', slug: 'operations/monitoring' },
 						{ label: 'Key management', slug: 'operations/key-management' },
 						{ label: 'Audit log', slug: 'operations/audit' },
 						{ label: 'Backup and restore', slug: 'operations/backup-restore' },
@@ -103,6 +113,7 @@ export default defineConfig({
 				{
 					label: 'Reference',
 					items: [
+						{ label: 'CLI', slug: 'reference/cli' },
 						{ label: 'Configuration', slug: 'reference/configuration' },
 						{ label: 'HTTP API', slug: 'reference/http-api' },
 					],

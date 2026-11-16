@@ -134,7 +134,11 @@ fields (`Captured::raw` has the bytes). CLI tests run the real `ferritor`
 binary against an in-process server. The metrics tests (the server's
 `tests/prometheus.rs` and `tests/metrics.rs`, the agent's and the CSI
 provider's `ferritor-agent/tests/metrics.rs`) each have their own binary,
-since the OpenTelemetry provider is process-wide.
+since the OpenTelemetry provider is process-wide. Each holds a table in
+[monitoring](/operations/monitoring) to what a scrape returns, and
+`ferritor-metrics/tests/dashboards.rs` holds the Grafana dashboards in
+`deploy/grafana/` to those tables: a dashboard may query only a documented
+metric.
 
 Auto-unseal is tested with `MemoryKms`, a provider that keeps its key in
 memory (and can be switched off or slowed). The AWS client itself has one
@@ -443,6 +447,12 @@ tags and creates the GitHub release (`release-plz.toml`,
 `.github/workflows/release-plz.yml`). Nothing goes to crates.io: versions
 come from git tags (`git_only`).
 
+- **Before a release**, a pull request of its own moves the version the
+  docs download to the one about to be released: `version=` in the
+  README's quick start, the quick start, production and the CLI reference,
+  and the image tag `kubernetes.md` verifies. Every one is the current
+  version written out, so `grep -rnF 0.9.2 README.md docs/src/content/docs
+  --exclude-dir=contributing` (with the current version) finds them all.
 - **The release pull request.** `release-pr` opens or updates it when
   started by hand: Actions, Release-plz, **Run workflow**, on `main`. It
   holds the next version and the changelogs' new section, which can be

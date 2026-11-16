@@ -148,7 +148,7 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #requests_per_second = 500
 #burst = 1000
 
-# Metrics (https://ferritor.dev/operations/running#metrics). Without this
+# Metrics (https://ferritor.dev/operations/monitoring#the-server). Without this
 # section: OpenTelemetry pushed over OTLP when OTEL_EXPORTER_OTLP_ENDPOINT is
 # set, off otherwise. One exporter at a time. Read at startup only.
 #[metrics]

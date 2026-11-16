@@ -1,6 +1,6 @@
 ---
-title: 'The agent'
-description: 'ferritor-agent keeps an application''s secrets current as files: settings, the directory, notifications, and running it in Kubernetes, systemd or Windows.'
+title: 'Agent on Linux'
+description: 'ferritor-agent keeps an application''s secrets current as files: settings, the directory, notifications, and running it in Kubernetes or under systemd.'
 seo:
   title: 'ferritor-agent: keeping secrets current as files'
 ---
@@ -9,7 +9,13 @@ seo:
 plain files, one per secret, for applications that read their
 configuration from files (most do) and shouldn't have to talk to ferritor
 themselves. It runs next to the application: as a sidecar in Kubernetes,
-or as a service on its host, Linux or [Windows](#windows).
+or as a service on its host.
+
+> [!NOTE]
+> This page is the agent on Linux, and everything both platforms share:
+> the settings, the directory, notifications, failures. On Windows
+> Server, read it with [Agent on Windows Server](/guides/agent-windows),
+> which says what differs there.
 
 ```
 /run/secrets/app/
@@ -39,7 +45,7 @@ ferritor-agent run  --config /etc/ferritor-agent/app.toml   # render, then keep 
 | Mode | Does | Exits |
 |---|---|---|
 | `once` | renders every output once | 0 when every required secret is written; 1 at once if the server refuses a required one for good (permission denied, not found), or after `--wait-secs` (default 60) of transient failures (unreachable, sealed, rate-limited) |
-| `run` | renders, then polls every interval (and watches, below) and rewrites what changed. On Windows also a service's command line, and `--log-file` sends the logs to a file ([Windows](#windows)) | 0 on SIGTERM or SIGINT (Windows: Ctrl+C, Ctrl+Break, the console closing, a shutdown, the service's stop), at once, also in the middle of a round against a server that doesn't answer; the files stay as they are |
+| `run` | renders, then polls every interval (and watches, below) and rewrites what changed. On Windows also a service's command line, and `--log-file` sends the logs to a file ([Windows](/guides/agent-windows)) | 0 on SIGTERM or SIGINT (Windows: Ctrl+C, Ctrl+Break, the console closing, a shutdown, the service's stop), at once, also in the middle of a round against a server that doesn't answer; the files stay as they are |
 
 `--config` can also come from `FERRITOR_AGENT_CONFIG`. A configuration
 mistake refuses to start, saying what and where. Logs go to stderr
@@ -48,7 +54,7 @@ versions and refusals only. Like the server, the agent marks itself
 undumpable before reading anything, so the application next to it can't
 read its memory or its key through `/proc`, even as the same user. On
 Windows it locks its process with an access list instead
-([Windows](#windows)).
+([Windows](/guides/agent-windows)).
 
 ## Configuration
 
@@ -96,7 +102,7 @@ Top level:
 |---|---|---|
 | `dir` | (required) | absolute; created (`0750`) if missing; must be in memory (tmpfs, ramfs) |
 | `allow_disk` | false | allow a directory that isn't in memory: the values then reach a disk. Required on Windows, which has none |
-| `group` | the directory's | the files' and directories' group (numeric). The agent must be a member: it has no `CAP_CHOWN`. In Kubernetes, leave it unset and use the pod's `fsGroup`. On Windows, an account or group name instead ([Windows](#windows)) |
+| `group` | the directory's | the files' and directories' group (numeric). The agent must be a member: it has no `CAP_CHOWN`. In Kubernetes, leave it unset and use the pod's `fsGroup`. On Windows, an account or group name instead ([Windows](/guides/agent-windows)) |
 | `mode` | `0o440` | its files' mode, unless a secret gives its own. Never any permission for others (refused): share through the group. On Windows only its group bits count: whether `group` may read |
 | `on_revoked` | `keep` | its secrets' default (below) |
 | `list_prefix` | the secrets' parents | with `detect = "list"`: the one prefix to list (below) |
@@ -295,49 +301,11 @@ therefore costs one denied read per replica per backoff step.
 
 ## Metrics
 
-The agent's metrics leave it as the server's do ([running](/operations/running#metrics)),
-chosen by `[metrics] exporter`: pushed over OTLP with the standard
-`OTEL_*` variables (`OTEL_SERVICE_NAME` defaults to `ferritor-agent`), or
-scraped by Prometheus, or off. Without the section, OTLP if
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set, off otherwise. `once` pushes its
-last export at exit, and serves no scrape.
-
-The Prometheus endpoint is plaintext, the agent having no certificate to
-serve with: on `127.0.0.1:9465` by default (the server's `9464` is next
-to it), answering only requests addressed to loopback, against DNS
-rebinding. Off loopback, say `tls = false` (a sidecar scraped on its pod's
-address); it warns at startup. What it shows is counts, times and
-results: no path, identity or file name, and nothing of a value.
-
-```toml
-[metrics]
-exporter = "prometheus"
-listen_addr = "0.0.0.0:9465"
-tls = false
-```
-
-Request durations are bucketed from 1 ms to 10 s. A test holds the table
-to what a scrape returns.
-
-| Instrument | Prometheus | Kind | Attributes |
-|---|---|---|---|
-| `ferritor.agent.rounds` | `ferritor_agent_rounds_total` | counter | `result` (ok; transient: stopped by a transient refusal) |
-| `ferritor.agent.round.duration` | `ferritor_agent_round_duration_seconds` | histogram (s) | `result`; the round's writes, notifications and status files included |
-| `ferritor.agent.calls` | `ferritor_agent_calls_total` | counter | `call` (get, list, watch), `result` (ok, permission_denied, not_found, invalid, transient) |
-| `ferritor.agent.writes` | `ferritor_agent_writes_total` | counter | `result` (ok, failed): sets of files swapped in |
-| `ferritor.agent.notifications` | `ferritor_agent_notifications_total` | counter | `kind` (signal, command), `result` (ok, failed, timed_out: a command still running after 60 s). A signal counts once per process it's sent to |
-| `ferritor.agent.exchanges` | `ferritor_agent_exchanges_total` | counter | `result` (ok, failed): with `token_file` |
-| `ferritor.agent.watch.events` | `ferritor_agent_watch_events_total` | counter | `event` (ready, changed, resync, ended, failed) |
-| `ferritor.agent.secrets` | `ferritor_agent_secrets` | gauge | `state` (current: readable, its value in its file; refused: for good, its file per `on_revoked`; pending: neither yet, not read or not written: the first set waiting for a required secret, a write that failed) |
-| `ferritor.agent.last_success` | `ferritor_agent_last_success_seconds` | gauge (unix s) | when a round last succeeded; absent before the first |
-| `ferritor.agent.watch.ready` | `ferritor_agent_watch_ready` | gauge | 1 while a ready stream covers every watched secret |
-| `ferritor.agent.certificate.expiry` | `ferritor_agent_certificate_expiry_seconds` | gauge (unix s) | the client certificate in use: from its file, or as exchanged |
-
-Worth an alert: `time() - ferritor_agent_last_success_seconds` past a few
-intervals (the files have stopped following the server), any
-`ferritor_agent_secrets{state="refused"}` or `{state="pending"}` that
-lasts, a `ferritor_agent_certificate_expiry_seconds` near (a certificate
-from files nobody renews).
+`[metrics]` chooses how the agent's metrics leave it, as the server's do:
+OTLP, Prometheus (plaintext, `127.0.0.1:9465` by default) or none. Its
+instruments (rounds, calls, secrets by state, the last success, the
+certificate's expiry), what to alert on, a `PodMonitor` for sidecars and a
+Grafana dashboard: [monitoring](/operations/monitoring#the-agent).
 
 ## Kubernetes
 
@@ -439,89 +407,9 @@ whose pages can be swapped out on a host with swap.
 
 ## Windows
 
-The same agent, the same configuration and the same directory, with
-Windows' own mechanisms in place of the Unix ones:
-
-```toml
-server = "https://ferritor.internal:7070"
-ca = 'C:\ProgramData\ferritor\ca.pem'
-cert = 'C:\ProgramData\ferritor\agent.crt'
-key = 'C:\ProgramData\ferritor\agent.key'
-
-[[output]]
-dir = 'C:\ProgramData\ferritor\secrets\app'
-allow_disk = true                      # required: Windows has no tmpfs
-group = 'NT SERVICE\app'              # who reads the files: an account or group
-on_change = { command = ["powershell", "-NoProfile", "-Command", "Restart-Service app"] }
-
-[[output.secret]]
-path = "billing/app/db-password"
-```
-
-Single-quoted TOML strings keep the backslashes as they are.
-
-`app` here is the application's own Windows service. A Windows service has
-no reload, so the example restarts it, which interrupts it: if the
-application re-reads the files itself (watching `..data`, or reading them
-on each use), leave `on_change` unset.
-
-**What differs:**
-
-| | Linux | Windows |
-|---|---|---|
-| Who may read a file | its mode and group | an access list the agent sets on each file and directory, nothing inherited: the agent's account, SYSTEM and Administrators everything; `group` (an account or group name, `DOMAIN\name`, `NT SERVICE\app`, `BUILTIN\Users`) reads a file whose mode gives the group read, and lists the directories |
-| The directory | must be in memory, unless `allow_disk` | always on a disk: `allow_disk = true` is required. Encrypt the disk (BitLocker) |
-| `..data` and the names | symbolic links | Windows' symbolic links, the same layout and the same one-rename swap. Making them takes the **Create symbolic links** privilege: LocalSystem (a service's default account) and elevated administrators have it; for another account grant it (`secpol.msc`, Local Policies, User Rights Assignment), or turn on Developer Mode. Without it the agent refuses to start, saying so |
-| A file held open | the old generation is removed at the next write | most Windows programs open files so they can't be deleted: a generation one of its files is open in stays until it's closed, and is removed at the first write after (logged meanwhile, never a failed write) |
-| Its memory | undumpable (`PR_SET_DUMPABLE`) | its process's access list, and each of its threads', lets its own account only wait for it, end it and query it, never read its memory, take over a thread or change a list; SYSTEM and administrators with `SeDebugPrivilege` still can. The token's default access list says the same, so a thread started later gets it. An `on_change` command starts with the default list the token had before, like any other process of the account |
-| Telling the application | a signal or a command | a command, an `.exe` found as the path given, else in the system directory, the Windows directory or `PATH` (never the current directory). Not a batch file (refused: run it through `"cmd.exe", "/c"`). Its output goes to the agent's console if it has one, nowhere as a service |
-| Stopping | SIGTERM, SIGINT | Ctrl+C, Ctrl+Break, the console closing, a shutdown; as a service, the service control manager's stop |
-
-Reading a consistent set works as on Linux: resolve `..data` once, then
-read the files under it.
-
-**Getting it:** each release has `ferritor-agent-<version>-x86_64-pc-windows-gnu.zip`
-(the agent alone, x86_64), verified like the CLI's archives
-([production](/getting-started/production#1-build)). It isn't signed by a
-publisher: Windows 11's Smart App Control, where it's on, refuses to run
-it, and SmartScreen asks first for a browser's download.
-
-**By hand**, from a console: `ferritor-agent.exe run --config C:\ProgramData\ferritor\app.toml`
-(or `once`), as on Linux; Ctrl+C stops it.
-
-**As a service**, the same `run` command line, registered with
-`New-Service` or `sc.exe` (not PowerShell's `sc` alias). Started by the
-service control manager, `run` reports to it and stops at its stop;
-started any other way it's a console program. From an elevated
-PowerShell:
-
-```powershell
-New-Item -ItemType Directory C:\ProgramData\ferritor -Force
-# Only SYSTEM and Administrators: the agent's key and config are in here.
-icacls C:\ProgramData\ferritor /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"
-Copy-Item ferritor-agent.exe C:\ProgramData\ferritor\
-
-New-Service -Name ferritor-agent-app -StartupType Automatic `
-  -BinaryPathName '"C:\ProgramData\ferritor\ferritor-agent.exe" run --config C:\ProgramData\ferritor\app.toml --log-file C:\ProgramData\ferritor\app.log'
-sc.exe failure ferritor-agent-app reset= 86400 actions= restart/5000
-Start-Service ferritor-agent-app
-```
-
-or with `sc.exe create ferritor-agent-app start= auto binPath= "…"`, the
-same command line. Any service name works. `--log-file` is where the logs
-go, appended, instead of stderr: a service has no console, so without it
-nothing is logged. It runs as LocalSystem unless given an account
-(`-Credential`, `obj=`): an account of its own needs the link privilege
-granted, read access to the config, the key and the CA, and write access
-to the output directory's parent. To render once before the application
-starts, run `ferritor-agent.exe once --config …` first, as `ExecStartPre`
-does under systemd. `Stop-Service ferritor-agent-app` stops it: the files
-stay as they are.
-
-**The agent's own key file** isn't the agent's to protect: whatever
-created it decides who can read it, and a folder under `C:\ProgramData`
-inherits a list that lets every user read. Lock the folder down as above
-before putting the key in it.
+The agent runs on Windows Server too, as a service, with the same
+configuration and the same directory, and Windows' own mechanisms in
+place of the Unix ones: [Agent on Windows Server](/guides/agent-windows).
 
 ## Security
 

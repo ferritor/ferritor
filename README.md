@@ -64,15 +64,26 @@ DEK       encrypts the secret value     -> data database
 > Dev mode is plaintext, lets everyone do everything, and only listens on
 > loopback: for trying ferritor out and development, never for real secrets.
 
-Needs Rust (edition 2024), `protoc`, and Docker or Podman.
+Needs Linux (x86_64 or arm64), Docker or Podman with compose, and `curl`:
+a release's binaries and the databases' `compose.yaml`, nothing to build.
 
 ```sh
-cp .env.example .env
+version=0.9.2
+dir=ferritor-$version-$(uname -m)-unknown-linux-musl
+curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
+curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing &&
+  tar -xzf "$dir.tar.gz" && export PATH="$PWD/$dir:$PATH"
+curl -fsSLO "https://raw.githubusercontent.com/ferritor/ferritor/v$version/compose.yaml"
 docker compose up -d                      # the keys and data databases
-cargo run -p ferritor-server > audit.log  # gRPC and the JSON API on 127.0.0.1:7070; stdout is the audit log
+until docker compose exec -T keys-db pg_isready -h 127.0.0.1 -U ferritor -q &&
+  docker compose exec -T data-db pg_isready -h 127.0.0.1 -U ferritor -q; do sleep 1; done
 
-# in another shell: the `ferritor` CLI, used as plain `ferritor` throughout the docs
-cargo install --path crates/ferritor-cli  # or: cargo run -p ferritor-cli -- <args>
+export FERRITOR_KEYS_DATABASE_URL=postgres://ferritor:ferritor@localhost:5433/ferritor_keys
+export FERRITOR_DATA_DATABASE_URL=postgres://ferritor:ferritor@localhost:5434/ferritor_data
+ferritor-server > audit.log               # gRPC and the JSON API on 127.0.0.1:7070; stdout is the audit log
+
+# in another shell, with the same PATH:
 ferritor init --shares 5 --threshold 3    # prints 5 shares, once
 ferritor unseal                           # three times, one share each: the hex after the colon (stdin)
 ferritor namespace create app             # nothing can be stored outside a namespace
@@ -117,14 +128,16 @@ What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 | [Policy](docs/src/content/docs/guides/policy.md) | who may do what, on which paths: config rules and stored policies, `ferritor policy` and its APIs |
 | [TLS and identity](docs/src/content/docs/guides/tls.md) | client certificates, `ferritor://` identities, expiry and CRL revocation |
 | [Workload identity](docs/src/content/docs/guides/workload-identity.md) | platform tokens exchanged for short-lived certificates: issuers, mappings, revoking, the CLI and the agent |
-| [The agent](docs/src/content/docs/guides/agent.md) | secrets as files: `ferritor-agent` as a Kubernetes sidecar, a systemd service or a Windows service, its settings, reading the files, failures |
-| [The CSI provider](docs/src/content/docs/guides/csi.md) | secrets as files in Kubernetes pods, one provider per node: the volume, refreshing, failures, running it |
+| [Agent on Linux](docs/src/content/docs/guides/agent.md) | secrets as files: `ferritor-agent` as a Kubernetes sidecar or a systemd service (the settings both platforms share are here), its settings, reading the files, failures |
+| [Agent on Windows Server](docs/src/content/docs/guides/agent-windows.md) | the agent on Windows Server: access lists, links, the process lock, as a Windows service |
+| [CSI provider](docs/src/content/docs/guides/csi.md) | secrets as files in Kubernetes pods, one provider per node: the volume, refreshing, failures, running it |
 
 **Operations**
 
 | Topic | |
 |---|---|
-| [Operations](docs/src/content/docs/operations/running.md) | health and readiness, shutdown, metrics, routine and recovery tasks |
+| [Operations](docs/src/content/docs/operations/running.md) | health and readiness, shutdown, rate limits, routine and recovery tasks |
+| [Monitoring](docs/src/content/docs/operations/monitoring.md) | metrics from the server, the agent and the CSI provider (OTLP or Prometheus), what to alert on, Grafana dashboards |
 | [Key management](docs/src/content/docs/operations/key-management.md) | seal and unseal, namespaces, rekey, rotate, rewrap, destroying KEKs, keyring refresh |
 | [Audit log](docs/src/content/docs/operations/audit.md) | what's recorded, the hash chain and signatures, `ferritor audit verify` |
 | [Backup and restore](docs/src/content/docs/operations/backup-restore.md) | backing up two databases that must match, and the shares |
@@ -135,6 +148,7 @@ What changed in each release: [CHANGELOG.md](CHANGELOG.md).
 
 | Topic | |
 |---|---|
+| [CLI](docs/src/content/docs/reference/cli.md) | `ferritor`: installing it, connecting, conventions and exit codes, every command and option |
 | [Configuration](docs/src/content/docs/reference/configuration.md) | dev and secured mode, every setting, reloading on SIGHUP |
 | [HTTP API](docs/src/content/docs/reference/http-api.md) | the JSON API reference: mTLS authentication with curl, Python, Node and Go examples, every endpoint and error code; [OpenAPI spec](docs/openapi.json) |
 
@@ -152,6 +166,7 @@ crates/ferritor-keystore    the keys database: migrations and queries
 crates/ferritor-datastore   the data database: migrations and queries
 crates/ferritor-server      the server (library + binary)
 crates/ferritor-client      talking to a server over gRPC: the library the CLI and the agent share
+crates/ferritor-metrics     metrics for every binary: OTLP or a Prometheus scrape
 crates/ferritor-cli         the `ferritor` CLI (library + binary)
 crates/ferritor-agent       keeps an application's secrets current as files (`ferritor-agent`)
 crates/ferritor-testkit     test helpers: throwaway databases, a test CA
