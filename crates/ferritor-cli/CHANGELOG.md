@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/ferritor/ferritor/compare/ferritor-cli-v0.9.2...ferritor-cli-v1.0.0) - 2026-11-16
+
+### Added
+
+- *(cli)* an owner-only access list for login --key-out on Windows
+
+### Fixed
+
+- *(cli)* no cargo doc output collision with the root crate
+
+### Other
+
+- a CLI reference, and the docs start from a pinned release
+- Merge pull request #18 from ferritor/feat/cli-key-out-acl
+
 ## [0.9.2](https://github.com/ferritor/ferritor/compare/ferritor-cli-v0.9.1...ferritor-cli-v0.9.2) - 2026-11-08
 
 ### Added
