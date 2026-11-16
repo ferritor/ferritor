@@ -42,7 +42,7 @@ release's checksums. Verify it before it's unpacked: its signature must
 name ferritor's release workflow, and its checksum match.
 
 ```sh
-version=0.9.2
+version=1.0.0
 dir=ferritor-$version-$(uname -m)-unknown-linux-musl
 for f in "$dir.tar.gz" "$dir.tar.gz.sigstore.json" SHA256SUMS; do
   curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$f"
