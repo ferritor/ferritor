@@ -282,7 +282,7 @@ spec:
         # The audit log's file, streamed to this container's stdout, which
         # the cluster's log collector ships. tail's notices and errors go to
         # its stderr, the same container log but its own stream: ship
-        # stdout alone, and filter to the JSON lines to verify (below).
+        # stdout alone, and verify from the file (below).
         - name: audit
           image: busybox:1.37
           command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log']
@@ -325,10 +325,14 @@ The audit log is the `audit` container's stdout: ship it off the cluster as
 it's written, stdout alone (log collectors read the kubelet's log files,
 where every line says its stream; `tail`'s notices, such as a rotation it
 followed, and its errors, such as a file it can't read, are on stderr, for
-you to see and alert on). `kubectl logs` shows both streams together, so
-keep the JSON lines to verify: `kubectl -n ferritor-system logs
-deploy/ferritor -c audit | grep '^{' | ferritor audit verify --public-key
-audit.pub.pem` ([audit](/operations/audit)).
+you to see and alert on). To verify, read the audit file itself, not
+`kubectl logs`: that shows only the newest container log (the kubelet
+rotates them at 10 MiB, so it can start mid-chain), with `tail`'s stderr
+mixed in. The file holds whole chains, and every line in it counts:
+`kubectl -n ferritor-system exec deploy/ferritor -c audit -- cat
+/var/log/ferritor/audit.log | ferritor audit verify --public-key
+audit.pub.pem` ([audit](/operations/audit)); or verify what your shipper
+stored.
 
 The file is on the node's disk (the pod's ephemeral storage) for as long as
 the pod runs. The server rotates it by size, so it stays within about
@@ -345,7 +349,11 @@ rotated while it was down isn't sent again: lines the server wrote to `audit.log
 further) meanwhile are in the rotated files only. Fetch them from there
 before they're dropped (`kubectl -n ferritor-system exec deploy/ferritor
 -c audit -- cat /var/log/ferritor/audit.log.1`), each a file of whole
-chains that verifies on its own.
+chains that verifies on its own. The same holds, rarely, while it runs:
+`tail -F` looks at the path about once a second, so two rotations between
+two looks (`audit_file_max_bytes` twice over within a second) skip the
+file between them, which is then `audit.log.1` until the next rotation
+drops it: fetch it the same way.
 
 **With an OpenTelemetry collector in the cluster, use `[audit_otlp]`
 instead**: the audit log goes straight to the collector, with no file, no
