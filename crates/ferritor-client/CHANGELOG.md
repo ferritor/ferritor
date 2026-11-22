@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-client-v1.0.0...ferritor-client-v1.0.1) - 2026-11-22
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.9.2](https://github.com/ferritor/ferritor/compare/ferritor-client-v0.9.1...ferritor-client-v0.9.2) - 2026-11-08
 
 ### Other

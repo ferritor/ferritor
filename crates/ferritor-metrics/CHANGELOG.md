@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-metrics-v1.0.0...ferritor-metrics-v1.0.1) - 2026-11-22
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [1.0.0] - 2026-11-16
 
 ### Added

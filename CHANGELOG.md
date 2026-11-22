@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/ferritor/ferritor/compare/v1.0.0...v1.0.1) - 2026-11-22
+
+### Changed
+
+- the audit log to a file (audit_file) or a collector (audit_otlp)
+
+### Fixed
+
+- *(audit)* a recovered chain stands even if its start's flush fails; the sidecar's stderr
+- *(audit)* review findings on the audit devices
+- dependencies to their latest compatible versions
+- url 2.5.9 (RUSTSEC-2026-0592)
+
+### Other
+
+- the docs download and verify 1.0.1
+- *(kubernetes)* verify the audit file, not kubectl logs; a file tail can skip
+- bump taiki-e/install-action
+- update Cargo.toml dependencies
+
 ## [1.0.0](https://github.com/ferritor/ferritor/compare/v0.9.2...v1.0.0) - 2026-11-16
 
 ### Added
