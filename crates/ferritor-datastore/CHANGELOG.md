@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-datastore-v1.0.0...ferritor-datastore-v1.0.1) - 2026-11-22
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.9.0](https://github.com/ferritor/ferritor/releases/tag/ferritor-datastore-v0.9.0) - 2026-11-03
 
 ### Added

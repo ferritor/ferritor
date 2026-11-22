@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-core-v1.0.0...ferritor-core-v1.0.1) - 2026-11-22
+
+### Changed
+
+- the audit log to a file (audit_file) or a collector (audit_otlp)
+
 ## [1.0.0](https://github.com/ferritor/ferritor/compare/ferritor-core-v0.9.2...ferritor-core-v1.0.0) - 2026-11-16
 
 ### Added
