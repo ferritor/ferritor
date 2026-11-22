@@ -158,8 +158,8 @@ needs `server.pem`, `server-key.pem` and `client-ca.pem`; clients need
 
 ## 4. The audit signing key
 
-The audit log (the server's stdout) is hash-chained and signed with an
-Ed25519 key, required in secured mode:
+The audit log (its own file, `audit_file`) is hash-chained and signed with
+an Ed25519 key, required in secured mode:
 
 ```sh
 openssl genpkey -algorithm ed25519 -out audit-key.pem && chmod 600 audit-key.pem
@@ -170,12 +170,13 @@ openssl pkey -in audit-key.pem -pubout -out audit.pub.pem   # for whoever verifi
 
 `/etc/ferritor/ferritor.toml` (start from `ferritor.example.toml`, which documents
 every setting; see [configuration](/reference/configuration)). `[tls]`, at least one
-`[[policy]]` and `audit_signing_key` together make it secured; anything in
-between refuses to start.
+`[[policy]]`, `audit_signing_key` and `audit_file` together make it
+secured; anything in between refuses to start.
 
 ```toml
 listen_addr = "0.0.0.0:7070"
 audit_signing_key = "/etc/ferritor/audit-key.pem"
+audit_file = "/var/log/ferritor/audit.log"
 
 [tls]
 cert = "/etc/ferritor/server.pem"
@@ -201,11 +202,11 @@ stored policies, over the API, in the next steps.
 
 ## 6. Run it
 
-The server reads `ferritor.toml` from its working directory. Its **stdout is
-the audit log** and carries nothing else (its own logs go to stderr): send
-stdout to durable storage or a log shipper, off the host as it's written
-(see [audit log](/operations/audit)), never into the same stream as stderr. A systemd
-unit, as a starting point:
+The server reads `ferritor.toml` from its working directory. Its own logs
+go to stderr; the **audit log goes to `audit_file`** alone: ship that file
+off the host as it's written (see [audit log](/operations/audit)), or send
+it to a collector instead (`[audit_otlp]`). A systemd unit, as a starting
+point:
 
 ```ini
 # /etc/systemd/system/ferritor.service
@@ -221,15 +222,19 @@ WorkingDirectory=/etc/ferritor
 EnvironmentFile=/etc/ferritor/database.env
 ExecStart=/usr/local/bin/ferritor-server
 ExecReload=/bin/kill -HUP $MAINPID
-StandardOutput=append:/var/log/ferritor/audit.log
+# The logs (stderr) to the journal; the audit log to /var/log/ferritor
+# (audit_file), which systemd creates for the service's user, writable under
+# ProtectSystem=strict, and only theirs.
 StandardError=journal
+LogsDirectory=ferritor
+LogsDirectoryMode=0700
 TimeoutStopSec=30
 Restart=on-failure
 # Hardening (https://ferritor.dev/concepts/security): the unsealed
 # server holds the root key and every KEK in memory. It marks itself
 # undumpable at startup (no core dumps, no same-user ptrace or
-# /proc/<pid>/mem); these add the rest. ferritor writes no files itself
-# (systemd opens the audit log), so the system can be read-only.
+# /proc/<pid>/mem); these add the rest. ferritor writes nothing but the
+# audit log, so the system can be read-only outside LogsDirectory.
 # Its memory, keys included, never goes to swap (cgroup v2).
 MemorySwapMax=0
 LimitCORE=0
@@ -256,9 +261,11 @@ WantedBy=multi-user.target
 (systemd takes comments only on lines of their own, never after a setting.)
 
 These settings were tested as a system service (systemd 262, a non-root
-user, every setting as above) with the server serving gRPC and the JSON API
-under load, both databases, a SIGHUP reload and a draining stop, whose audit
-log then verified; test them on your own hosts before relying on them.
+user, every setting as above but `LogsDirectory=`, added since with
+`audit_file`: the audit log was then the unit's stdout) with the server
+serving gRPC and the JSON API under load, both databases, a SIGHUP reload
+and a draining stop, whose audit log then verified; test them on your own
+hosts before relying on them.
 `systemd-analyze security ferritor` rates the unit 2.2, "OK" (8.3 without the
 hardening). If a setting conflicts with something your hosts add (a
 monitoring library loaded into the process, a different libc), drop that one
@@ -272,29 +279,17 @@ Hibernation writes all of memory to disk whatever the cgroup says: don't
 let a ferritor host hibernate. ferritor doesn't lock its memory (`mlock`): its
 keys live in ordinary heap allocations.
 
-**Rotating the audit log file.** systemd opens `audit.log` once, when the
-server starts, and the server writes to that open file until it stops. So:
-
-- Don't rotate by renaming while the server runs (logrotate's default): the
-  server keeps writing to the renamed file, and the new one stays empty.
-- Never use `copytruncate`: lines written between the copy and the
-  truncate are lost, and the chain is broken.
-- Rotate across restarts instead: every start begins a new chain, so with
-  the server stopped, rename the file; each file then holds whole chains
-  that `ferritor audit verify` checks on their own. (A restart seals the
-  server: plan it like any other.)
-- Better still, have a log collector (Vector, Fluent Bit, …) follow the
-  file and ship it as it's written, which you want anyway (see
-  [audit log](/operations/audit)), and keep the local file for the current run.
-
-To verify a run split across several files, verify them concatenated, in
-order: `cat audit.log.1 audit.log | ferritor audit verify --public-key
-audit.pub.pem`. A file holding only part of a chain is reported unproven on
-its own.
+**Rotating the audit log file.** Rename it, then SIGHUP (`systemctl reload
+ferritor`): the server ends the chain in the old file and starts one in a
+new file at the path, so each file verifies on its own. The
+[audit log](/operations/audit#the-file) has a logrotate configuration for it
+(`delaycompress`, never `copytruncate`). Have a log collector (Vector,
+Fluent Bit, …) follow the file and ship it as it's written too, which you
+want anyway.
 
 SIGTERM drains in-flight calls and writes the audit log's signed
-`chain_end`; SIGHUP (`systemctl reload ferritor`) reloads the policy, the
-server certificate, the CRLs and the keyring (see
+`chain_end`; SIGHUP (`systemctl reload ferritor`) reopens the audit log and
+reloads the policy, the server certificate, the CRLs and the keyring (see
 [configuration](/reference/configuration), [operations](/operations/running)).
 
 ## 7. Initialize and unseal

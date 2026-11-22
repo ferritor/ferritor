@@ -41,8 +41,8 @@ use tokio_util::sync::CancellationToken;
 use tonic::service::Routes;
 use tracing_subscriber::EnvFilter;
 
-/// The ferritor server: gRPC and the JSON API on one port, the audit log on
-/// stdout, logs on stderr. Configured by `ferritor.toml` in the working
+/// The ferritor server: gRPC and the JSON API on one port, the audit log in
+/// its file or at a collector (stdout in dev mode), logs on stderr. Configured by `ferritor.toml` in the working
 /// directory and `FERRITOR_*` environment variables
 /// (https://ferritor.dev/reference/configuration), never by arguments.
 #[derive(Parser)]
@@ -186,11 +186,27 @@ fn start_metrics(
     Ok((exporting, listener))
 }
 
+/// Warns if others than its owner may read the audit log's file: it names
+/// every caller, path and decision.
+fn warn_if_shared(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mode = metadata.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            tracing::warn!(
+                path = %path.display(),
+                mode = format!("{mode:o}"),
+                "the audit log file is readable by group or others (chmod 600 it)"
+            );
+        }
+    }
+}
+
 /// How long a second signal waits for the audit log before exiting.
 const SECOND_SIGNAL_FLUSH: Duration = Duration::from_secs(1);
 
-/// On every SIGHUP, re-reads the settings and reloads what can change
-/// while serving: the `[[policy]]` (swapped into the gate) and, in secured
+/// On every SIGHUP, reopens the audit log's file (logrotate), re-reads the
+/// settings and reloads what can change while serving: the `[[policy]]` (swapped into the gate) and, in secured
 /// mode, the server certificate and key (new handshakes present them), so
 /// renewing a short-lived certificate needs no restart, and the CRLs (for
 /// every request from now on, open connections too). Everything else
@@ -204,6 +220,8 @@ async fn reload_on_hangup(
     exchange: Option<Arc<Exchange>>,
 ) {
     while hangup.recv().await.is_some() {
+        // First, so everything this reload records lands in the new file.
+        gate.reopen_audit_log();
         // The keyring too: independent of the settings file. In its own
         // task, so the policy reload (how access is revoked in a hurry)
         // doesn't wait behind the admin lock or a slow keys database.
@@ -478,7 +496,7 @@ async fn refresh_policies(seal: &Seal, gate: &Gate, trigger: &'static str, full:
 
 /// How long a request waits for its audit entry to be written before it's
 /// refused as unaudited. Writing a line takes microseconds; this only fires
-/// when stdout is stalled.
+/// when the audit log's file (or stdout) is stalled.
 const AUDIT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long shutdown waits for the audit writer to finish its queue.
@@ -503,7 +521,8 @@ async fn main() -> anyhow::Result<()> {
     if cfg!(debug_assertions) {
         dotenvy::dotenv().ok();
     }
-    // Stderr: stdout is the audit log, and carries nothing else.
+    // Stderr. Stdout carries the audit log in dev mode without an audit
+    // device, and nothing at all otherwise.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         // No colour codes in a file or the journal.
@@ -585,8 +604,37 @@ async fn main() -> anyhow::Result<()> {
              to it can't be proven"
         ),
     }
-    let (audit, audit_drain) = AuditLog::stdout(AUDIT_TIMEOUT, security.audit_key.clone())
-        .context("starting the audit log")?;
+    let audit_otlp = settings
+        .audit_otlp()
+        .context("reading [audit_otlp]'s files")?;
+    if settings.audit_file.is_none() && audit_otlp.is_none() {
+        tracing::info!("dev mode without audit_file or [audit_otlp]: the audit log goes to stdout");
+    }
+    let collector = audit_otlp.as_ref().map(|otlp| otlp.endpoint.clone());
+    let rotation = settings.audit_file_rotation().map_err(anyhow::Error::msg)?;
+    let (audit, audit_drain) = AuditLog::open(
+        settings.audit_file.as_deref().map(|path| (path, rotation)),
+        audit_otlp,
+        AUDIT_TIMEOUT,
+        security.audit_key.clone(),
+    )
+    .context("starting the audit log")?;
+    if let Some(path) = &settings.audit_file {
+        warn_if_shared(path);
+        tracing::info!(
+            path = %path.display(),
+            max_bytes = rotation.map(|r| r.max_bytes),
+            keep = rotation.map(|r| r.keep),
+            "audit log to its file (reopened on SIGHUP)"
+        );
+    }
+    if let Some(endpoint) = collector {
+        tracing::info!(
+            endpoint,
+            "audit log to the collector over OTLP: requests are refused while it doesn't \
+             acknowledge their entries"
+        );
+    }
     audit_for_signals.set(audit_drain.clone()).ok();
     let gate = Arc::new(Gate::new(security.authz, audit));
     gate.policy_loaded(security.policy.as_ref());

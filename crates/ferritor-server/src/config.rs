@@ -6,8 +6,8 @@
 //! - **dev**: no `[tls]` and no `[[policy]]`. Plaintext (gRPC and the JSON
 //!   API), everyone allowed, so only on loopback (`ensure_loopback`).
 //! - **secured**: `[tls]` (client certificates required), at least one
-//!   `[[policy]]`, and `audit_signing_key` (the audit log's checkpoints are
-//!   signed). Any address. The allow-everything authorizer is never built
+//!   `[[policy]]`, `audit_signing_key` (the audit log's checkpoints are
+//!   signed) and `audit_file` (the audit log's own file). Any address. The allow-everything authorizer is never built
 //!   in this mode.
 //!
 //! Anything else (TLS without a policy, a policy without TLS) refuses to
@@ -107,6 +107,28 @@ pub struct Settings {
     /// Keep it readable by the server's user only (startup warns
     /// otherwise): whoever can read it can sign forged checkpoints.
     pub audit_signing_key: Option<PathBuf>,
+    /// The file the audit log is appended to (see `audit`), created `0600`
+    /// if missing, reopened on SIGHUP (for logrotate: rename it, then send
+    /// SIGHUP). Secured mode needs it or `[audit_otlp]` (or both), and never
+    /// writes the audit log to stdout; dev mode without either writes it to
+    /// stdout (the server logs to stderr). The
+    /// server refuses to start if it can't open it, and refuses requests
+    /// while it can't write to it. Read at startup; a SIGHUP reopens the
+    /// same path.
+    pub audit_file: Option<PathBuf>,
+    /// Rotate `audit_file` by size: once it holds this many bytes it's
+    /// renamed `<audit_file>.1` (older ones moving up) and a new file
+    /// starts, each holding whole chains; at least 1 MiB. Unset, never
+    /// (logrotate and SIGHUP can still rotate it). For where nothing else
+    /// rotates it, such as a pod.
+    pub audit_file_max_bytes: Option<u64>,
+    /// With `audit_file_max_bytes`: rotated files kept (`.1` to `.N`), the
+    /// oldest dropped. Default 5, from 1 to 1000. The file then takes at
+    /// most about `(audit_file_keep + 1) * audit_file_max_bytes` of disk.
+    pub audit_file_keep: Option<u32>,
+    /// The audit log to an OpenTelemetry collector ([`AuditOtlpSettings`]),
+    /// instead of `audit_file` or with it. Secured mode needs one of them.
+    pub audit_otlp: Option<AuditOtlpSettings>,
     pub tls: Option<TlsSettings>,
     #[serde(default)]
     pub policy: Vec<policy::Rule>,
@@ -180,6 +202,27 @@ pub struct PrometheusListener {
     pub tls: bool,
     /// Scrapers must present a certificate from this CA (TLS only).
     pub client_ca: Option<PathBuf>,
+}
+
+/// `[audit_otlp]`: every audit line a log record sent over OTLP (gRPC) to
+/// a collector, its body the line as written (see `audit_otlp`). An entry
+/// counts as recorded only once the collector has acknowledged it (and,
+/// with `audit_file` too, it's in the file): a collector down or refusing
+/// refuses requests. Read at startup.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuditOtlpSettings {
+    /// The collector's OTLP gRPC endpoint: `https://…:4317`, or `http://`
+    /// on loopback only (a collector on the same host): the log names
+    /// every caller and path.
+    pub endpoint: String,
+    /// A CA (PEM) to trust for the collector's certificate, besides the
+    /// public roots.
+    pub ca: Option<PathBuf>,
+    /// A client certificate and key (PEM) to present (mTLS): both or
+    /// neither.
+    pub cert: Option<PathBuf>,
+    pub key: Option<PathBuf>,
 }
 
 /// `[seal]`: `provider = "shamir"` (the default: operators' shares),
@@ -446,6 +489,12 @@ impl Settings {
         settings.limits().map_err(config::ConfigError::Message)?;
         settings.identity().map_err(config::ConfigError::Message)?;
         settings.metrics().map_err(config::ConfigError::Message)?;
+        if let Some(otlp) = &settings.audit_otlp {
+            audit_otlp_endpoint(otlp).map_err(config::ConfigError::Message)?;
+        }
+        settings
+            .audit_file_rotation()
+            .map_err(config::ConfigError::Message)?;
         match (&settings.tls, settings.policy.is_empty()) {
             (None, true) => ensure_loopback(settings.listen_addr)?,
             (Some(tls), false) => {
@@ -453,6 +502,13 @@ impl Settings {
                     return Err(config::ConfigError::Message(
                         "secured mode needs audit_signing_key: the audit log's checkpoints are \
                          signed, so edits to it can be detected"
+                            .to_owned(),
+                    ));
+                }
+                if settings.audit_file.is_none() && settings.audit_otlp.is_none() {
+                    return Err(config::ConfigError::Message(
+                        "secured mode needs audit_file or [audit_otlp] (or both): the audit log \
+                         goes to a file or a collector of its own, never stdout"
                             .to_owned(),
                     ));
                 }
@@ -530,6 +586,53 @@ impl Settings {
             connection_age_grace: Duration::from_secs(tls_settings.connection_age_grace_secs),
             audit_key,
         })
+    }
+}
+
+/// The smallest `audit_file_max_bytes`: a line may be up to 1 MiB.
+const MIN_AUDIT_FILE_BYTES: u64 = 1024 * 1024;
+/// `audit_file_keep` without a value.
+const DEFAULT_AUDIT_FILE_KEEP: u32 = 5;
+
+impl Settings {
+    /// `audit_file_max_bytes` and `audit_file_keep`, checked; `None`: no
+    /// rotation by size.
+    pub fn audit_file_rotation(&self) -> Result<Option<crate::audit::Rotation>, String> {
+        let Some(max_bytes) = self.audit_file_max_bytes else {
+            if self.audit_file_keep.is_some() {
+                return Err("audit_file_keep needs audit_file_max_bytes".to_owned());
+            }
+            return Ok(None);
+        };
+        if self.audit_file.is_none() {
+            return Err("audit_file_max_bytes needs audit_file".to_owned());
+        }
+        if max_bytes < MIN_AUDIT_FILE_BYTES {
+            return Err(format!(
+                "audit_file_max_bytes ({max_bytes}) must be at least {MIN_AUDIT_FILE_BYTES} (1 MiB)"
+            ));
+        }
+        let keep = self.audit_file_keep.unwrap_or(DEFAULT_AUDIT_FILE_KEEP);
+        if !(1..=1000).contains(&keep) {
+            return Err(format!("audit_file_keep ({keep}) must be from 1 to 1000"));
+        }
+        Ok(Some(crate::audit::Rotation { max_bytes, keep }))
+    }
+
+    /// `[audit_otlp]`, its files read; `None` without the section.
+    pub fn audit_otlp(&self) -> Result<Option<crate::audit_otlp::OtlpSettings>, SecurityError> {
+        let Some(otlp) = &self.audit_otlp else {
+            return Ok(None);
+        };
+        let client = match (&otlp.cert, &otlp.key) {
+            (Some(cert), Some(key)) => Some((read(cert)?, Zeroizing::new(read(key)?))),
+            _ => None,
+        };
+        Ok(Some(crate::audit_otlp::OtlpSettings {
+            endpoint: otlp.endpoint.clone(),
+            ca_pem: otlp.ca.as_deref().map(read).transpose()?,
+            client,
+        }))
     }
 }
 
@@ -700,6 +803,33 @@ fn gcp_kms(raw: &GcpKmsSettings) -> Result<crate::auto_unseal::GcpKmsConfig, Str
     })
 }
 
+/// `[audit_otlp]`'s endpoint and client identity, checked: never the log
+/// in the clear off this host (loopback as plaintext serving decides it,
+/// never by DNS).
+fn audit_otlp_endpoint(otlp: &AuditOtlpSettings) -> Result<(), String> {
+    let endpoint = &otlp.endpoint;
+    let uri: axum::http::Uri = endpoint
+        .parse()
+        .map_err(|_| format!("audit_otlp.endpoint {endpoint:?} isn't a URL"))?;
+    let host = uri.host().unwrap_or_default();
+    let https = uri.scheme_str() == Some("https");
+    if !(https || (uri.scheme_str() == Some("http") && crate::http::is_loopback_host(host))) {
+        return Err(format!(
+            "audit_otlp.endpoint {endpoint:?} must be https:// (http:// only on loopback: the \
+             audit log names every caller and path)"
+        ));
+    }
+    if otlp.cert.is_some() != otlp.key.is_some() {
+        return Err("audit_otlp.cert and audit_otlp.key go together".to_owned());
+    }
+    if !https && (otlp.ca.is_some() || otlp.cert.is_some()) {
+        return Err(format!(
+            "audit_otlp.ca, cert and key need an https:// endpoint, not {endpoint:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// A KMS endpoint, checked: the root key goes in the wrap's request body,
 /// so never in the clear off this host. Loopback as plaintext serving
 /// decides it, never by DNS.
@@ -806,6 +936,10 @@ pub const KNOWN_KEYS: &[&str] = &[
     "policy_refresh_secs",
     "shutdown_delay_secs",
     "audit_signing_key",
+    "audit_file",
+    "audit_file_max_bytes",
+    "audit_file_keep",
+    "audit_otlp",
     "tls",
     "policy",
     "rate_limit",
@@ -1199,10 +1333,11 @@ mod tests {
         data_database_url = "postgres://d"
     "#;
 
-    /// With the audit signing key secured mode needs: top-level, so before
-    /// the table.
+    /// With the audit signing key and file secured mode needs: top-level,
+    /// so before the table.
     const TLS: &str = r#"
         audit_signing_key = "audit-key.pem"
+        audit_file = "audit.log"
         [tls]
         cert = "server.pem"
         key = "server-key.pem"
@@ -1575,13 +1710,26 @@ mod tests {
             )
         );
         for key in KNOWN_KEYS.iter().filter(|key| {
-            !["tls", "policy", "rate_limit", "identity", "seal", "metrics"].contains(key)
+            ![
+                "tls",
+                "policy",
+                "rate_limit",
+                "identity",
+                "seal",
+                "metrics",
+                "audit_otlp",
+            ]
+            .contains(key)
         }) {
             assert!(
                 EXAMPLE.contains(&format!("{key} = ")),
                 "{key} isn't in the example"
             );
         }
+        // Its own section, commented out as a whole (the uncommented form
+        // has audit_file, and both are allowed).
+        assert!(EXAMPLE.contains("#[audit_otlp]"));
+        assert!(secured.audit_otlp.is_some());
         assert!(EXAMPLE.contains("#[seal.awskms]") && EXAMPLE.contains("#[seal.gcpkms]"));
         assert_eq!(dev.metrics().unwrap(), Metrics::OtlpIfConfigured);
         assert_eq!(
@@ -1621,7 +1769,7 @@ mod tests {
         assert_eq!(parse("").unwrap().policy_refresh_secs, 5);
         assert_eq!(all.shutdown_delay_secs, 5);
         assert_eq!(parse("").unwrap().shutdown_delay_secs, 0);
-        assert_eq!(KNOWN_KEYS.len(), 19);
+        assert_eq!(KNOWN_KEYS.len(), 23);
         assert!(matches!(all.metrics().unwrap(), Metrics::Prometheus(_)));
         assert_eq!(all.identity().unwrap().unwrap().issuers.len(), 1);
         assert_eq!(
@@ -1640,6 +1788,7 @@ mod tests {
             (10, 10)
         );
         assert_eq!(all.audit_signing_key, Some(PathBuf::from("audit-key.pem")));
+        assert_eq!(all.audit_file, Some(PathBuf::from("audit.log")));
         assert_eq!(parse("").unwrap().max_versions, 10);
         // Unset: deletions are kept 30 days.
         assert_eq!(
@@ -1806,6 +1955,99 @@ mod tests {
         let unsigned = TLS.replace("audit_signing_key = \"audit-key.pem\"", "");
         let unsigned = parse(&format!("{unsigned}\n{POLICY}")).unwrap_err();
         assert!(unsigned.contains("needs audit_signing_key"), "{unsigned}");
+        // Nor a file of its own: secured mode never writes it to stdout.
+        let to_stdout = TLS.replace("audit_file = \"audit.log\"", "");
+        let to_stdout = parse(&format!("{to_stdout}\n{POLICY}")).unwrap_err();
+        assert!(to_stdout.contains("needs audit_file"), "{to_stdout}");
+        // Dev mode may have one, or not.
+        assert!(parse("audit_file = \"audit.log\"").is_ok());
+        assert!(parse("").unwrap().audit_file.is_none());
+        // A collector instead of the file is enough.
+        let no_file = TLS.replace("audit_file = \"audit.log\"", "");
+        let (top, table) = no_file.split_at(no_file.find("[tls]").unwrap());
+        let otlp = parse(&format!(
+            "{top}\n[audit_otlp]\nendpoint = \"https://collector:4317\"\n{table}\n{POLICY}"
+        ))
+        .unwrap();
+        assert!(otlp.audit_file.is_none() && otlp.audit_otlp.is_some());
+    }
+
+    /// Rotation by size: both settings with `audit_file`, at least 1 MiB,
+    /// keep from 1 to 1000 (5 by default).
+    #[test]
+    fn the_audit_file_rotates_by_size_when_told() {
+        let file = "audit_file = \"a.log\"\n";
+        let rotation = |body: &str| parse(body).map(|s| s.audit_file_rotation().unwrap());
+        assert_eq!(rotation(file).unwrap(), None);
+        assert_eq!(
+            rotation(&format!("{file}audit_file_max_bytes = 104857600")).unwrap(),
+            Some(crate::audit::Rotation {
+                max_bytes: 104_857_600,
+                keep: 5
+            })
+        );
+        assert_eq!(
+            rotation(&format!(
+                "{file}audit_file_max_bytes = 1048576\naudit_file_keep = 2"
+            ))
+            .unwrap()
+            .map(|r| r.keep),
+            Some(2)
+        );
+        for (bad, says) in [
+            ("audit_file_max_bytes = 104857600", "needs audit_file"),
+            (
+                "audit_file = \"a.log\"\naudit_file_keep = 3",
+                "needs audit_file_max_bytes",
+            ),
+            (
+                "audit_file = \"a.log\"\naudit_file_max_bytes = 1000",
+                "at least",
+            ),
+            (
+                "audit_file = \"a.log\"\naudit_file_max_bytes = 1048576\naudit_file_keep = 0",
+                "from 1 to 1000",
+            ),
+        ] {
+            let error = parse(bad).unwrap_err();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
+    }
+
+    /// `[audit_otlp]`'s endpoint: https, or http on loopback; TLS files only
+    /// with https; a client certificate with its key.
+    #[test]
+    fn the_audit_collector_is_reached_safely() {
+        let otlp = |body: &str| parse(&format!("[audit_otlp]\n{body}\n"));
+        for ok in [
+            "endpoint = \"https://collector.internal:4317\"",
+            "endpoint = \"http://localhost:4317\"",
+            "endpoint = \"http://127.0.0.1:4317\"",
+            "endpoint = \"https://c:4317\"\nca = \"ca.pem\"\ncert = \"c.pem\"\nkey = \"k.pem\"",
+        ] {
+            assert!(otlp(ok).is_ok(), "{ok}");
+        }
+        for (bad, says) in [
+            (
+                "endpoint = \"http://collector.internal:4317\"",
+                "must be https://",
+            ),
+            (
+                "endpoint = \"https://c:4317\"\ncert = \"c.pem\"",
+                "go together",
+            ),
+            (
+                "endpoint = \"http://localhost:4317\"\nca = \"ca.pem\"",
+                "need an https://",
+            ),
+            (
+                "endpoint = \"https://c:4317\"\nheaders = \"x\"",
+                "unknown field",
+            ),
+        ] {
+            let error = otlp(bad).unwrap_err();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
     }
 
     #[test]

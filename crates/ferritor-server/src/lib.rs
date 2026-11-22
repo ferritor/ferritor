@@ -3,6 +3,7 @@
 //! only wires it up.
 
 pub mod audit;
+pub mod audit_otlp;
 pub mod authz;
 pub mod auto_unseal;
 #[cfg(feature = "aws-kms")]

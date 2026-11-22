@@ -19,6 +19,11 @@ certificates, a stored policy and the signed audit log on, as in production.
 - Server defaults (`max_versions = 10`), but `data_database_max_connections
   = 32`. Values of 100 bytes, over the JSON API (HTTP/1.1, keep-alive).
 - 30 s per scenario, in `bench/scenarios.sh`'s order, on fresh databases.
+- The audit log to a local file: stdout redirected when these were
+  measured, the same writes `audit_file` makes now. With `[audit_otlp]`
+  every audited request also waits for the collector to acknowledge its
+  batch (one round trip per batch, shared by the requests queued in it),
+  which these results don't include: measure with your collector.
 
 ## Results
 

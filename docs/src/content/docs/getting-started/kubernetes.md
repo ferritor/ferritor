@@ -203,6 +203,9 @@ listen_addr = "0.0.0.0:7070"
 keys_database_url = "postgres://ferritor_keys:KEYS_PASSWORD@keys-db.ferritor-system.svc:5432/ferritor_keys"
 data_database_url = "postgres://ferritor_data:DATA_PASSWORD@data-db.ferritor-system.svc:5432/ferritor_data"
 audit_signing_key = "/etc/ferritor/audit-key.pem"
+audit_file = "/var/log/ferritor/audit.log"   # an emptyDir, streamed by the audit sidecar
+audit_file_max_bytes = 104857600             # rotated by the server at 100 MiB,
+audit_file_keep = 2                          # so it never takes more than about 300 MiB
 shutdown_delay_secs = 5          # endpoints drop the pod before it stops listening
 
 [tls]
@@ -275,9 +278,25 @@ spec:
             capabilities: {drop: ["ALL"]}
           volumeMounts:
             - {name: config, mountPath: /etc/ferritor, readOnly: true}
+            - {name: audit, mountPath: /var/log/ferritor}
+        # The audit log's file, streamed to this container's log, which the
+        # cluster's log collector ships like any other.
+        - name: audit
+          image: busybox:1.37
+          command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log']
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001                 # the file is the server's, 0600
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: audit, mountPath: /var/log/ferritor, readOnly: true}
       volumes:
         - name: config
           secret: {secretName: ferritor-server, defaultMode: 0440}
+        - name: audit
+          emptyDir: {}
       securityContext: {fsGroup: 10001}  # the files' group: the server reads them as it
 ---
 apiVersion: v1
@@ -292,20 +311,32 @@ spec:
 
 ```sh
 kubectl apply -f server.yaml
-kubectl -n ferritor-system logs deploy/ferritor    # both streams: the audit log (stdout) and logs (stderr)
+kubectl -n ferritor-system logs deploy/ferritor -c ferritor   # the server's logs
+kubectl -n ferritor-system logs deploy/ferritor -c audit      # the audit log
 ```
 
 The Secret's files are root's, readable by the pod's `fsGroup`, so the
 server warns at startup that the audit signing key is group-readable: here
 the group is the pod's own, no one else's.
 
-The audit log is the container's stdout: ship it off the cluster as it's
-written, the stdout stream alone (log collectors read the kubelet's log
-files, where every line says its stream), and verify it with `ferritor audit
-verify --public-key audit.pub.pem` ([audit](/operations/audit)). `kubectl logs`
-interleaves stderr with it, which the verifier reports as a broken chain;
-for a quick look, keep the JSON lines (`kubectl logs deploy/ferritor | grep
-'^{'`). The server marks
+The audit log is the `audit` container's log: ship it off the cluster as
+it's written (log collectors read the kubelet's log files), and verify it
+with `ferritor audit verify --public-key audit.pub.pem`
+([audit](/operations/audit)), for example `kubectl -n ferritor-system logs
+deploy/ferritor -c audit | ferritor audit verify --public-key
+audit.pub.pem`. The file is on the node's disk (the pod's ephemeral
+storage) for as long as the pod runs; the server rotates it by size, so it
+stays within `(audit_file_keep + 1) × audit_file_max_bytes`, and `tail -F`
+follows the new file. Each line is stored twice on the node, in the file
+and in the sidecar's container log, and a restarted sidecar sends the
+current file again from its start: the shipper then holds those chains
+twice, each copy verifying the same.
+
+**With an OpenTelemetry collector in the cluster, use `[audit_otlp]`
+instead**: the audit log goes straight to the collector, with no file, no
+sidecar and nothing on the node's disk ([audit log](/operations/audit#over-otlp)).
+Give that collector a persistent queue and run it on other nodes than the
+server's, or an acknowledged entry can still be lost with it. The server marks
 itself undumpable; nodes should run without swap, as Kubernetes nodes
 usually do.
 

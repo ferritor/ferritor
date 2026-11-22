@@ -75,6 +75,7 @@ keys_database_url = "postgres://ferritor:ferritor@localhost:5433/ferritor_bench_
 data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_bench_data"
 data_database_max_connections = $POOL
 audit_signing_key = "$run/audit-key.pem"
+audit_file = "$run/audit.log"
 
 [tls]
 cert = "$run/server.pem"
