@@ -1979,9 +1979,13 @@ impl<W: Sink> Writer<W> {
     /// write).
     fn start(&mut self) -> io::Result<()> {
         let start = self.chain.start(&now()).map_err(io::Error::other)?;
-        self.put(&start, None)?;
-        self.broken = false;
-        Ok(())
+        let started = self.put(&start, None);
+        // Written in full, the new chain stands, even if the flush then
+        // failed (the error still goes back): nothing lost is in it.
+        if !self.chain.needs_start() {
+            self.broken = false;
+        }
+        started
     }
 
     /// The drain's end: the chain's signed `chain_end`. A chain a failure
@@ -2856,6 +2860,74 @@ mod tests {
             file.full(),
             "rotates at its own max_bytes, not the old file's"
         );
+    }
+
+    /// Writes into `audit`, failing the `write`th write and the `flush`th
+    /// flush (counted from 1).
+    struct Scripted {
+        audit: Captured,
+        write: usize,
+        flush: usize,
+        writes: usize,
+        flushes: usize,
+    }
+
+    impl Write for Scripted {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            if self.writes == self.write {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            self.audit.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            if self.flushes == self.flush {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            Ok(())
+        }
+    }
+
+    /// A lost entry breaks the chain off; the next one starts a new chain,
+    /// whose start is written in full but whose flush fails. The new chain
+    /// stands: the entry after it goes in, and the drain ends it, proven.
+    #[tokio::test]
+    async fn a_recovered_chain_ends_even_if_its_starts_flush_failed() {
+        let audit = Captured::default();
+        // Writes: the first start (1), entry A (2, fails), the new start
+        // (3), entry C (4), the end (5). Flushes: start (1), new start (2,
+        // fails), C (3), end (4).
+        let out = Scripted {
+            audit: audit.clone(),
+            write: 2,
+            flush: 2,
+            writes: 0,
+            flushes: 0,
+        };
+        let (log, drain) = AuditLog::start(
+            Stream(out),
+            None,
+            Duration::from_secs(1),
+            Some(signing_key()),
+            CHECKPOINT_INTERVAL,
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        for refused in [Action::Read, Action::List] {
+            assert!(gate.check(&alice(), refused, Target::System).await.is_err());
+        }
+        gate.check(&alice(), Action::Write, Target::System)
+            .await
+            .unwrap();
+        assert!(
+            drain.wait(Duration::from_secs(2)).await,
+            "the drain ended it"
+        );
+        let report = verified(&audit);
+        let last = report.chains.last().unwrap();
+        assert_eq!(last.state, ChainState::Complete, "{report:?}");
     }
 
     /// Stdout has nothing to reopen: a SIGHUP leaves its chain going.

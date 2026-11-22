@@ -214,7 +214,7 @@ spec:
     # read, and what the checks below read.
     - name: audit
       image: $busybox
-      command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log 2>/dev/null']
+      command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log']
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
