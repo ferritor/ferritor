@@ -76,11 +76,13 @@ It applies the databases' migrations and serves gRPC and the JSON API on
 `127.0.0.1:7070`. Every setting can come from the environment like these
 two, `FERRITOR_` and the key in capitals ([configuration](/reference/configuration)).
 Its log goes to stderr; stdout carries the [audit log](/operations/audit)
-and nothing else, hence the redirect. Without a `ferritor.toml` it's in
-dev mode, and says so:
+and nothing else, hence the redirect (a real deployment gives the audit log
+a file or a collector of its own, `audit_file` or `[audit_otlp]`). Without
+a `ferritor.toml` it's in dev mode, and says so:
 
 ```
 WARN dev mode without audit_signing_key: the audit log is chained but unsigned, so edits to it can't be proven
+INFO dev mode without audit_file or [audit_otlp]: the audit log goes to stdout
 INFO serving gRPC and the JSON API; sealed addr=127.0.0.1:7070 mode="dev mode: plaintext, everyone allowed, loopback only"
 ```
 

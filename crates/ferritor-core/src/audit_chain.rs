@@ -184,6 +184,17 @@ impl Chain {
         })
     }
 
+    /// This chain's id, hex, as its `chain_start` carries it.
+    pub fn id(&self) -> String {
+        hex(&self.id)
+    }
+
+    /// The `seq` the next line written gets: a line's own, until
+    /// [`Chain::written`].
+    pub fn next_seq(&self) -> u64 {
+        self.next
+    }
+
     /// Whether the next line must be a new chain's start ([`Chain::start`]):
     /// nothing written yet, the chain ended, or a write failed.
     pub fn needs_start(&self) -> bool {

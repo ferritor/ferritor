@@ -89,7 +89,7 @@ to 10 s.
 | `ferritor.rate_limit.refused` | `ferritor_rate_limit_refused_total` | counter | `limit` (rate, in_flight, denied, unauthenticated; exchanges: a token exchange refused, too many for its identity; exchange_refused: a refused exchange's audit entry left out; server: no slot under the server-wide cap in time) |
 | `ferritor.identity.exchanges` | `ferritor_identity_exchanges_total` | counter | `issuer` (a configured issuer's name, or unknown), `result` (issued, refused, unavailable, rate_limited) |
 | `ferritor.rate_limit.waited` | `ferritor_rate_limit_waited_seconds` | histogram (s) | the wait for a slot under the server-wide cap |
-| `ferritor.reloads` | `ferritor_reloads_total` | counter | `kind` (policy, certificate, crl, keyring, policy_store, identity), `result` (policy_store: changed, unchanged, failed, integrity, rollback, recovered; counted on every attempt, while a failure is logged and audited only when it starts, changes or ends) |
+| `ferritor.reloads` | `ferritor_reloads_total` | counter | `kind` (policy, certificate, crl, keyring, policy_store, identity, audit_log: the file's reopen at SIGHUP), `result` (policy_store: changed, unchanged, failed, integrity, rollback, recovered; counted on every attempt, while a failure is logged and audited only when it starts, changes or ends) |
 | `ferritor.policy.revision` | `ferritor_policy_revision` | gauge | the stored policies' verified revision in force; absent unless one is |
 | `ferritor.policies` | `ferritor_policies` | gauge | stored policies in force; absent unless verified |
 | `ferritor.audit.queue.depth` | `ferritor_audit_queue_depth` | gauge | entries waiting for the writer |
@@ -117,8 +117,10 @@ to 10 s.
   a person ([key management](/operations/key-management#auto-unseal)).
 - `ferritor_kek_vanished` above 0: urgent, see [high
   availability](/operations/high-availability).
-- `ferritor_audit_queue_depth` rising (stdout stalling, before requests are
-  refused), and any `ferritor_audit_failures_total`.
+- `ferritor_audit_queue_depth` rising (the audit log's file stalling, before requests are
+  refused), any `ferritor_audit_failures_total`, and
+  `ferritor_reloads_total{kind="audit_log",result="failed"}` (a reopen that
+  couldn't open the file: requests are refused until it can).
 - The two expiry gauges, `ferritor_server_certificate_expiry_seconds` and
   `ferritor_tls_crl_next_update_seconds`, getting near.
 - `ferritor_policy_revision` differing between servers for longer than

@@ -40,7 +40,7 @@ accordingly.
                                                                               │          ──► data database
                                                                               │              (ciphertexts,
                                                                               ▼               wrapped DEKs)
-                                                                 audit log (stdout) ──► shipped off the host
+                                                              audit log (its file) ──► shipped off the host
 ```
 
 | Who | Holds | Trusted with |

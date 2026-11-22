@@ -36,7 +36,7 @@ client certificate, so the checker needs one too.
 |---|---|
 | SIGINT, SIGTERM (first) | not ready at once; after `shutdown_delay_secs` (default 0), drain: in-flight calls finish, no new connections, HTTP/2 clients get a GOAWAY, HTTP/1.1 keep-alives close |
 | SIGINT, SIGTERM (second) | exit at once, after at most a second's wait for the audit log |
-| SIGHUP | reload the policy, server certificate, CRLs, keyring and `[identity]` (see [configuration](/reference/configuration)) |
+| SIGHUP | reopen the audit log's file (rotation), reload the policy, server certificate, CRLs, keyring and `[identity]` (see [configuration](/reference/configuration)) |
 
 With auto-unseal, a SIGTERM sets no hold: the server unseals itself again
 when it comes back, which is what a rolling restart wants. `ferritor seal` is

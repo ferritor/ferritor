@@ -47,7 +47,7 @@ diagnostics() {
     kubectl -n "$ns" get events --sort-by=.lastTimestamp 2>/dev/null | tail -20 || true
   done
   kubectl -n ferritor-system logs ds/ferritor-csi-provider --tail=40 2>/dev/null || true
-  kubectl -n ferritor-system logs ferritor --tail=40 2>/dev/null | grep -v '^{' || true
+  kubectl -n ferritor-system logs ferritor -c ferritor --tail=40 2>/dev/null || true
 }
 
 fail() {
@@ -129,6 +129,9 @@ listen_addr = "0.0.0.0:7070"
 keys_database_url = "postgres://ferritor:ferritor@postgres.ferritor-system.svc:5432/ferritor_keys"
 data_database_url = "postgres://ferritor:ferritor@postgres.ferritor-system.svc:5432/ferritor_data"
 audit_signing_key = "/etc/ferritor/audit-key.pem"
+audit_file = "/var/log/ferritor/audit.log"
+audit_file_max_bytes = 104857600
+audit_file_keep = 2
 keyring_refresh_secs = 10
 
 [tls]
@@ -206,8 +209,23 @@ spec:
         capabilities: {drop: [ALL]}
       volumeMounts:
         - {name: config, mountPath: /etc/ferritor, readOnly: true}
+        - {name: audit, mountPath: /var/log/ferritor}
+    # The audit log's file, to this container's log: what a shipper would
+    # read, and what the checks below read.
+    - name: audit
+      image: $busybox
+      command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log']
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
+      volumeMounts:
+        - {name: audit, mountPath: /var/log/ferritor, readOnly: true}
   volumes:
     - {name: config, secret: {secretName: ferritor-server, defaultMode: 0440}}
+    - {name: audit, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service
@@ -217,7 +235,7 @@ spec:
   ports: [{name: api, port: 7070}, {name: exchange, port: 7071}]
 EOF
 kubectl -n ferritor-system wait --for=condition=Ready pod/ferritor --timeout=120s >/dev/null
-wait_for 60 "the server serving" sh -c "kubectl -n ferritor-system logs ferritor | grep -q 'serving gRPC'"
+wait_for 60 "the server serving" sh -c "kubectl -n ferritor-system logs ferritor -c ferritor | grep -q 'serving gRPC'"
 
 forward() { # forward <local> <remote>
   kubectl -n ferritor-system port-forward svc/ferritor "$1:$2" >"$work/forward-$2.log" 2>&1 &
@@ -398,7 +416,7 @@ sleep 45
 [ "$(phase denied)" = Pending ] || fail "pod denied is $(phase denied), not waiting"
 kubectl -n billing get events --field-selector involvedObject.name=denied |
   grep -q PermissionDenied || fail "pod denied: no PermissionDenied mount event"
-denials=$(kubectl -n ferritor-system logs ferritor | grep '^{' | grep '"decision":"denied"' |
+denials=$(kubectl -n ferritor-system logs ferritor -c audit | grep '"decision":"denied"' |
   grep -c 'billing/secret/x' || true)
 [ "$denials" = 1 ] || fail "the denied path reached the server $denials times, not once"
 kubectl -n billing delete pod denied --wait=false >/dev/null

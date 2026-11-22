@@ -13,8 +13,8 @@ is refused (exit code 2) before anything is read, rather than ignored.
 
 **`ferritor.example.toml`** documents every setting with its default: copy it
 to `ferritor.toml` (gitignored) and edit. As shipped it's a dev-mode config;
-uncommenting `[tls]`, the `[[policy]]` entries and `audit_signing_key`
-together makes it secured. A test loads it in both forms, so it stays
+uncommenting `[tls]`, the `[[policy]]` entries, `audit_signing_key` and
+`audit_file` together makes it secured. A test loads it in both forms, so it stays
 accurate.
 
 In production you need only this file and/or the `FERRITOR_*` variables. The
@@ -29,14 +29,15 @@ server.
 
 | | dev | secured |
 |---|---|---|
-| Configured by | no `[tls]`, no `[[policy]]` | `[tls]`, at least one `[[policy]]`, and `audit_signing_key` |
+| Configured by | no `[tls]`, no `[[policy]]` | `[tls]`, at least one `[[policy]]`, `audit_signing_key`, and `audit_file` or `[audit_otlp]` |
 | Transport | plaintext | TLS, client certificate required |
 | Authorization | everyone may do everything | the policy |
 | Listens on | loopback only | any address |
-| Audit log | chained, signed only with `audit_signing_key` | chained and signed |
+| Audit log | chained, signed only with `audit_signing_key`; on stdout unless `audit_file` or `[audit_otlp]` | chained and signed, in `audit_file`, at `[audit_otlp]`'s collector, or both |
+| The server's log | stderr | stderr |
 
 Anything in between (TLS without a policy, a policy without TLS, secured
-without a signing key) refuses to start. Dev mode is for trying ferritor out
+without a signing key, or with nowhere for the audit log) refuses to start. Dev mode is for trying ferritor out
 and for development: anyone who can reach it can seal it, rotate, start a
 rekey or submit fake shares, and real shares cross it in plaintext. Plaintext
 serving also answers only requests *addressed* to `localhost` or a loopback
@@ -59,6 +60,10 @@ rebinding from a browser on the same machine.
 | `policy_refresh_secs` | 5 | How often an unsealed server checks whether the stored policies changed (one tiny read), reloading them if so: the longest a change through another server takes to reach this one. 0 turns the poll off. (Separately, every server re-reads and re-verifies the whole set once a minute, on its own schedule.) |
 | `shutdown_delay_secs` | 0 | On the first SIGINT/SIGTERM, how long to keep serving while reporting not ready before draining (at most 300). See [operations](/operations/running). |
 | `audit_signing_key` | (secured: required) | Ed25519 private key, PKCS#8 PEM, signing the audit log's checkpoints. Startup warns if group or others can read it. |
+| `audit_file` | (secured: it or `[audit_otlp]`; dev: stdout) | The file the audit log is appended to, created `0600` (startup warns if an existing one is readable by group or others). Reopened on SIGHUP, for rotation ([audit log](/operations/audit#the-file)). The server won't start if it can't open it, and refuses requests while it can't write to it. |
+| `audit_file_max_bytes` | (unset: no rotation by size) | Rotate `audit_file` once it holds this many bytes (at least 1 MiB): renamed `<audit_file>.1`, older ones moving up, a new file started, each holding whole chains. For where nothing else rotates it (a pod). |
+| `audit_file_keep` | 5 | With `audit_file_max_bytes`: rotated files kept, 1 to 1000; the oldest is dropped. The file takes at most about `(audit_file_keep + 1) × audit_file_max_bytes`. |
+| `[audit_otlp]` | (secured: it or `audit_file`) | The audit log to an OpenTelemetry collector, OTLP log records over gRPC: `endpoint` (`https://`, or `http://` on loopback), optional `ca`, `cert` and `key` (PEM; `cert` and `key` together). An entry counts as recorded once the collector has acknowledged it; one that's down refuses requests ([audit log](/operations/audit#over-otlp)). Read at startup. |
 
 `[tls]` (secured mode):
 
@@ -194,6 +199,7 @@ listen_addr = "0.0.0.0:7070"
 keys_database_url = "postgres://ferritor@keys-db/ferritor_keys"
 data_database_url = "postgres://ferritor@data-db/ferritor_data"
 audit_signing_key = "/etc/ferritor/audit-key.pem"
+audit_file = "/var/log/ferritor/audit.log"
 
 [tls]
 cert = "/etc/ferritor/server.pem"
@@ -225,6 +231,9 @@ The CLI over TLS: `--addr https://…` with `--ca`, `--cert` and `--key` (or
 
 `SIGHUP` reloads, while serving:
 
+- the audit log's file, first: the chain ends in the old file and a new one
+  starts at the path, so logrotate can rename it, then signal
+  ([audit log](/operations/audit#the-file));
 - the `[[policy]]` (each check uses the current one; a call already
   authorized finishes under the old), and the stored policies;
 - in secured mode, the server certificate and key (new handshakes present
@@ -248,6 +257,13 @@ reload (the settings no longer load, an invalid policy, a mismatched key, a
 certificate not valid now, a switch between dev and secured mode) keeps
 running as it was and logs loudly. Every attempt is audited, with the
 fingerprints of what's now in force.
+
+The audit log's file is the exception: if its path can't be opened at a
+reopen (the directory gone, the permissions changed), it doesn't stay on
+the old file. Every request that needs an audit entry is refused until the
+path can be opened, tried again at every entry, and the server logs `AUDIT
+LOG NOT REOPENED`: restore access to the path, and it recovers by itself
+([audit log](/operations/audit#the-file)).
 
 The server refuses a certificate that isn't valid now (expired, or not yet
 valid), at startup and on reload, and warns if a reloaded one expires sooner

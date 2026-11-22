@@ -43,7 +43,13 @@ fn an_unknown_argument_is_refused_before_anything_starts() -> TestResult<()> {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8(out.stderr)?;
     assert!(stderr.contains("--confg"), "{stderr}");
-    // Refused by the argument parser: no settings loaded, nothing logged.
+    // Refused by the argument parser: no settings loaded, nothing logged,
+    // and nothing on stdout (the audit log's, in dev mode).
     assert!(!stderr.contains("metrics"), "{stderr}");
+    assert!(
+        out.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
     Ok(())
 }

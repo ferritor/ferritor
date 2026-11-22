@@ -11,8 +11,9 @@
 #
 # As shipped, this is dev mode: no [tls], no [[policy]]. Plaintext, everyone
 # may do everything, loopback only: for trying ferritor out, never for real
-# secrets. Uncomment [tls], the [[policy]] entries and audit_signing_key
-# together for secured mode; anything in between refuses to start.
+# secrets. Uncomment [tls], the [[policy]] entries, audit_signing_key and
+# audit_file (or [audit_otlp]) together for secured mode; anything in between
+# refuses to start.
 
 # Where gRPC and the JSON API listen (one port). Dev mode: loopback only;
 # secured mode usually listens beyond it, e.g. "0.0.0.0:7070".
@@ -73,6 +74,33 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #   openssl genpkey -algorithm ed25519 -out audit-key.pem && chmod 600 audit-key.pem
 #   openssl pkey -in audit-key.pem -pubout -out audit.pub.pem   # for `ferritor audit verify`
 #audit_signing_key = "/etc/ferritor/audit-key.pem"
+
+# The file the audit log is appended to, created 0600 if missing. Secured mode
+# needs it or [audit_otlp] (or both), and never writes the audit log to stdout;
+# dev mode without either writes it to stdout (the server logs to stderr).
+# Reopened on SIGHUP: logrotate renames it, then sends SIGHUP (postrotate).
+# The server refuses requests while it can't write to it.
+#audit_file = "/var/log/ferritor/audit.log"
+# Rotate it by size, where nothing else does (a pod): once it holds this many
+# bytes (at least 1 MiB) it's renamed audit.log.1, older ones moving up to
+# audit.log.<keep> (default 5), the oldest dropped. Unset: only SIGHUP rotates.
+#audit_file_max_bytes = 104857600
+#audit_file_keep = 5
+
+# The audit log to an OpenTelemetry collector, as OTLP log records (gRPC), each
+# record's body the line as written: instead of audit_file or with it (then an
+# entry is recorded only once it's in the file and the collector acknowledged
+# it). A collector down or refusing refuses requests. Acknowledged means in the
+# collector's pipeline: stored only with a persistent queue (its file_storage
+# extension), and not on the server's own node. https://, or http:// on
+# loopback only.
+#[audit_otlp]
+#endpoint = "https://otel-collector.internal:4317"
+# A private CA for the collector's certificate, and a client certificate and
+# key to present (mTLS), PEM; optional.
+#ca = "/etc/ferritor/collector-ca.pem"
+#cert = "/etc/ferritor/audit-client.pem"
+#key = "/etc/ferritor/audit-client-key.pem"
 
 # TLS with client certificates (secured mode). Reloaded on SIGHUP: the
 # server certificate and key, and the CRL; the client CA needs a restart.

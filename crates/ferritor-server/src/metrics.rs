@@ -361,7 +361,7 @@ pub fn observe(
     let audit_queue = meter
         .u64_observable_gauge("ferritor.audit.queue.depth")
         .with_description(
-            "Audit entries waiting for the writer: rising means stdout is stalling, \
+            "Audit entries waiting for the writer: rising means the audit log is stalling, \
              before requests start being refused",
         )
         .with_callback(move |gauge| gauge.observe(gate.audit_queue_depth(), &[]))

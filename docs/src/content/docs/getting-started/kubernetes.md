@@ -203,6 +203,9 @@ listen_addr = "0.0.0.0:7070"
 keys_database_url = "postgres://ferritor_keys:KEYS_PASSWORD@keys-db.ferritor-system.svc:5432/ferritor_keys"
 data_database_url = "postgres://ferritor_data:DATA_PASSWORD@data-db.ferritor-system.svc:5432/ferritor_data"
 audit_signing_key = "/etc/ferritor/audit-key.pem"
+audit_file = "/var/log/ferritor/audit.log"   # an emptyDir, streamed by the audit sidecar
+audit_file_max_bytes = 104857600             # rotated by the server at 100 MiB,
+audit_file_keep = 2                          # so it takes about 300 MiB at most (see below)
 shutdown_delay_secs = 5          # endpoints drop the pod before it stops listening
 
 [tls]
@@ -275,9 +278,27 @@ spec:
             capabilities: {drop: ["ALL"]}
           volumeMounts:
             - {name: config, mountPath: /etc/ferritor, readOnly: true}
+            - {name: audit, mountPath: /var/log/ferritor}
+        # The audit log's file, streamed to this container's stdout, which
+        # the cluster's log collector ships. tail's notices and errors go to
+        # its stderr, the same container log but its own stream: ship
+        # stdout alone, and verify from the file (below).
+        - name: audit
+          image: busybox:1.37
+          command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log']
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001                 # the file is the server's, 0600
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: audit, mountPath: /var/log/ferritor, readOnly: true}
       volumes:
         - name: config
           secret: {secretName: ferritor-server, defaultMode: 0440}
+        - name: audit
+          emptyDir: {}
       securityContext: {fsGroup: 10001}  # the files' group: the server reads them as it
 ---
 apiVersion: v1
@@ -292,20 +313,53 @@ spec:
 
 ```sh
 kubectl apply -f server.yaml
-kubectl -n ferritor-system logs deploy/ferritor    # both streams: the audit log (stdout) and logs (stderr)
+kubectl -n ferritor-system logs deploy/ferritor -c ferritor   # the server's logs
+kubectl -n ferritor-system logs deploy/ferritor -c audit      # the audit log, and tail's notices
 ```
 
 The Secret's files are root's, readable by the pod's `fsGroup`, so the
 server warns at startup that the audit signing key is group-readable: here
 the group is the pod's own, no one else's.
 
-The audit log is the container's stdout: ship it off the cluster as it's
-written, the stdout stream alone (log collectors read the kubelet's log
-files, where every line says its stream), and verify it with `ferritor audit
-verify --public-key audit.pub.pem` ([audit](/operations/audit)). `kubectl logs`
-interleaves stderr with it, which the verifier reports as a broken chain;
-for a quick look, keep the JSON lines (`kubectl logs deploy/ferritor | grep
-'^{'`). The server marks
+The audit log is the `audit` container's stdout: ship it off the cluster as
+it's written, stdout alone (log collectors read the kubelet's log files,
+where every line says its stream; `tail`'s notices, such as a rotation it
+followed, and its errors, such as a file it can't read, are on stderr, for
+you to see and alert on). To verify, read the audit file itself, not
+`kubectl logs`: that shows only the newest container log (the kubelet
+rotates them at 10 MiB, so it can start mid-chain), with `tail`'s stderr
+mixed in. The file holds whole chains, and every line in it counts:
+`kubectl -n ferritor-system exec deploy/ferritor -c audit -- cat
+/var/log/ferritor/audit.log | ferritor audit verify --public-key
+audit.pub.pem` ([audit](/operations/audit)); or verify what your shipper
+stored.
+
+The file is on the node's disk (the pod's ephemeral storage) for as long as
+the pod runs. The server rotates it by size, so it stays within about
+`(audit_file_keep + 1) × audit_file_max_bytes`, and `tail -F` follows the
+new file. A rotation whose rename fails (the server logs `AUDIT LOG FILE NOT
+ROTATED`) lets the file grow past that until one succeeds: alert on it, and
+size the node's storage with room to spare. Each line is stored twice on
+the node, in the file and in the sidecar's container log. A restarted
+sidecar sends the current file again from its start, so the shipper holds
+its chains twice: a chain still open at the restart as a cut-off copy
+(unterminated, to the verifier) followed by the whole replay, which
+verifies on its own; one that had ended as two copies alike. What was
+rotated while it was down isn't sent again: lines the server wrote to `audit.log.1` (or
+further) meanwhile are in the rotated files only. Fetch them from there
+before they're dropped (`kubectl -n ferritor-system exec deploy/ferritor
+-c audit -- cat /var/log/ferritor/audit.log.1`), each a file of whole
+chains that verifies on its own. The same holds, rarely, while it runs:
+`tail -F` looks at the path about once a second, so two rotations between
+two looks (`audit_file_max_bytes` twice over within a second) skip the
+file between them, which is then `audit.log.1` until the next rotation
+drops it: fetch it the same way.
+
+**With an OpenTelemetry collector in the cluster, use `[audit_otlp]`
+instead**: the audit log goes straight to the collector, with no file, no
+sidecar and nothing on the node's disk ([audit log](/operations/audit#over-otlp)).
+Give that collector a persistent queue and run it on other nodes than the
+server's, or an acknowledged entry can still be lost with it. The server marks
 itself undumpable; nodes should run without swap, as Kubernetes nodes
 usually do.
 

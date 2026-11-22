@@ -37,6 +37,8 @@ dotenvy.workspace = true
 getrandom.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
+# The audit log over OTLP (`audit_otlp`): the logs service's generated client.
+opentelemetry-proto = { workspace = true, features = ["logs"] }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -50,7 +52,7 @@ tokio-rustls.workspace = true
 tokio-stream.workspace = true
 tokio-util.workspace = true
 tower.workspace = true
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls-webpki-roots"] }
 tonic-health.workspace = true
 tonic-types.workspace = true
 tracing.workspace = true

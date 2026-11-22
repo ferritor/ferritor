@@ -20,8 +20,17 @@
 //! it is logged, never allowed to delay or block it. A denied request stays
 //! denied either way.
 //!
-//! The writing happens on a dedicated thread: a stalled stdout (a full pipe
-//! nobody reads) then stalls only that thread, while requests time out as
+//! **Where it goes.** A file of its own (`audit_file`, [`AuditLog::open`]),
+//! a collector over OTLP (`[audit_otlp]`, `audit_otlp`), or both; secured
+//! mode needs one. Only dev mode without either writes it to stdout
+//! ([`AuditLog::stdout`]); the server's logs go to stderr. The file is
+//! reopened on SIGHUP ([`AuditLog::reopen`]) and rotated by size with
+//! `audit_file_max_bytes` ([`Rotation`]): either way the chain ends in the
+//! old file and a new one starts in the new, so a rotated file holds whole
+//! chains.
+//!
+//! The writing happens on a dedicated thread: a stalled file (a hung disk)
+//! or stdout (a full pipe nobody reads) then stalls only that thread, while requests time out as
 //! unaudited instead of blocking runtime workers, and seal keeps working.
 //! An entry that timed out may still be written later, so the log may show
 //! an `allowed` that was then refused for want of auditing; never the
@@ -95,10 +104,12 @@
 //! `chain_start` says so (`"key": null`).
 
 use std::collections::BTreeMap;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::os::fd::AsFd;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
@@ -111,6 +122,8 @@ use tokio::sync::{Semaphore, mpsc, oneshot};
 use ed25519_dalek::SigningKey;
 use ferritor_core::audit_chain::{Chain, Seal};
 
+use crate::audit_otlp::Otlp;
+pub use crate::audit_otlp::OtlpSettings;
 use crate::authz::{Action, Authorizer, Caller, Denied, Stored, StoredPolicies, Target};
 use crate::crl::CrlInfo;
 use crate::metrics::metrics;
@@ -122,6 +135,16 @@ use ferritor_core::path::{Namespace, SecretPath};
 
 /// Entries waiting for the writer, at most.
 const QUEUE: usize = 1024;
+
+/// The writer takes what's queued, up to this many entries or about
+/// [`BATCH_BYTES`], writes it, sends it to the collector in one export
+/// (with `[audit_otlp]`) and only then answers: one round trip per batch,
+/// not per entry.
+const BATCH: usize = 512;
+/// A batch's lines, about at most: the batch ends once it's past this, so
+/// with lines up to 1 MiB (the verifier's limit) about 2 MiB, still below
+/// a collector's usual 4 MiB limit on a request.
+const BATCH_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuditError {
@@ -155,6 +178,221 @@ enum Pending {
     End {
         written: Written,
     },
+    /// Close the file and open its path again (SIGHUP, once logrotate has
+    /// moved it): the chain ends in the old file and a new one starts in
+    /// the new. Nothing for a stream (stdout).
+    Reopen,
+}
+
+/// Where the writer writes: a stream (stdout, a test's buffer) or a file
+/// it can reopen.
+trait Sink: Write + Send + 'static {
+    /// Whether [`Sink::reopen`] does anything: a file, not a stream.
+    fn reopens(&self) -> bool {
+        false
+    }
+
+    /// Closes the output and opens it again.
+    fn reopen(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Whether it has reached its size and is due a rotation
+    /// ([`Sink::rotate`]).
+    fn full(&self) -> bool {
+        false
+    }
+
+    /// Moves the output aside (keeping a few) and opens a new one: whether
+    /// it moved (the old one is no longer the one written to), and how the
+    /// whole went. A rename that worked and an open that didn't: moved,
+    /// and an error.
+    fn rotate(&mut self) -> (bool, io::Result<()>) {
+        (false, Ok(()))
+    }
+}
+
+/// A stream: written as it is, never reopened.
+struct Stream<W>(W);
+
+impl<W: Write> Write for Stream<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<W: Write + Send + 'static> Sink for Stream<W> {}
+
+/// No file and no stdout: `[audit_otlp]` alone. Every line goes to the
+/// collector only.
+struct Nowhere;
+
+impl Write for Nowhere {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Sink for Nowhere {}
+
+/// Rotating the audit log's file by size (`audit_file_max_bytes`): once it
+/// holds `max_bytes`, it's renamed `<path>.1` (the older ones moving up to
+/// `<path>.<keep>`, the oldest dropped) and a new file starts, each holding
+/// whole chains. So it never takes much more than `keep + 1` times
+/// `max_bytes` of disk, with nothing outside the server to rotate it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rotation {
+    pub max_bytes: u64,
+    /// Rotated files kept, at least 1.
+    pub keep: u32,
+}
+
+/// The audit log's file (`audit_file`), appended to, created `0600`. A
+/// reopen that fails leaves it closed: every write then tries to open it
+/// again and fails while it can't, so requests are refused (fail closed)
+/// until the path can be opened again.
+struct AuditFile {
+    path: PathBuf,
+    file: Option<File>,
+    rotation: Option<Rotation>,
+    /// The file's size as written to (what it had when opened, plus).
+    len: u64,
+    /// After a rotation that failed, the size to try again at: another
+    /// `max_bytes` on, not after every line.
+    retry_at: Option<u64>,
+}
+
+impl AuditFile {
+    fn open(path: &Path, rotation: Option<Rotation>) -> io::Result<Self> {
+        let file = open_append(path)?;
+        let len = file.metadata()?.len();
+        Ok(Self {
+            path: path.to_owned(),
+            file: Some(file),
+            rotation,
+            len,
+            retry_at: None,
+        })
+    }
+
+    /// `<path>.<n>`.
+    fn rotated(&self, n: u32) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(format!(".{n}"));
+        PathBuf::from(name)
+    }
+
+    /// Opens the path afresh, its size as it is: a new file's count starts
+    /// over, nothing kept from the old one (its size, a retry threshold).
+    /// Until it opens, nothing counts as full.
+    fn open_again(&mut self) -> io::Result<()> {
+        self.file = None;
+        self.len = 0;
+        self.retry_at = None;
+        let file = open_append(&self.path)?;
+        self.len = file.metadata()?.len();
+        self.file = Some(file);
+        Ok(())
+    }
+
+    fn file(&mut self) -> io::Result<&mut File> {
+        if self.file.is_none() {
+            // Its size with it, so rotation counts from what's there.
+            self.open_again()?;
+        }
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("the audit log file is closed"))
+    }
+}
+
+impl Write for AuditFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.file()?.write(buf)?;
+        self.len += u64::try_from(written).unwrap_or(u64::MAX);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match &mut self.file {
+            Some(file) => file.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Sink for AuditFile {
+    fn reopens(&self) -> bool {
+        true
+    }
+
+    fn reopen(&mut self) -> io::Result<()> {
+        // Closed first: if the path can't be opened, nothing more goes to
+        // the old file (logrotate may compress or delete it).
+        self.open_again()
+    }
+
+    fn full(&self) -> bool {
+        self.rotation
+            .is_some_and(|rotation| self.len >= self.retry_at.unwrap_or(rotation.max_bytes))
+    }
+
+    fn rotate(&mut self) -> (bool, io::Result<()>) {
+        let Some(rotation) = self.rotation else {
+            return (false, Ok(()));
+        };
+        let moved = (|| {
+            for n in (1..rotation.keep).rev() {
+                match std::fs::rename(self.rotated(n), self.rotated(n + 1)) {
+                    Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+                    _ => {}
+                }
+            }
+            std::fs::rename(&self.path, self.rotated(1))
+        })();
+        if let Err(e) = moved {
+            // Still written to as it is: refusing requests for want of a
+            // rename would be worse. Tried again another max_bytes on.
+            self.retry_at = Some(self.len.saturating_add(rotation.max_bytes));
+            return (false, Err(e));
+        }
+        self.retry_at = None;
+        // Moved: if the new file won't open, every write tries again (and is
+        // refused meanwhile), as after a failed reopen.
+        (true, self.open_again())
+    }
+}
+
+/// `path` opened for appending, created `0600` if it doesn't exist (an
+/// existing file keeps its mode: startup warns if others may read it). A
+/// file whose last line was cut off (a crash, a full disk) gets a newline
+/// first, so the fragment stays a line of its own instead of running into
+/// the new chain's start.
+fn open_append(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::FileExt;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .mode(0o600)
+        .open(path)?;
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0u8];
+        file.read_exact_at(&mut last, len - 1)?;
+        if last != *b"\n" {
+            file.write_all(b"\n")?;
+        }
+    }
+    Ok(file)
 }
 
 /// A signed log checkpoints at least this often while entries arrive, so
@@ -172,11 +410,11 @@ pub struct AuditLog {
 impl AuditLog {
     /// Starts the writer thread for `out`; it ends when the log is dropped.
     /// A recorded entry has been written and flushed within `timeout`.
-    /// Nothing waits for queued entries at exit; [`AuditLog::stdout`], the
-    /// server's log, comes with a [`Drain`] for that. Chained, but
+    /// Nothing waits for queued entries at exit; [`AuditLog::file`] and
+    /// [`AuditLog::stdout`], the server's, come with a [`Drain`] for that. Chained, but
     /// unsigned: no checkpoints.
     pub fn new(out: impl Write + Send + 'static, timeout: Duration) -> io::Result<Self> {
-        Self::start(out, timeout, None, CHECKPOINT_INTERVAL).map(|(log, _)| log)
+        Self::start(Stream(out), None, timeout, None, CHECKPOINT_INTERVAL).map(|(log, _)| log)
     }
 
     /// Like [`AuditLog::new`], with checkpoints signed by `key`, and a
@@ -186,12 +424,13 @@ impl AuditLog {
         timeout: Duration,
         key: SigningKey,
     ) -> io::Result<(Self, Drain)> {
-        Self::start(out, timeout, Some(key), CHECKPOINT_INTERVAL)
+        Self::start(Stream(out), None, timeout, Some(key), CHECKPOINT_INTERVAL)
     }
 
     /// `every`: [`CHECKPOINT_INTERVAL`], except in tests.
     fn start(
-        out: impl Write + Send + 'static,
+        out: impl Sink,
+        otlp: Option<(OtlpSettings, Duration)>,
         timeout: Duration,
         key: Option<SigningKey>,
         every: Duration,
@@ -199,9 +438,31 @@ impl AuditLog {
         let signed = key.is_some();
         let chain = Chain::new(key).map_err(io::Error::other)?;
         let (queue, entries) = mpsc::channel::<Pending>(QUEUE);
+        // The collector's client is built on the writer thread, its runtime
+        // with it: a runtime must never be dropped inside the server's own
+        // (it panics there), and the thread is where it's used.
+        let (built, ready) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("ferritor-audit".to_owned())
-            .spawn(move || write_chain(out, chain, entries))?;
+            .spawn(move || {
+                let otlp = match otlp
+                    .map(|(settings, timeout)| Otlp::new(&settings, timeout))
+                    .transpose()
+                {
+                    Ok(otlp) => {
+                        built.send(Ok(())).ok();
+                        otlp
+                    }
+                    Err(e) => {
+                        built.send(Err(e)).ok();
+                        return;
+                    }
+                };
+                write_chain(out, otlp, chain, entries);
+            })?;
+        ready
+            .recv()
+            .map_err(|_| io::Error::other("the audit writer stopped while starting"))??;
         if signed {
             // Holds no sender, so it doesn't keep the writer alive: it ends
             // at the first tick after the log and its drains are gone.
@@ -227,11 +488,73 @@ impl AuditLog {
     /// (and so does startup) if there's no stdout; afterwards a write error
     /// (say, the reader of a pipe went away) is reported, so requests fail
     /// closed. The duplicate shares the open file, so `>>` still appends.
-    /// Nothing else may write to stdout: the server logs to stderr.
-    /// Checkpoints are signed with `key`, if given.
+    /// Dev mode only, without an audit device (`audit_file`,
+    /// `[audit_otlp]`); nothing else writes to stdout (the server logs to
+    /// stderr). Checkpoints are signed with `key`, if given. A
+    /// [`AuditLog::reopen`] does nothing.
     pub fn stdout(timeout: Duration, key: Option<SigningKey>) -> io::Result<(Self, Drain)> {
         let fd = io::stdout().as_fd().try_clone_to_owned()?;
-        Self::start(File::from(fd), timeout, key, CHECKPOINT_INTERVAL)
+        Self::start(
+            Stream(File::from(fd)),
+            None,
+            timeout,
+            key,
+            CHECKPOINT_INTERVAL,
+        )
+    }
+
+    /// Appends to the file at `path` (`audit_file`), created `0600`; fails
+    /// (and so does startup) if it can't be opened. [`AuditLog::reopen`]
+    /// opens the path again, for logrotate. A recorded entry has been
+    /// written to the file: in the kernel's cache, not necessarily on disk
+    /// yet. Checkpoints are signed with `key`, if given.
+    pub fn file(
+        path: &Path,
+        timeout: Duration,
+        key: Option<SigningKey>,
+    ) -> io::Result<(Self, Drain)> {
+        Self::open(Some((path, None)), None, timeout, key)
+    }
+
+    /// The server's audit devices: the file at `file` (rotated by size
+    /// with a [`Rotation`]), the collector of `otlp`, or both (every entry
+    /// then written to the file and acknowledged by the collector before
+    /// it counts as recorded); neither is stdout ([`AuditLog::stdout`], dev
+    /// mode). Fails if the file can't be opened; the collector is connected
+    /// to when first used. An export waits at most three quarters of
+    /// `timeout`: an entry it refuses is usually refused as a failed write,
+    /// but one queued behind an export still in flight may wait past
+    /// `timeout`, and is then refused as a timeout (and may be delivered
+    /// later, as any entry that timed out).
+    pub fn open(
+        file: Option<(&Path, Option<Rotation>)>,
+        otlp: Option<OtlpSettings>,
+        timeout: Duration,
+        key: Option<SigningKey>,
+    ) -> io::Result<(Self, Drain)> {
+        let otlp = otlp.map(|settings| (settings, timeout.mul_f32(0.75)));
+        match file {
+            // The file first: a path that won't open fails before anything
+            // else is built.
+            Some((path, rotation)) => Self::start(
+                AuditFile::open(path, rotation)?,
+                otlp,
+                timeout,
+                key,
+                CHECKPOINT_INTERVAL,
+            ),
+            None if otlp.is_some() => Self::start(Nowhere, otlp, timeout, key, CHECKPOINT_INTERVAL),
+            None => Self::stdout(timeout, key),
+        }
+    }
+
+    /// Queues a reopen of the file (SIGHUP): the chain so far ends in the
+    /// old file (signed, with a key) and a new one starts in the file now at
+    /// the path; entries queued before it go to the old file, those after
+    /// to the new. The writer logs how it went. Never waits: `false` only
+    /// if it couldn't be queued (the queue full: the file stalled).
+    pub fn reopen(&self) -> bool {
+        self.queue.try_send(Pending::Reopen).is_ok()
     }
 
     /// Returns once `line` is written and flushed.
@@ -309,8 +632,8 @@ pub enum Outcome {
 pub struct Drain(mpsc::Sender<Pending>);
 
 impl Drain {
-    /// `false` if the queue isn't written within `limit` (stdout stalled,
-    /// or failing).
+    /// `false` if the queue isn't written within `limit` (the file or
+    /// stdout stalled, or failing).
     pub async fn wait(self, limit: Duration) -> bool {
         let (written, result) = oneshot::channel();
         let marker = Pending::End {
@@ -941,8 +1264,20 @@ impl Gate {
         });
     }
 
+    /// Reopens the audit log's file (SIGHUP; see [`AuditLog::reopen`]):
+    /// queued ahead of anything recorded after it, never waited for.
+    pub fn reopen_audit_log(&self) {
+        if !self.log.reopen() {
+            tracing::error!(
+                "AUDIT LOG NOT REOPENED: its queue is full (the file stalled); send SIGHUP again"
+            );
+            metrics().reload("audit_log", "failed");
+        }
+    }
+
     /// Audit entries waiting for the writer (for metrics): it climbs while
-    /// stdout stalls, before anything is refused for want of auditing.
+    /// the audit log stalls, before anything is refused for want of
+    /// auditing.
     pub fn audit_queue_depth(&self) -> u64 {
         u64::try_from(QUEUE.saturating_sub(self.log.queue.capacity())).unwrap_or(u64::MAX)
     }
@@ -1461,20 +1796,29 @@ impl<'a> From<Target<'a>> for TargetEntry<'a> {
 
 /// The writer thread: the chain's start, then every entry linked into it,
 /// with a checkpoint whenever one is due or asked for, and the chain's end
-/// when the [`Drain`] asks.
-fn write_chain(out: impl Write, chain: Chain, mut entries: mpsc::Receiver<Pending>) {
+/// when the [`Drain`] asks. It takes what's queued as a batch: every line
+/// written, the batch sent to the collector (if any), then every entry
+/// answered, each with its own write's result and the export's.
+fn write_chain(
+    out: impl Sink,
+    otlp: Option<Otlp>,
+    chain: Chain,
+    mut entries: mpsc::Receiver<Pending>,
+) {
     let lost = |e: &dyn std::fmt::Display| {
         tracing::error!(error = %e, "AUDIT LOG WRITE FAILED: an entry is lost");
         metrics().audit_failure("lost");
     };
     let mut writer = Writer {
         out,
+        otlp,
         chain,
         cut: false,
+        broken: false,
     };
     // At once, so the chain starts before anything is recorded; if it
     // fails, the first entry tries again.
-    if let Err(e) = writer.start() {
+    if let Err(e) = writer.start().and_then(|()| writer.ship()) {
         lost(&e);
     }
     let answer = |written: Written, result: io::Result<()>| match (written, result) {
@@ -1484,34 +1828,176 @@ fn write_chain(out: impl Write, chain: Chain, mut entries: mpsc::Receiver<Pendin
         (None, Err(e)) => lost(&e),
         (None, Ok(())) => {}
     };
-    while let Some(pending) = entries.blocking_recv() {
-        match pending {
-            Pending::Entry { line, written } => {
-                answer(written, writer.entry(&line));
-                if writer.chain.checkpoint_due() {
-                    answer(None, writer.seal(Seal::Checkpoint));
+    let mut answers: Vec<(Written, io::Result<()>)> = Vec::new();
+    while let Some(first) = entries.blocking_recv() {
+        let mut next = Some(first);
+        let (mut count, mut bytes) = (0, 0);
+        while let Some(pending) = next.take() {
+            match pending {
+                Pending::Entry { line, written } => {
+                    bytes += line.len();
+                    answers.push((written, writer.entry(&line)));
+                    if writer.chain.checkpoint_due() {
+                        answers.push((None, writer.seal(Seal::Checkpoint)));
+                    }
                 }
+                Pending::Checkpoint { written } => {
+                    answers.push((written, writer.seal(Seal::Checkpoint)));
+                }
+                Pending::End { written } => {
+                    answers.push((written, writer.end()));
+                    // Never a rotation here: it would start a new chain after
+                    // the drain's end. The next entry rotates it if it must.
+                    count += 1;
+                    if count < BATCH && bytes < BATCH_BYTES {
+                        next = entries.try_recv().ok();
+                    }
+                    continue;
+                }
+                Pending::Reopen => writer.reopen(),
             }
-            Pending::Checkpoint { written } => answer(written, writer.seal(Seal::Checkpoint)),
-            Pending::End { written } => answer(written, writer.seal(Seal::End)),
+            if writer.out.full() {
+                writer.rotate();
+            }
+            count += 1;
+            if count < BATCH && bytes < BATCH_BYTES {
+                next = entries.try_recv().ok();
+            }
+        }
+        let shipped = writer.ship();
+        for (written, result) in answers.drain(..) {
+            let result = match (&shipped, result) {
+                (_, Err(e)) => Err(e),
+                (Err(e), Ok(())) => Err(io::Error::new(e.kind(), e.to_string())),
+                (Ok(()), Ok(())) => Ok(()),
+            };
+            answer(written, result);
         }
     }
 }
 
-/// The output and the chain being written to it.
+/// The outputs and the chain being written to them.
 struct Writer<W> {
     out: W,
+    /// `[audit_otlp]`'s collector: every line written to `out` also goes to
+    /// it, at the batch's end ([`Writer::ship`]).
+    otlp: Option<Otlp>,
     chain: Chain,
     /// The last write failed partway: the file ends in part of a line.
     cut: bool,
+    /// A write or an export failed since the last chain started: entries
+    /// were lost and the chain was broken off, so it can't be ended.
+    broken: bool,
 }
 
-impl<W: Write> Writer<W> {
+impl<W: Sink> Writer<W> {
+    /// Sends the collector the lines written since the last export, and
+    /// waits for its acknowledgement. One that doesn't come breaks the
+    /// chain off: the collector may lack those lines, so the next line
+    /// starts a new chain, which both outputs get.
+    fn ship(&mut self) -> io::Result<()> {
+        let Some(otlp) = &mut self.otlp else {
+            return Ok(());
+        };
+        let shipped = otlp.export();
+        if let Err(error) = &shipped {
+            tracing::error!(%error, "AUDIT LOG NOT DELIVERED to the collector: entries refused");
+            self.chain.write_failed();
+            self.broken = true;
+        }
+        shipped
+    }
+
+    /// A file grown to its size: the chain ends in it (a signed
+    /// `chain_end`), it's moved aside and a new file starts with a new
+    /// chain. A rename that fails keeps writing to the file as it is.
+    fn rotate(&mut self) {
+        if let Err(error) = self.seal(Seal::End) {
+            tracing::error!(%error, "the audit log's chain couldn't be ended before rotating");
+        }
+        let (moved, rotated) = self.out.rotate();
+        if moved {
+            // The fragment, if any, went with the old file: no part of a line
+            // to end in the new one. Kept when it didn't move: the same file,
+            // whose cut line still needs its newline.
+            self.cut = false;
+        }
+        match (moved, rotated) {
+            (_, Ok(())) => tracing::info!("rotated the audit log file (audit_file_max_bytes)"),
+            (true, Err(error)) => tracing::error!(
+                %error,
+                "AUDIT LOG NOT REOPENED after rotating it: requests are refused until its file \
+                 can be opened (tried again at every entry)"
+            ),
+            (false, Err(error)) => tracing::error!(
+                %error,
+                "AUDIT LOG FILE NOT ROTATED: still writing to it, past audit_file_max_bytes \
+                 (tried again once it has grown as much again)"
+            ),
+        }
+        self.chain.write_failed();
+        if let Err(error) = self.start() {
+            tracing::error!(%error, "AUDIT LOG WRITE FAILED: the new chain's start");
+        }
+    }
+
+    /// A file's reopen (a stream's is nothing): ends the chain in the old
+    /// file (a signed `chain_end`; unsigned, a flush), opens the path again
+    /// and starts a chain there. If the path
+    /// can't be opened, the chain is broken off: the next entry tries to
+    /// open it and starts a new chain once it can.
+    fn reopen(&mut self) {
+        if !self.out.reopens() {
+            return;
+        }
+        if let Err(error) = self.seal(Seal::End) {
+            tracing::error!(%error, "the audit log's chain couldn't be ended before the reopen");
+        }
+        match self.out.reopen() {
+            Ok(()) => {
+                tracing::info!("reopened the audit log file");
+                metrics().reload("audit_log", "succeeded");
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "AUDIT LOG NOT REOPENED: requests are refused until its file can be opened \
+                     (tried again at every entry)"
+                );
+                metrics().reload("audit_log", "failed");
+            }
+        }
+        // A new file: no part of a line to end in it, and a new chain.
+        self.cut = false;
+        self.chain.write_failed();
+        if let Err(error) = self.start() {
+            tracing::error!(%error, "AUDIT LOG WRITE FAILED: the new chain's start");
+        }
+    }
+
     /// A new chain's start (after the end of the last one, or a failed
     /// write).
     fn start(&mut self) -> io::Result<()> {
         let start = self.chain.start(&now()).map_err(io::Error::other)?;
-        self.put(&start, None)
+        let started = self.put(&start, None);
+        // Written in full, the new chain stands, even if the flush then
+        // failed (the error still goes back): nothing lost is in it.
+        if !self.chain.needs_start() {
+            self.broken = false;
+        }
+        started
+    }
+
+    /// The drain's end: the chain's signed `chain_end`. A chain a failure
+    /// broke off can't be ended, and entries were lost: an error, so the
+    /// drain says so. One already ended (a second drain) is fine.
+    fn end(&mut self) -> io::Result<()> {
+        if self.broken {
+            return Err(io::Error::other(
+                "audit entries were lost and the chain broken off: it couldn't be ended",
+            ));
+        }
+        self.seal(Seal::End)
     }
 
     /// `line` linked into the chain, starting a new one first if needed.
@@ -1557,12 +2043,16 @@ impl<W: Write> Writer<W> {
                 }
             }
         }
+        if let Some(otlp) = &mut self.otlp {
+            otlp.push(line, self.chain.id(), self.chain.next_seq());
+        }
         self.chain.written(line, seal);
         self.out.flush()
     }
 
     fn failed(&mut self, written: usize) {
         self.chain.write_failed();
+        self.broken = true;
         self.cut = written > 0;
     }
 }
@@ -1774,7 +2264,8 @@ mod tests {
     async fn the_drain_waits_for_queued_entries() {
         let audit = Captured::default();
         let (log, drain) = AuditLog::start(
-            Slow(audit.clone()),
+            Stream(Slow(audit.clone())),
+            None,
             Duration::from_secs(1),
             None,
             CHECKPOINT_INTERVAL,
@@ -1793,7 +2284,8 @@ mod tests {
 
         let (unblock, blocked) = mpsc::channel();
         let (log, drain) = AuditLog::start(
-            Stalled(blocked),
+            Stream(Stalled(blocked)),
+            None,
             Duration::from_secs(1),
             None,
             CHECKPOINT_INTERVAL,
@@ -1859,13 +2351,613 @@ mod tests {
         assert_eq!(audit.lines().len(), 3);
     }
 
+    /// A directory of its own for a test's audit files, removed when
+    /// dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "ferritor-audit-{name}-{}-{}",
+                std::process::id(),
+                now().replace(':', "")
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn verified_file(path: &Path) -> audit_chain::Report {
+        let file = std::io::BufReader::new(File::open(path).unwrap());
+        audit_chain::verify(file, &[signing_key().verifying_key()]).unwrap()
+    }
+
+    /// logrotate's way: the file renamed, then SIGHUP. The chain ends in
+    /// the old file and a new one starts in the new, each proven whole;
+    /// what was recorded before the reopen is in the old one, what after in
+    /// the new. A new file is created 0600.
+    #[tokio::test]
+    async fn a_reopen_ends_the_chain_in_the_old_file_and_starts_one_in_the_new() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new("reopen");
+        let (path, rotated) = (dir.0.join("audit.log"), dir.0.join("audit.log.1"));
+        let (log, drain) =
+            AuditLog::file(&path, Duration::from_secs(1), Some(signing_key())).unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        std::fs::rename(&path, &rotated).unwrap();
+        gate.reopen_audit_log();
+        gate.check(&alice(), Action::List, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+
+        let old = verified_file(&rotated);
+        assert_eq!(old.verdict(), Verdict::Proven, "{old:?}");
+        // start, the read, chain_end.
+        assert_eq!(old.chains.len(), 1);
+        assert_eq!(old.chains[0].entries, 3);
+        let new = verified_file(&path);
+        assert_eq!(new.verdict(), Verdict::Proven, "{new:?}");
+        // start, the list, chain_end (the drain).
+        assert_eq!(new.chains[0].entries, 3);
+        let actions = |path: &Path| -> Vec<String> {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter_map(|entry| entry["action"].as_str().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(actions(&rotated), ["read"]);
+        assert_eq!(actions(&path), ["list"]);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    /// A reopen that can't open the path fails closed: requests are refused
+    /// unaudited, nothing more goes to the old file, and once the path can
+    /// be opened again the next entry starts a new chain there.
+    #[tokio::test]
+    async fn a_failed_reopen_refuses_until_the_file_can_be_opened() {
+        let dir = TempDir::new("failed-reopen");
+        let logs = dir.0.join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        let (path, moved) = (logs.join("audit.log"), dir.0.join("moved"));
+        let (log, drain) =
+            AuditLog::file(&path, Duration::from_secs(1), Some(signing_key())).unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        // The whole directory gone: the path can't be created.
+        std::fs::rename(&logs, &moved).unwrap();
+        gate.reopen_audit_log();
+        assert!(matches!(
+            gate.check(&alice(), Action::List, Target::System).await,
+            Err(Refused::Unaudited(AuditError::Write(_)))
+        ));
+        std::fs::create_dir(&logs).unwrap();
+        gate.check(&alice(), Action::Write, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+
+        // The old file: its chain ended before the reopen, nothing after.
+        let old = verified_file(&moved.join("audit.log"));
+        assert_eq!(old.verdict(), Verdict::Proven, "{old:?}");
+        assert_eq!(old.chains[0].entries, 3);
+        // The new one: a chain from the first entry it could take.
+        let new = verified_file(&path);
+        assert_eq!(new.verdict(), Verdict::Proven, "{new:?}");
+        assert_eq!((new.chains.len(), new.chains[0].entries), (1, 3));
+    }
+
+    /// A collector on loopback, keeping every audit record's body, in
+    /// order; refusing every export while `refuse` is set.
+    #[derive(Clone, Default)]
+    struct Collector {
+        bodies: Arc<Mutex<Vec<String>>>,
+        /// Each record's `ferritor.audit.chain` and `ferritor.audit.seq`.
+        places: Arc<Mutex<Vec<(String, i64)>>>,
+        refuse: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[tonic::async_trait]
+    impl opentelemetry_proto::tonic::collector::logs::v1::logs_service_server::LogsService
+        for Collector
+    {
+        async fn export(
+            &self,
+            request: tonic::Request<
+                opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest,
+            >,
+        ) -> Result<
+            tonic::Response<
+                opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceResponse,
+            >,
+            tonic::Status,
+        > {
+            use opentelemetry_proto::tonic::common::v1::any_value::Value;
+            if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(tonic::Status::unavailable("refusing"));
+            }
+            let mut bodies = self.bodies.lock().unwrap_or_else(PoisonError::into_inner);
+            for scope in request
+                .into_inner()
+                .resource_logs
+                .into_iter()
+                .flat_map(|r| r.scope_logs)
+            {
+                assert_eq!(
+                    scope.scope.map(|s| s.name).as_deref(),
+                    Some("ferritor.audit")
+                );
+                for record in scope.log_records {
+                    let attribute = |key: &str| {
+                        record
+                            .attributes
+                            .iter()
+                            .find(|kv| kv.key == key)
+                            .and_then(|kv| kv.value.clone())
+                            .and_then(|v| v.value)
+                    };
+                    match (
+                        attribute("ferritor.audit.chain"),
+                        attribute("ferritor.audit.seq"),
+                    ) {
+                        (Some(Value::StringValue(chain)), Some(Value::IntValue(seq))) => self
+                            .places
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push((chain, seq)),
+                        other => panic!("no chain and seq: {other:?}"),
+                    }
+                    match record.body.and_then(|b| b.value) {
+                        Some(Value::StringValue(body)) => bodies.push(body),
+                        other => panic!("not a string body: {other:?}"),
+                    }
+                }
+            }
+            Ok(tonic::Response::new(Default::default()))
+        }
+    }
+
+    impl Collector {
+        /// Serving on a loopback port of its own, for the test's life.
+        async fn serve(&self) -> OtlpSettings {
+            use opentelemetry_proto::tonic::collector::logs::v1::logs_service_server::LogsServiceServer;
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let service = LogsServiceServer::new(self.clone());
+            tokio::spawn(
+                tonic::transport::Server::builder()
+                    .add_service(service)
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+            );
+            OtlpSettings {
+                endpoint: format!("http://{addr}"),
+                ca_pem: None,
+                client: None,
+            }
+        }
+
+        /// The bodies so far, one per line, as `ferritor audit verify`
+        /// reads them.
+        fn log(&self) -> Vec<u8> {
+            self.bodies
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .flat_map(|body| format!("{body}\n").into_bytes())
+                .collect()
+        }
+
+        fn verified(&self) -> audit_chain::Report {
+            audit_chain::verify(self.log().as_slice(), &[signing_key().verifying_key()]).unwrap()
+        }
+    }
+
+    /// `[audit_otlp]` alone: every line reaches the collector as a record
+    /// whose body is the line, so the chain verifies from what it stored,
+    /// proven whole once the drain has ended it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn over_otlp_the_collector_holds_a_chain_that_verifies() {
+        let collector = Collector::default();
+        let settings = collector.serve().await;
+        let (log, drain) = AuditLog::open(
+            None,
+            Some(settings),
+            Duration::from_secs(2),
+            Some(signing_key()),
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        for action in [Action::Read, Action::List, Action::Write] {
+            gate.check(&alice(), action, Target::System).await.unwrap();
+        }
+        assert!(drain.wait(Duration::from_secs(5)).await);
+        let report = collector.verified();
+        assert_eq!(report.verdict(), Verdict::Proven, "{report:?}");
+        // start, three decisions, chain_end.
+        assert_eq!((report.chains.len(), report.chains[0].entries), (1, 5));
+        // Each record says where it goes: its chain's id (chain_start's)
+        // and its line's own seq, so a backend can put them back in order.
+        let bodies = collector.bodies.lock().unwrap().clone();
+        let places = collector.places.lock().unwrap().clone();
+        let start: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+        for ((chain, seq), body) in places.iter().zip(&bodies) {
+            let line: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(chain.as_str(), start["chain"].as_str().unwrap());
+            assert_eq!(Some(*seq), line["seq"].as_i64(), "{body}");
+        }
+    }
+
+    /// A file that won't open fails `open` before anything else is built,
+    /// and a collector's client that can't be built fails it too: errors,
+    /// never a panic in the server's runtime (a runtime dropped there
+    /// would be one).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_device_that_cant_start_is_an_error_not_a_panic() {
+        let settings = Collector::default().serve().await;
+        let missing = Path::new("/nonexistent/ferritor/audit.log");
+        assert!(
+            AuditLog::open(
+                Some((missing, None)),
+                Some(settings),
+                Duration::from_secs(2),
+                None
+            )
+            .is_err()
+        );
+        let bad = OtlpSettings {
+            endpoint: "not a url".to_owned(),
+            ca_pem: None,
+            client: None,
+        };
+        assert!(AuditLog::open(None, Some(bad), Duration::from_secs(2), None).is_err());
+    }
+
+    /// A collector that doesn't acknowledge fails closed: the request is
+    /// refused unaudited. Once it does again, the next entry starts a new
+    /// chain there, so the lost batch is a gap the verifier reports, never
+    /// a seam it misses.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_collector_refusing_refuses_requests_until_it_acknowledges() {
+        let collector = Collector::default();
+        let settings = collector.serve().await;
+        let (log, drain) = AuditLog::open(
+            None,
+            Some(settings),
+            Duration::from_secs(2),
+            Some(signing_key()),
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        collector
+            .refuse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(matches!(
+            gate.check(&alice(), Action::List, Target::System).await,
+            Err(Refused::Unaudited(AuditError::Write(_)))
+        ));
+        collector
+            .refuse
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        gate.check(&alice(), Action::Write, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(5)).await);
+        let report = collector.verified();
+        // The first chain cut off where the collector refused; the second,
+        // from the next entry on, whole.
+        assert_eq!(report.verdict(), Verdict::Unproven, "{report:?}");
+        assert_eq!(report.chains.len(), 2);
+        assert_eq!(report.chains[1].state, ChainState::Complete);
+    }
+
+    /// Both devices: every line in the file and at the collector alike.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn with_a_file_and_otlp_both_hold_the_same_lines() {
+        let dir = TempDir::new("both");
+        let path = dir.0.join("audit.log");
+        let collector = Collector::default();
+        let settings = collector.serve().await;
+        let (log, drain) = AuditLog::open(
+            Some((&path, None)),
+            Some(settings),
+            Duration::from_secs(2),
+            Some(signing_key()),
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(5)).await);
+        assert_eq!(std::fs::read(&path).unwrap(), collector.log());
+        assert_eq!(collector.verified().verdict(), Verdict::Proven);
+    }
+
+    /// Past `max_bytes` the file is moved aside (`.1`, the older up to
+    /// `.keep`, the oldest dropped) and a new one starts: every file holds
+    /// whole chains, each proven, and no more files than kept.
+    #[tokio::test]
+    async fn a_file_past_its_size_rotates_and_keeps_only_so_many() {
+        let dir = TempDir::new("rotate");
+        let path = dir.0.join("audit.log");
+        let rotation = Rotation {
+            max_bytes: 2_000,
+            keep: 2,
+        };
+        let (log, drain) = AuditLog::start(
+            AuditFile::open(&path, Some(rotation)).unwrap(),
+            None,
+            Duration::from_secs(1),
+            Some(signing_key()),
+            CHECKPOINT_INTERVAL,
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        for _ in 0..60 {
+            gate.check(&alice(), Action::Read, Target::System)
+                .await
+                .unwrap();
+        }
+        assert!(drain.wait(Duration::from_secs(2)).await);
+        let rotated = |n: u32| dir.0.join(format!("audit.log.{n}"));
+        assert!(rotated(1).exists() && rotated(2).exists());
+        assert!(!rotated(3).exists(), "kept more than 2");
+        for file in [path.clone(), rotated(1), rotated(2)] {
+            let report = verified_file(&file);
+            assert_eq!(
+                report.verdict(),
+                Verdict::Proven,
+                "{}: {report:?}",
+                file.display()
+            );
+            // A rotated file stopped at about its size: one line past it at
+            // most, and its chain_end.
+            let len = std::fs::metadata(&file).unwrap().len();
+            assert!(len < 2_000 + 1_000, "{}: {len}", file.display());
+        }
+    }
+
+    /// A file whose last line was cut off (a crash) gets a newline before
+    /// the new chain starts: the fragment is a line of its own, and the new
+    /// chain verifies whole.
+    #[tokio::test]
+    async fn a_cut_off_last_line_never_runs_into_the_new_chain() {
+        let dir = TempDir::new("cut");
+        let path = dir.0.join("audit.log");
+        std::fs::write(&path, b"{\"time\":\"t\",\"event\":\"auth").unwrap();
+        let (log, drain) =
+            AuditLog::file(&path, Duration::from_secs(1), Some(signing_key())).unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("{\"time\":\"t\",\"event\":\"auth\n{"),
+            "{text}"
+        );
+        let report = verified_file(&path);
+        // The fragment is outside any chain (unproven), the chain whole.
+        assert_eq!(report.chains.len(), 1);
+        assert_eq!(report.chains[0].state, ChainState::Complete);
+    }
+
+    /// A drain after entries were lost (the collector refused them) says
+    /// so: the chain was broken off and couldn't be ended. Once a chain
+    /// starts again and ends, a drain is fine.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_drain_after_lost_entries_says_so() {
+        let collector = Collector::default();
+        let settings = collector.serve().await;
+        let (log, drain) = AuditLog::open(
+            None,
+            Some(settings),
+            Duration::from_secs(2),
+            Some(signing_key()),
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        collector
+            .refuse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        gate.outcome(
+            &alice(),
+            Action::Write,
+            Target::System,
+            "put",
+            Outcome::Unknown("x".to_owned()),
+        );
+        assert!(!drain.clone().wait(Duration::from_secs(5)).await);
+        collector
+            .refuse
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.clone().wait(Duration::from_secs(5)).await);
+        assert!(drain.wait(Duration::from_secs(5)).await);
+    }
+
+    /// The drain's `chain_end` never triggers a rotation: that would start a
+    /// new chain after shutdown's end, left open. With a size so small every
+    /// line crosses it, the file in place after the drain still ends whole.
+    #[tokio::test]
+    async fn no_rotation_follows_the_drains_end() {
+        let dir = TempDir::new("end");
+        let path = dir.0.join("audit.log");
+        let rotation = Rotation {
+            max_bytes: 1,
+            keep: 2,
+        };
+        let (log, drain) = AuditLog::start(
+            AuditFile::open(&path, Some(rotation)).unwrap(),
+            None,
+            Duration::from_secs(1),
+            Some(signing_key()),
+            CHECKPOINT_INTERVAL,
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+        let report = verified_file(&path);
+        assert_eq!(report.verdict(), Verdict::Proven, "{report:?}");
+    }
+
+    /// A rotation that moved the file but couldn't open the new one, then a
+    /// failed retry (no file to rename): once the path opens again, the new
+    /// file rotates at its own `max_bytes`, nothing carried over from the
+    /// old file's size.
+    #[test]
+    fn a_reopened_file_rotates_at_its_own_size() {
+        let dir = TempDir::new("recover");
+        let logs = dir.0.join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        let path = logs.join("audit.log");
+        let rotation = Rotation {
+            max_bytes: 100,
+            keep: 2,
+        };
+        let mut file = AuditFile::open(&path, Some(rotation)).unwrap();
+        file.write_all(&[b'x'; 150]).unwrap();
+        assert!(file.full());
+        // What a rotation whose rename worked but whose open didn't leaves:
+        // the file moved away, no handle, and (the directory gone) nothing
+        // to open or rename at the path.
+        std::fs::rename(&path, dir.0.join("moved")).unwrap();
+        std::fs::remove_dir(&logs).unwrap();
+        file.file = None;
+        // The next check retries the rotation, which fails: nothing to
+        // rename. Its threshold must not outlive the file it was for.
+        let (moved, retried) = file.rotate();
+        assert!(!moved && retried.is_err(), "no file to rename");
+        // The path comes back: the next write opens it, counting from 0.
+        std::fs::create_dir(&logs).unwrap();
+        file.write_all(&[b'y'; 60]).unwrap();
+        assert!(!file.full());
+        file.write_all(&[b'y'; 60]).unwrap();
+        assert!(
+            file.full(),
+            "rotates at its own max_bytes, not the old file's"
+        );
+    }
+
+    /// Writes into `audit`, failing the `write`th write and the `flush`th
+    /// flush (counted from 1).
+    struct Scripted {
+        audit: Captured,
+        write: usize,
+        flush: usize,
+        writes: usize,
+        flushes: usize,
+    }
+
+    impl Write for Scripted {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            if self.writes == self.write {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            self.audit.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            if self.flushes == self.flush {
+                return Err(io::ErrorKind::BrokenPipe.into());
+            }
+            Ok(())
+        }
+    }
+
+    /// A lost entry breaks the chain off; the next one starts a new chain,
+    /// whose start is written in full but whose flush fails. The new chain
+    /// stands: the entry after it goes in, and the drain ends it, proven.
+    #[tokio::test]
+    async fn a_recovered_chain_ends_even_if_its_starts_flush_failed() {
+        let audit = Captured::default();
+        // Writes: the first start (1), entry A (2, fails), the new start
+        // (3), entry C (4), the end (5). Flushes: start (1), new start (2,
+        // fails), C (3), end (4).
+        let out = Scripted {
+            audit: audit.clone(),
+            write: 2,
+            flush: 2,
+            writes: 0,
+            flushes: 0,
+        };
+        let (log, drain) = AuditLog::start(
+            Stream(out),
+            None,
+            Duration::from_secs(1),
+            Some(signing_key()),
+            CHECKPOINT_INTERVAL,
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        for refused in [Action::Read, Action::List] {
+            assert!(gate.check(&alice(), refused, Target::System).await.is_err());
+        }
+        gate.check(&alice(), Action::Write, Target::System)
+            .await
+            .unwrap();
+        assert!(
+            drain.wait(Duration::from_secs(2)).await,
+            "the drain ended it"
+        );
+        let report = verified(&audit);
+        let last = report.chains.last().unwrap();
+        assert_eq!(last.state, ChainState::Complete, "{report:?}");
+    }
+
+    /// Stdout has nothing to reopen: a SIGHUP leaves its chain going.
+    #[tokio::test]
+    async fn a_reopen_on_stdout_changes_nothing() {
+        let audit = Captured::default();
+        let (log, drain) =
+            AuditLog::signed(audit.clone(), Duration::from_secs(1), signing_key()).unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        gate.reopen_audit_log();
+        gate.check(&alice(), Action::List, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+        let report = verified(&audit);
+        assert_eq!(report.verdict(), Verdict::Proven, "{report:?}");
+        assert_eq!((report.chains.len(), report.chains[0].entries), (1, 4));
+    }
+
     /// Signed after every CHECKPOINT_EVERY entries, and at least every
     /// interval while entries arrive, without anyone asking.
     #[tokio::test]
     async fn checkpoints_come_by_count_and_by_time() {
         let audit = Captured::default();
         let (log, drain) = AuditLog::start(
-            audit.clone(),
+            Stream(audit.clone()),
+            None,
             Duration::from_secs(1),
             Some(signing_key()),
             Duration::from_secs(3600),
@@ -1886,7 +2978,8 @@ mod tests {
 
         let audit = Captured::default();
         let (log, _drain) = AuditLog::start(
-            audit.clone(),
+            Stream(audit.clone()),
+            None,
             Duration::from_secs(1),
             Some(signing_key()),
             Duration::from_millis(20),
