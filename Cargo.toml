@@ -44,21 +44,21 @@ aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 # Auto-unseal with AWS KMS (ferritor-server's `aws-kms` feature). The SDK's
 # own HTTPS client would bring aws-lc-rs (a C build); this one is rustls on
 # ring, as the rest of ferritor.
-aws-config = { version = "1.13.0", default-features = false, features = ["rt-tokio", "sso", "credentials-process"] }
-aws-sdk-kms = { version = "1.129.0", default-features = false, features = ["rt-tokio"] }
-aws-smithy-http-client = { version = "1.5.2", default-features = false, features = ["rustls-ring", "rt-tokio"] }
+aws-config = { version = "1.13.3", default-features = false, features = ["rt-tokio", "sso", "credentials-process"] }
+aws-sdk-kms = { version = "1.133.0", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http-client = { version = "1.5.3", default-features = false, features = ["rustls-ring", "rt-tokio"] }
 # Auto-unseal with Google Cloud KMS (ferritor-server's `gcp-kms` feature):
 # Google's credential chain (Application Default Credentials) only, the two
 # KMS calls over reqwest. Without their default features, which would bring
 # aws-lc-rs (a C build): rustls on ring, as the rest of ferritor.
-google-cloud-auth = { version = "1.18.0", default-features = false }
+google-cloud-auth = { version = "1.19.0", default-features = false }
 # A request body wiped when dropped (`Bytes::from_owner`).
-bytes = "1.12.1"
+bytes = "1.12.2"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "http2", "rustls-no-provider"] }
 anyhow = "1.0.104"
 axum = "0.8.9"
 base64 = "0.23.1"
-clap = { version = "4.6.7", features = ["derive", "env"] }
+clap = { version = "4.6.9", features = ["derive", "env"] }
 config = "0.15.27"
 dotenvy = "0.15.7"
 # PKCS#8 PEM keys (`pem`) for the audit log's signing key and the verifier's
@@ -72,7 +72,7 @@ hyper = { version = "1.12.0", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 # The public CA roots for fetching a token issuer's keys (identity), unless a
 # private CA is configured; the same crate the metrics exporter uses.
-webpki-roots = "1.0.11"
+webpki-roots = "1.0.12"
 proptest = "1.12.0"
 # The allocator of the static (musl) builds in the images (Dockerfile):
 # musl's own made reads 2.8 times slower.
@@ -83,12 +83,12 @@ opentelemetry = { version = "0.33.1", default-features = false, features = ["met
 opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["grpc-tonic", "metrics", "internal-logs", "tls-ring", "tls-webpki-roots"] }
 opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic", "metrics"] }
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["metrics", "internal-logs", "experimental_metrics_custom_reader"] }
-prost = "0.14.4"
+prost = "0.14.6"
 rcgen = "0.14.10"
 # Verifying workload tokens' signatures (RS256, ES256, EdDSA; see
 # ferritor-server `identity`): the ring rustls already brings, no JWT crate.
 ring = "0.17.14"
-rpassword = "7.5.4"
+rpassword = "7.5.5"
 # PR_SET_DUMPABLE through a safe wrapper (the workspace forbids unsafe code):
 # see ferritor-server `forbid_memory_access`; `fs` for the agent's tmpfs check
 # (statfs).
@@ -99,7 +99,7 @@ serde_json = "1.0.154"
 # Query strings with a repeated parameter (`?label=…&label=…`).
 serde_urlencoded = "0.7.1"
 sha2 = "0.11.1"
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "sqlx-toml", "uuid", "time", "json"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "sqlx-toml", "uuid", "time", "json"] }
 thiserror = "2.0.21"
 time = "0.3.55"
 tokio = { version = "1.54.1", features = ["full"] }
@@ -109,7 +109,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["logg
 tokio-stream = { version = "0.1.19", features = ["net"] }
 # TaskTracker, for the requests tls::serve detaches from their connections.
 tokio-util = { version = "0.7.20", features = ["rt"] }
-toml = "1.2.1"
+toml = "1.2.2"
 tonic = { version = "0.14.9", features = ["tls-ring"] }
 tonic-health = "0.14.9"
 tonic-prost = "0.14.9"
@@ -131,7 +131,7 @@ x509-parser = "0.18.1"
 # it writes `u-int32`, which no generator knows; `int32` with `minimum: 0` is
 # exact anyway (versions are Postgres INTEGERs; page sizes are capped at 1000).
 utoipa = { version = "6.0.0", features = ["macros"] }
-zeroize = { version = "1.9.1", features = ["derive", "serde"] }
+zeroize = { version = "1.9.2", features = ["derive", "serde"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
