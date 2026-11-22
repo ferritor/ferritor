@@ -280,10 +280,11 @@ spec:
             - {name: config, mountPath: /etc/ferritor, readOnly: true}
             - {name: audit, mountPath: /var/log/ferritor}
         # The audit log's file, streamed to this container's log, which the
-        # cluster's log collector ships like any other.
+        # cluster's log collector ships like any other. tail's own notices
+        # (a rotation followed) to /dev/null: the stream is the log alone.
         - name: audit
           image: busybox:1.37
-          command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log']
+          command: [sh, -c, 'until [ -f /var/log/ferritor/audit.log ]; do sleep 1; done; exec tail -n +1 -F /var/log/ferritor/audit.log 2>/dev/null']
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001                 # the file is the server's, 0600

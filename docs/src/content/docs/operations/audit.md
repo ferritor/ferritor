@@ -47,7 +47,13 @@ whole chains and verifies on its own. With logrotate:
 
 `nocreate`: the server creates the new file itself. `delaycompress`: the
 reopen happens shortly after the signal, and the old file's `chain_end` is
-written to it then, so compressing it at once could cut it off. Never
+written to it then, so compressing it at once could cut it off.
+`systemctl reload` returns once the signal is sent, not once the file is
+reopened: the server logs `reopened the audit log file` when it has (and
+counts `ferritor_reloads_total{kind="audit_log"}`). If its queue is full
+(the file stalled) the reopen isn't queued: it logs `AUDIT LOG NOT
+REOPENED` and keeps writing to the renamed file, so send SIGHUP again once
+it has caught up. Never
 `copytruncate`: lines written between the copy and the truncate are lost.
 SIGHUP also reloads the policy, the certificate, the CRLs and the keyring
 ([operations](/operations/running)), which is harmless when nothing
@@ -101,20 +107,33 @@ the collector's memory. It's stored only once the collector writes it out,
 so give the collector a persistent queue (the `file_storage` extension on
 its exporter's `sending_queue`) if an acknowledged entry must survive the
 collector restarting, and run it off the server's node: a collector on the
-same node goes when the node does. It connects when first used, so a collector that isn't up yet doesn't stop the
+same node goes when the node does. The persistent queue must be the first
+thing to hold a record: an asynchronous `batch` processor ahead of it
+acknowledges the batch while it's still in that processor's memory, so put
+none in the audit records' pipeline (batch in the exporter's sending queue
+instead, after the persistent store). It connects when first used, so a collector that isn't up yet doesn't stop the
 server starting. The writer sends what's queued in one export, so a busy
 server costs one round trip per batch, not per request. `https://`, or
 `http://` on loopback only: the log names every caller and path.
 
 After a refused export the next line starts a new chain, so what the
-collector missed shows as an unterminated chain, never a seam.
+collector missed shows as an unterminated chain, never a seam, as long as
+some of that chain reached it. A chain lost whole (its start and
+everything after it refused, at startup say) leaves no trace in the
+collector, and the chains after it still verify: detecting every loss
+takes more than the collector's records, such as `audit_file` next to
+them, or the server's `AUDIT LOG NOT DELIVERED` and
+`ferritor_audit_failures_total`.
 
-The verifier needs a server's lines in chain order. Each record carries
+The verifier needs each chain's lines in order. Each record carries
 `ferritor.audit.chain` (its chain's id, as the chain's `chain_start` has
 it) and `ferritor.audit.seq` (its line's `seq`), so records from a backend
 that returns them by time (whose timestamps follow the wall clock, which
-can step back) sort back into place: by the chain's first record's time,
-then by `seq`. The collector's file exporter writes them as they arrived,
+can step back) sort back into place within their chain: group by chain,
+order by `seq`. That's all verifying needs, since each chain verifies on
+its own. The order of the chains among themselves can't be recovered
+reliably once the clock has stepped back: the time of a chain's first
+record is a hint, not a proof. The collector's file exporter writes them as they arrived,
 already in order. To verify one server's records from it (OTLP JSON):
 
 ```sh

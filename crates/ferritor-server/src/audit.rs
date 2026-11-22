@@ -203,9 +203,12 @@ trait Sink: Write + Send + 'static {
         false
     }
 
-    /// Moves the output aside (keeping a few) and opens a new one.
-    fn rotate(&mut self) -> io::Result<()> {
-        Ok(())
+    /// Moves the output aside (keeping a few) and opens a new one: whether
+    /// it moved (the old one is no longer the one written to), and how the
+    /// whole went. A rename that worked and an open that didn't: moved,
+    /// and an error.
+    fn rotate(&mut self) -> (bool, io::Result<()>) {
+        (false, Ok(()))
     }
 }
 
@@ -287,9 +290,13 @@ impl AuditFile {
         PathBuf::from(name)
     }
 
-    /// Opens the path afresh, its size as it is.
+    /// Opens the path afresh, its size as it is: a new file's count starts
+    /// over, nothing kept from the old one (its size, a retry threshold).
+    /// Until it opens, nothing counts as full.
     fn open_again(&mut self) -> io::Result<()> {
         self.file = None;
+        self.len = 0;
+        self.retry_at = None;
         let file = open_append(&self.path)?;
         self.len = file.metadata()?.len();
         self.file = Some(file);
@@ -298,7 +305,8 @@ impl AuditFile {
 
     fn file(&mut self) -> io::Result<&mut File> {
         if self.file.is_none() {
-            self.file = Some(open_append(&self.path)?);
+            // Its size with it, so rotation counts from what's there.
+            self.open_again()?;
         }
         self.file
             .as_mut()
@@ -337,9 +345,9 @@ impl Sink for AuditFile {
             .is_some_and(|rotation| self.len >= self.retry_at.unwrap_or(rotation.max_bytes))
     }
 
-    fn rotate(&mut self) -> io::Result<()> {
+    fn rotate(&mut self) -> (bool, io::Result<()>) {
         let Some(rotation) = self.rotation else {
-            return Ok(());
+            return (false, Ok(()));
         };
         let moved = (|| {
             for n in (1..rotation.keep).rev() {
@@ -354,21 +362,37 @@ impl Sink for AuditFile {
             // Still written to as it is: refusing requests for want of a
             // rename would be worse. Tried again another max_bytes on.
             self.retry_at = Some(self.len.saturating_add(rotation.max_bytes));
-            return Err(e);
+            return (false, Err(e));
         }
         self.retry_at = None;
-        self.open_again()
+        // Moved: if the new file won't open, every write tries again (and is
+        // refused meanwhile), as after a failed reopen.
+        (true, self.open_again())
     }
 }
 
 /// `path` opened for appending, created `0600` if it doesn't exist (an
-/// existing file keeps its mode: startup warns if others may read it).
+/// existing file keeps its mode: startup warns if others may read it). A
+/// file whose last line was cut off (a crash, a full disk) gets a newline
+/// first, so the fragment stays a line of its own instead of running into
+/// the new chain's start.
 fn open_append(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
+    use std::os::unix::fs::FileExt;
+    let mut file = OpenOptions::new()
+        .read(true)
         .append(true)
         .create(true)
         .mode(0o600)
-        .open(path)
+        .open(path)?;
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0u8];
+        file.read_exact_at(&mut last, len - 1)?;
+        if last != *b"\n" {
+            file.write_all(b"\n")?;
+        }
+    }
+    Ok(file)
 }
 
 /// A signed log checkpoints at least this often while entries arrive, so
@@ -1790,6 +1814,7 @@ fn write_chain(
         otlp,
         chain,
         cut: false,
+        broken: false,
     };
     // At once, so the chain starts before anything is recorded; if it
     // fails, the first entry tries again.
@@ -1819,7 +1844,16 @@ fn write_chain(
                 Pending::Checkpoint { written } => {
                     answers.push((written, writer.seal(Seal::Checkpoint)));
                 }
-                Pending::End { written } => answers.push((written, writer.seal(Seal::End))),
+                Pending::End { written } => {
+                    answers.push((written, writer.end()));
+                    // Never a rotation here: it would start a new chain after
+                    // the drain's end. The next entry rotates it if it must.
+                    count += 1;
+                    if count < BATCH && bytes < BATCH_BYTES {
+                        next = entries.try_recv().ok();
+                    }
+                    continue;
+                }
                 Pending::Reopen => writer.reopen(),
             }
             if writer.out.full() {
@@ -1851,6 +1885,9 @@ struct Writer<W> {
     chain: Chain,
     /// The last write failed partway: the file ends in part of a line.
     cut: bool,
+    /// A write or an export failed since the last chain started: entries
+    /// were lost and the chain was broken off, so it can't be ended.
+    broken: bool,
 }
 
 impl<W: Sink> Writer<W> {
@@ -1866,6 +1903,7 @@ impl<W: Sink> Writer<W> {
         if let Err(error) = &shipped {
             tracing::error!(%error, "AUDIT LOG NOT DELIVERED to the collector: entries refused");
             self.chain.write_failed();
+            self.broken = true;
         }
         shipped
     }
@@ -1877,15 +1915,26 @@ impl<W: Sink> Writer<W> {
         if let Err(error) = self.seal(Seal::End) {
             tracing::error!(%error, "the audit log's chain couldn't be ended before rotating");
         }
-        match self.out.rotate() {
-            Ok(()) => tracing::info!("rotated the audit log file (audit_file_max_bytes)"),
-            Err(error) => tracing::error!(
+        let (moved, rotated) = self.out.rotate();
+        if moved {
+            // The fragment, if any, went with the old file: no part of a line
+            // to end in the new one. Kept when it didn't move: the same file,
+            // whose cut line still needs its newline.
+            self.cut = false;
+        }
+        match (moved, rotated) {
+            (_, Ok(())) => tracing::info!("rotated the audit log file (audit_file_max_bytes)"),
+            (true, Err(error)) => tracing::error!(
+                %error,
+                "AUDIT LOG NOT REOPENED after rotating it: requests are refused until its file \
+                 can be opened (tried again at every entry)"
+            ),
+            (false, Err(error)) => tracing::error!(
                 %error,
                 "AUDIT LOG FILE NOT ROTATED: still writing to it, past audit_file_max_bytes \
                  (tried again once it has grown as much again)"
             ),
         }
-        self.cut = false;
         self.chain.write_failed();
         if let Err(error) = self.start() {
             tracing::error!(%error, "AUDIT LOG WRITE FAILED: the new chain's start");
@@ -1930,7 +1979,21 @@ impl<W: Sink> Writer<W> {
     /// write).
     fn start(&mut self) -> io::Result<()> {
         let start = self.chain.start(&now()).map_err(io::Error::other)?;
-        self.put(&start, None)
+        self.put(&start, None)?;
+        self.broken = false;
+        Ok(())
+    }
+
+    /// The drain's end: the chain's signed `chain_end`. A chain a failure
+    /// broke off can't be ended, and entries were lost: an error, so the
+    /// drain says so. One already ended (a second drain) is fine.
+    fn end(&mut self) -> io::Result<()> {
+        if self.broken {
+            return Err(io::Error::other(
+                "audit entries were lost and the chain broken off: it couldn't be ended",
+            ));
+        }
+        self.seal(Seal::End)
     }
 
     /// `line` linked into the chain, starting a new one first if needed.
@@ -1985,6 +2048,7 @@ impl<W: Sink> Writer<W> {
 
     fn failed(&mut self, written: usize) {
         self.chain.write_failed();
+        self.broken = true;
         self.cut = written > 0;
     }
 }
@@ -2664,6 +2728,134 @@ mod tests {
             let len = std::fs::metadata(&file).unwrap().len();
             assert!(len < 2_000 + 1_000, "{}: {len}", file.display());
         }
+    }
+
+    /// A file whose last line was cut off (a crash) gets a newline before
+    /// the new chain starts: the fragment is a line of its own, and the new
+    /// chain verifies whole.
+    #[tokio::test]
+    async fn a_cut_off_last_line_never_runs_into_the_new_chain() {
+        let dir = TempDir::new("cut");
+        let path = dir.0.join("audit.log");
+        std::fs::write(&path, b"{\"time\":\"t\",\"event\":\"auth").unwrap();
+        let (log, drain) =
+            AuditLog::file(&path, Duration::from_secs(1), Some(signing_key())).unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("{\"time\":\"t\",\"event\":\"auth\n{"),
+            "{text}"
+        );
+        let report = verified_file(&path);
+        // The fragment is outside any chain (unproven), the chain whole.
+        assert_eq!(report.chains.len(), 1);
+        assert_eq!(report.chains[0].state, ChainState::Complete);
+    }
+
+    /// A drain after entries were lost (the collector refused them) says
+    /// so: the chain was broken off and couldn't be ended. Once a chain
+    /// starts again and ends, a drain is fine.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_drain_after_lost_entries_says_so() {
+        let collector = Collector::default();
+        let settings = collector.serve().await;
+        let (log, drain) = AuditLog::open(
+            None,
+            Some(settings),
+            Duration::from_secs(2),
+            Some(signing_key()),
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        collector
+            .refuse
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        gate.outcome(
+            &alice(),
+            Action::Write,
+            Target::System,
+            "put",
+            Outcome::Unknown("x".to_owned()),
+        );
+        assert!(!drain.clone().wait(Duration::from_secs(5)).await);
+        collector
+            .refuse
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.clone().wait(Duration::from_secs(5)).await);
+        assert!(drain.wait(Duration::from_secs(5)).await);
+    }
+
+    /// The drain's `chain_end` never triggers a rotation: that would start a
+    /// new chain after shutdown's end, left open. With a size so small every
+    /// line crosses it, the file in place after the drain still ends whole.
+    #[tokio::test]
+    async fn no_rotation_follows_the_drains_end() {
+        let dir = TempDir::new("end");
+        let path = dir.0.join("audit.log");
+        let rotation = Rotation {
+            max_bytes: 1,
+            keep: 2,
+        };
+        let (log, drain) = AuditLog::start(
+            AuditFile::open(&path, Some(rotation)).unwrap(),
+            None,
+            Duration::from_secs(1),
+            Some(signing_key()),
+            CHECKPOINT_INTERVAL,
+        )
+        .unwrap();
+        let gate = Gate::new(Arc::new(Refusing(Action::Delete)), log);
+        gate.check(&alice(), Action::Read, Target::System)
+            .await
+            .unwrap();
+        assert!(drain.wait(Duration::from_secs(2)).await);
+        let report = verified_file(&path);
+        assert_eq!(report.verdict(), Verdict::Proven, "{report:?}");
+    }
+
+    /// A rotation that moved the file but couldn't open the new one, then a
+    /// failed retry (no file to rename): once the path opens again, the new
+    /// file rotates at its own `max_bytes`, nothing carried over from the
+    /// old file's size.
+    #[test]
+    fn a_reopened_file_rotates_at_its_own_size() {
+        let dir = TempDir::new("recover");
+        let logs = dir.0.join("logs");
+        std::fs::create_dir(&logs).unwrap();
+        let path = logs.join("audit.log");
+        let rotation = Rotation {
+            max_bytes: 100,
+            keep: 2,
+        };
+        let mut file = AuditFile::open(&path, Some(rotation)).unwrap();
+        file.write_all(&[b'x'; 150]).unwrap();
+        assert!(file.full());
+        // What a rotation whose rename worked but whose open didn't leaves:
+        // the file moved away, no handle, and (the directory gone) nothing
+        // to open or rename at the path.
+        std::fs::rename(&path, dir.0.join("moved")).unwrap();
+        std::fs::remove_dir(&logs).unwrap();
+        file.file = None;
+        // The next check retries the rotation, which fails: nothing to
+        // rename. Its threshold must not outlive the file it was for.
+        let (moved, retried) = file.rotate();
+        assert!(!moved && retried.is_err(), "no file to rename");
+        // The path comes back: the next write opens it, counting from 0.
+        std::fs::create_dir(&logs).unwrap();
+        file.write_all(&[b'y'; 60]).unwrap();
+        assert!(!file.full());
+        file.write_all(&[b'y'; 60]).unwrap();
+        assert!(
+            file.full(),
+            "rotates at its own max_bytes, not the old file's"
+        );
     }
 
     /// Stdout has nothing to reopen: a SIGHUP leaves its chain going.

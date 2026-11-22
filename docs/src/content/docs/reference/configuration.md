@@ -258,6 +258,13 @@ certificate not valid now, a switch between dev and secured mode) keeps
 running as it was and logs loudly. Every attempt is audited, with the
 fingerprints of what's now in force.
 
+The audit log's file is the exception: if its path can't be opened at a
+reopen (the directory gone, the permissions changed), it doesn't stay on
+the old file. Every request that needs an audit entry is refused until the
+path can be opened, tried again at every entry, and the server logs `AUDIT
+LOG NOT REOPENED`: restore access to the path, and it recovers by itself
+([audit log](/operations/audit#the-file)).
+
 The server refuses a certificate that isn't valid now (expired, or not yet
 valid), at startup and on reload, and warns if a reloaded one expires sooner
 than the one it replaces.

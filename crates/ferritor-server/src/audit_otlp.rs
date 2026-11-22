@@ -6,7 +6,12 @@
 //! export and answers the batch's entries only once the collector has
 //! acknowledged it: a collector down, refusing or slower than
 //! the audit timeout refuses them (fail closed), and the next line
-//! starts a new chain, so a lost batch is a gap the verifier reports.
+//! starts a new chain, so a lost batch is a gap the verifier reports, if
+//! any of its chain reached the collector: a chain lost whole (its start
+//! and every line after it refused, at startup say) leaves nothing to
+//! report, and the chains after it still verify. Detecting every loss
+//! needs more than the records themselves (the file next to them, or the
+//! server's `AUDIT LOG NOT DELIVERED` and `ferritor.audit.failures`).
 //!
 //! Acknowledged means in the collector's pipeline: stored only if the
 //! collector keeps a persistent queue (its `file_storage` extension), and a
@@ -75,7 +80,17 @@ impl Otlp {
             .map_err(std::io::Error::other)?
             .connect_timeout(timeout)
             .timeout(timeout);
-        if settings.endpoint.starts_with("https://") {
+        // By the parsed scheme, as the config checked it: `HTTPS://` too.
+        let https = settings
+            .endpoint
+            .parse::<tonic::codegen::http::Uri>()
+            .ok()
+            .and_then(|uri| {
+                uri.scheme_str()
+                    .map(|scheme| scheme.eq_ignore_ascii_case("https"))
+            })
+            .unwrap_or(false);
+        if https {
             let mut tls = ClientTlsConfig::new().with_webpki_roots();
             if let Some(ca) = &settings.ca_pem {
                 tls = tls.ca_certificate(Certificate::from_pem(ca));

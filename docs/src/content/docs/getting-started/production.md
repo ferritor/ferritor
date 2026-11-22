@@ -170,8 +170,9 @@ openssl pkey -in audit-key.pem -pubout -out audit.pub.pem   # for whoever verifi
 
 `/etc/ferritor/ferritor.toml` (start from `ferritor.example.toml`, which documents
 every setting; see [configuration](/reference/configuration)). `[tls]`, at least one
-`[[policy]]`, `audit_signing_key` and `audit_file` together make it
-secured; anything in between refuses to start.
+`[[policy]]` and `audit_signing_key` together make it secured, with
+somewhere for the audit log: `audit_file` (here), a collector
+(`[audit_otlp]`), or both. Anything in between refuses to start.
 
 ```toml
 listen_addr = "0.0.0.0:7070"
@@ -261,11 +262,15 @@ WantedBy=multi-user.target
 (systemd takes comments only on lines of their own, never after a setting.)
 
 These settings were tested as a system service (systemd 262, a non-root
-user, every setting as above but `LogsDirectory=`, added since with
-`audit_file`: the audit log was then the unit's stdout) with the server
-serving gRPC and the JSON API under load, both databases, a SIGHUP reload
-and a draining stop, whose audit log then verified; test them on your own
-hosts before relying on them.
+user, every setting as above) with the server serving gRPC and the JSON API
+under load, both databases, a SIGHUP reload and a draining stop, whose audit
+log then verified; and again with `audit_file` in `LogsDirectory=`: systemd
+created the directory `0700` for the service's user, the server its file
+`0600`; a rename then `systemctl reload` moved the log to a new file, and
+so did two rounds of the [audit log](/operations/audit#the-file)'s
+logrotate configuration (the second compressing the first's file), every
+file verifying as complete. Test them on your own hosts before relying on
+them.
 `systemd-analyze security ferritor` rates the unit 2.2, "OK" (8.3 without the
 hardening). If a setting conflicts with something your hosts add (a
 monitoring library loaded into the process, a different libc), drop that one
