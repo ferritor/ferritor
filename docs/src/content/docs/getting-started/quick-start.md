@@ -34,7 +34,7 @@ and the databases' `compose.yaml` from the same release:
 
 ```sh
 mkdir ferritor-quickstart && cd ferritor-quickstart
-version=1.0.0
+version=1.0.1
 dir=ferritor-$version-$(uname -m)-unknown-linux-musl
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"

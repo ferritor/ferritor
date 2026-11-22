@@ -11,7 +11,7 @@ edit it by hand.
 
 Licenses
 --------
-- MIT License: 296
+- MIT License: 297
 - Apache License 2.0: 37
 - Unicode License v3: 21
 - BSD 3-Clause "New" or "Revised" License: 5
@@ -233,10 +233,10 @@ Used by:
 Apache License 2.0
 
 Used by:
-- aws-sdk-kms 1.129.0
-- aws-sdk-sso 1.119.0
-- aws-sdk-ssooidc 1.121.0
-- aws-sdk-sts 1.124.0
+- aws-sdk-kms 1.133.0
+- aws-sdk-sso 1.122.0
+- aws-sdk-ssooidc 1.124.0
+- aws-sdk-sts 1.128.0
 
                                 Apache License
                            Version 2.0, January 2004
@@ -446,9 +446,9 @@ Used by:
 Apache License 2.0
 
 Used by:
-- prost-derive 0.14.4
-- prost-types 0.14.4
-- prost 0.14.4
+- prost-derive 0.14.6
+- prost-types 0.14.6
+- prost 0.14.6
 - ring 0.17.14
 
                               Apache License
@@ -658,31 +658,31 @@ limitations under the License.
 Apache License 2.0
 
 Used by:
-- aws-config 1.13.0
+- aws-config 1.13.3
 - aws-credential-types 1.3.1
-- aws-runtime 1.10.2
-- aws-sigv4 1.6.4
+- aws-runtime 1.10.4
+- aws-sigv4 1.6.6
 - aws-smithy-async 1.3.1
-- aws-smithy-http-client 1.5.2
+- aws-smithy-http-client 1.5.3
 - aws-smithy-http 0.64.3
 - aws-smithy-json 0.65.1
-- aws-smithy-observability 0.3.0
+- aws-smithy-observability 0.3.1
 - aws-smithy-query 0.64.0
 - aws-smithy-runtime-api-macros 1.2.0
-- aws-smithy-runtime-api 1.19.2
-- aws-smithy-runtime 1.16.2
-- aws-smithy-schema 1.1.2
-- aws-smithy-types 1.9.1
+- aws-smithy-runtime-api 1.22.0
+- aws-smithy-runtime 1.16.4
+- aws-smithy-schema 1.2.0
+- aws-smithy-types 1.9.4
 - aws-smithy-xml 0.64.1
 - aws-types 1.7.0
-- google-cloud-auth 1.18.0
+- google-cloud-auth 1.19.0
 - google-cloud-gax 1.15.0
 - google-cloud-rpc 1.6.0
-- google-cloud-wkt 1.10.0
+- google-cloud-wkt 1.11.0
 - opentelemetry-otlp 0.33.1
 - opentelemetry 0.33.1
 - opentelemetry_sdk 0.33.1
-- rpassword 7.5.4
+- rpassword 7.5.5
 - rtoolbox 0.0.6
 - ryu 1.0.23
 - sync_wrapper 1.0.2
@@ -1076,7 +1076,7 @@ express Statement of Purpose.
 Community Data License Agreement Permissive 2.0
 
 Used by:
-- webpki-roots 1.0.11
+- webpki-roots 1.0.12
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -1187,7 +1187,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ISC License
 
 Used by:
-- rustls-webpki 0.103.16
+- rustls-webpki 0.103.17
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -1305,7 +1305,11 @@ pub use prost;
 MIT License
 
 Used by:
-- sqlx 0.9.0
+- sqlx-core 0.9.1
+- sqlx-macros-core 0.9.1
+- sqlx-macros 0.9.1
+- sqlx-postgres 0.9.1
+- sqlx 0.9.1
 
 Copyright (C) SQLx Contributors
 Portions of this work Copyright (C) LaunchBadge, LLC
@@ -1340,7 +1344,6 @@ MIT License
 
 Used by:
 - sha1 0.10.7
-- sha2 0.10.9
 
 Copyright (c) 2006-2009 Graydon Hoare
 Copyright (c) 2009-2013 Mozilla Foundation
@@ -1540,7 +1543,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- mio 1.2.4
+- mio 1.2.5
 
 Copyright (c) 2014 Carl Lerche and other MIO contributors
 
@@ -1567,7 +1570,7 @@ THE SOFTWARE.
 MIT License
 
 Used by:
-- errno 0.3.14
+- errno 0.3.15
 
 Copyright (c) 2014 Chris Wong
 
@@ -1667,9 +1670,9 @@ Used by:
 - num-bigint 0.4.8
 - num-integer 0.1.47
 - num-traits 0.2.19
-- regex-automata 0.4.18
+- regex-automata 0.4.19
 - regex-lite 0.1.9
-- regex-syntax 0.8.11
+- regex-syntax 0.8.12
 
 Copyright (c) 2014 The Rust Project Developers
 
@@ -1702,7 +1705,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- uuid 1.29.1
+- uuid 1.29.3
 
 Copyright (c) 2014 The Rust Project Developers
 Copyright (c) 2018 Ashley Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon
@@ -1792,9 +1795,9 @@ MIT License
 
 Used by:
 - either 1.19.0
-- itertools 0.14.0
-- serde_with 3.24.0
-- serde_with_macros 3.24.0
+- itertools 0.15.0
+- serde_with 3.25.0
+- serde_with_macros 3.25.0
 
 Copyright (c) 2015
 
@@ -1987,7 +1990,7 @@ Used by:
 - const-random 0.1.18
 - hashbrown 0.14.5
 - hashbrown 0.16.1
-- hashbrown 0.17.1
+- hashbrown 0.17.2
 
 Copyright (c) 2016 Amanieu d'Antras
 
@@ -2626,7 +2629,7 @@ SOFTWARE.
 MIT License
 
 Used by:
-- arc-swap 1.9.3
+- arc-swap 1.9.5
 - bytes-utils 0.1.4
 
 Copyright (c) 2017 arc-swap developers
@@ -2859,7 +2862,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- bytes 1.12.1
+- bytes 1.12.2
 
 Copyright (c) 2018 Carl Lerche
 
@@ -2892,7 +2895,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- smallvec 1.16.5
+- smallvec 1.16.6
 
 Copyright (c) 2018 The Servo Project Developers
 
@@ -3217,7 +3220,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- zeroize 1.9.1
+- zeroize 1.9.2
 
 Copyright (c) 2018-2026 The RustCrypto Project Developers
 
@@ -3713,7 +3716,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- const-oid 0.10.2
+- const-oid 0.10.3
 - cpufeatures 0.3.1
 - der 0.8.3
 - pkcs8 0.11.0
@@ -3881,7 +3884,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- inout 0.2.5
+- inout 0.2.6
 
 Copyright (c) 2022-2025 The RustCrypto Project Developers
 Copyright (c) 2022 Artyom Pavlov
@@ -3949,7 +3952,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License
 
 Used by:
-- rustls-pki-types 1.15.1
+- rustls-pki-types 1.16.0
 
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
 
@@ -4134,10 +4137,10 @@ Used by:
 - anstyle-query 1.1.5
 - anstyle-wincon 3.0.11
 - anstyle 1.0.14
-- clap 4.6.7
+- clap 4.6.9
 - clap_builder 4.6.7
-- clap_derive 4.6.7
-- clap_lex 1.1.1
+- clap_derive 4.6.9
+- clap_lex 1.1.2
 - colorchoice 1.0.5
 - config 0.15.27
 - is_terminal_polyfill 1.70.2
@@ -4145,11 +4148,11 @@ Used by:
 - serde_spanned 0.6.9
 - serde_spanned 1.1.3
 - toml 0.8.23
-- toml 1.2.1+spec-1.1.0
+- toml 1.2.2+spec-1.1.0
 - toml_datetime 0.6.11
 - toml_datetime 1.1.3+spec-1.1.0
 - toml_edit 0.22.27
-- toml_parser 1.1.5+spec-1.1.0
+- toml_parser 1.1.6+spec-1.1.0
 - toml_write 0.1.2
 - toml_writer 1.2.0+spec-1.1.0
 
@@ -4331,7 +4334,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 MIT License
 
 Used by:
-- rand 0.10.3
+- rand 0.10.4
 
 Copyright 2018 Developers of the Rand project
 Copyright (c) 2014 The Rust Project Developers
@@ -4875,7 +4878,7 @@ SOFTWARE.
 MIT License
 
 Used by:
-- json5 1.3.7
+- json5 1.3.8
 
 MIT License
 
@@ -4906,11 +4909,9 @@ MIT License
 Used by:
 - asn1-rs-impl 0.2.0
 - base64-simd 0.8.0
+- objc2-core-foundation 0.3.2
+- objc2-system-configuration 0.3.2
 - rcgen 0.14.10
-- sqlx-core 0.9.0
-- sqlx-macros-core 0.9.0
-- sqlx-macros 0.9.0
-- sqlx-postgres 0.9.0
 - vsimd 0.8.0
 - whoami 2.1.3
 - windows-link 0.2.1
@@ -5034,16 +5035,16 @@ Used by:
 - etcetera 0.11.0
 - event-listener 5.4.2
 - fastrand 2.5.0
-- itoa 1.0.18
+- itoa 1.0.19
 - lazy_static 1.5.1
 - linux-raw-sys 0.12.1
 - minimal-lexical 0.2.1
 - once_cell 1.21.4
 - parking 2.2.1
 - pathdiff 0.2.3
-- pin-project-internal 1.1.13
-- pin-project-lite 0.2.17
-- pin-project 1.1.13
+- pin-project-internal 1.2.0
+- pin-project-lite 0.2.18
+- pin-project 1.2.0
 - proc-macro2 1.0.107
 - quote 1.0.47
 - rustix 1.1.6
@@ -5055,7 +5056,7 @@ Used by:
 - serde_json 1.0.154
 - serde_path_to_error 0.1.20
 - syn 2.0.119
-- syn 3.0.9
+- syn 3.0.10
 - thiserror-impl 2.0.21
 - thiserror 2.0.21
 - typeid 1.0.3
@@ -5239,10 +5240,10 @@ MIT License
 
 Used by:
 - byteorder 1.5.0
-- jiff-core 0.1.2
-- jiff 0.2.39
+- jiff-core 0.1.8
+- jiff 0.2.46
 - memchr 2.8.3
-- ucd-trie 0.1.7
+- ucd-trie 0.1.8
 
 The MIT License (MIT)
 
