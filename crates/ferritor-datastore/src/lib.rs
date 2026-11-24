@@ -1670,6 +1670,51 @@ impl Datastore {
         .await
     }
 
+    /// The rotation reminders' count of secrets (ferritor-server
+    /// `rotation`): of the paths with the rotation flag and a live version,
+    /// how many have that version created at or before `overdue_at` (past
+    /// their maximum age), and how many after it but at or before
+    /// `due_soon_at` (within the warning). The flag through the labels
+    /// index (`paths_labels`), the version by one probe of the live
+    /// versions' index each.
+    pub async fn rotation_counts(
+        &self,
+        overdue_at: OffsetDateTime,
+        due_soon_at: OffsetDateTime,
+    ) -> Result<(u64, u64)> {
+        bounded(self.timeout, async move {
+            let row = sqlx::query!(
+                r#"SELECT count(*) FILTER (WHERE v.created_at <= $2) AS "overdue!",
+                          count(*) FILTER (WHERE v.created_at > $2 AND v.created_at <= $3)
+                              AS "due_soon!"
+                   FROM paths p
+                   CROSS JOIN LATERAL (
+                       SELECT v.created_at FROM secret_versions v
+                       WHERE v.path_id = p.id AND v.version = p.current_version
+                         AND v.deleted_at IS NULL
+                       LIMIT 1) v
+                   WHERE p.current_version IS NOT NULL AND p.labels @> $1
+                     AND p.labels <> '{}'"#,
+                Json(Labels::from([(
+                    ferritor_core::labels::ROTATION.to_owned(),
+                    ferritor_core::labels::ROTATION_ON.to_owned(),
+                )])) as _,
+                overdue_at,
+                due_soon_at,
+            )
+            .fetch_one(&self.pool)
+            .await?;
+            let count = |field: &'static str, value: i64| {
+                u64::try_from(value).map_err(|_| DatastoreError::OutOfRange { field, value })
+            };
+            Ok((
+                count("overdue", row.overdue)?,
+                count("due_soon", row.due_soon)?,
+            ))
+        })
+        .await
+    }
+
     /// What's known about `path` as a whole: when it was first and last
     /// written, its current and oldest versions, how many are stored, its
     /// labels. `None` for a path with nothing stored (never written, or

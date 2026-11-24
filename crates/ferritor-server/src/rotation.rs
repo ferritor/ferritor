@@ -149,6 +149,85 @@ impl Rotation {
     }
 }
 
+/// How many are overdue and due soon, of one kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Tally {
+    pub overdue: u64,
+    pub due_soon: u64,
+}
+
+impl Tally {
+    /// Of things of `kind` made at `since`: how many stand where at `now`.
+    pub fn of(
+        policy: &Policy,
+        kind: Kind,
+        since: impl IntoIterator<Item = OffsetDateTime>,
+        now: OffsetDateTime,
+    ) -> Self {
+        let mut tally = Self::default();
+        for made in since {
+            match policy.standing(kind, made, now) {
+                Standing::Overdue => tally.overdue += 1,
+                Standing::DueSoon => tally.due_soon += 1,
+                Standing::Current => {}
+            }
+        }
+        tally
+    }
+}
+
+/// The last counts, for the gauges (`metrics::observe_rotation`): each kind
+/// absent until it's been counted once, and kept as it was when a count
+/// fails (the stores unreachable), so a gauge never drops to 0 for want of
+/// an answer.
+#[derive(Debug, Default)]
+pub struct RotationCounts {
+    secrets: RwLock<Option<Tally>>,
+    keks: RwLock<Option<Tally>>,
+    root_key: RwLock<Option<Tally>>,
+}
+
+impl RotationCounts {
+    pub fn secrets(&self) -> Option<Tally> {
+        *self.secrets.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn keks(&self) -> Option<Tally> {
+        *self.keks.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn root_key(&self) -> Option<Tally> {
+        *self.root_key.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub fn set_secrets(&self, tally: Tally) {
+        *self.secrets.write().unwrap_or_else(PoisonError::into_inner) = Some(tally);
+    }
+
+    pub fn set_keks(&self, tally: Tally) {
+        *self.keks.write().unwrap_or_else(PoisonError::into_inner) = Some(tally);
+    }
+
+    pub fn set_root_key(&self, tally: Tally) {
+        *self
+            .root_key
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tally);
+    }
+}
+
+/// The two moments the secrets' count is cut at: a version created at or
+/// before the first is overdue, after it and at or before the second due
+/// soon.
+pub fn secret_cutoffs(policy: &Policy, now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
+    let max = Duration::days(i64::from(policy.secret_max_age_days));
+    let warn = Duration::days(i64::from(policy.warn_days));
+    (
+        now.saturating_sub(max),
+        now.saturating_sub(max).saturating_add(warn),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +274,45 @@ mod tests {
             policy.standing(Kind::RootKey, made, day(352)),
             Standing::DueSoon
         );
+    }
+
+    /// The tally sorts each age as `standing` does, and the secrets'
+    /// cutoffs cut where `standing` would: the database's count and the
+    /// in-memory one agree on every boundary.
+    #[test]
+    fn tallies_and_cutoffs_agree_with_standing() {
+        let policy = DEFAULT;
+        let now = OffsetDateTime::UNIX_EPOCH + Duration::days(1000);
+        let ago = |days: i64| now - Duration::days(days);
+        let tally = Tally::of(
+            &policy,
+            Kind::Kek,
+            [ago(10), ago(351), ago(364), ago(365), ago(900)],
+            now,
+        );
+        assert_eq!(
+            tally,
+            Tally {
+                overdue: 2,
+                due_soon: 2
+            }
+        );
+        let (overdue_at, due_soon_at) = secret_cutoffs(&policy, now);
+        for days in [0, 75, 76, 77, 89, 90, 91, 400] {
+            let made = ago(days);
+            let by_cutoff = if made <= overdue_at {
+                Standing::Overdue
+            } else if made <= due_soon_at {
+                Standing::DueSoon
+            } else {
+                Standing::Current
+            };
+            assert_eq!(
+                by_cutoff,
+                policy.standing(Kind::Secret, made, now),
+                "{days} days"
+            );
+        }
     }
 
     #[test]

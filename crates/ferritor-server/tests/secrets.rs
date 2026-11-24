@@ -1658,6 +1658,57 @@ async fn the_rotation_due_date_follows_the_live_version() {
     env.destroy().await.unwrap();
 }
 
+/// The rotation reminders' inputs, from the two databases: flagged
+/// secrets with a live version counted against the cutoffs (unflagged
+/// ones, and flagged ones with nothing live, never), and the active KEKs'
+/// and the root key's ages.
+#[tokio::test]
+async fn the_rotation_counts_come_from_both_databases() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    for path in ["app/a", "app/b", "app/gone"] {
+        env.secrets
+            .put_labeled(&ANON, path, b"x", None, &flag)
+            .await
+            .unwrap();
+    }
+    env.secrets.put(&ANON, "app/plain", b"x").await.unwrap();
+    env.secrets.delete(&ANON, "app/gone").await.unwrap();
+    let store = Datastore::new(env.data.pool().clone());
+    let now = time::OffsetDateTime::now_utc();
+    let hour = time::Duration::hours(1);
+    // Every flagged live version created before the overdue cutoff.
+    assert_eq!(
+        store.rotation_counts(now + hour, now + hour).await.unwrap(),
+        (2, 0)
+    );
+    // After it, and before the due-soon one.
+    assert_eq!(
+        store.rotation_counts(now - hour, now + hour).await.unwrap(),
+        (0, 2)
+    );
+    // After both: current.
+    assert_eq!(
+        store.rotation_counts(now - hour, now - hour).await.unwrap(),
+        (0, 0)
+    );
+
+    let ages = Keystore::new(env.keys.pool().clone())
+        .rotation_ages()
+        .await
+        .unwrap();
+    assert_eq!(
+        ages.keks.len(),
+        NAMESPACES.len(),
+        "one active KEK per namespace"
+    );
+    for made in ages.keks.iter().chain(&ages.root_key) {
+        assert!((now - *made).abs() < time::Duration::minutes(5), "{made}");
+    }
+    assert!(ages.root_key.is_some(), "initialized");
+    env.destroy().await.unwrap();
+}
+
 /// Listing filters by labels: every one must match, inside the prefix.
 #[tokio::test]
 async fn listing_filters_by_label() {

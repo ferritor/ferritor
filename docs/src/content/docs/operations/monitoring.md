@@ -106,6 +106,27 @@ to 10 s.
 | `ferritor.watch.feed.live` | `ferritor_watch_feed_live` | gauge | 1 while the change feed polls the data database, 0 while it can't |
 | `ferritor.watch.feed.held_back` | `ferritor_watch_feed_held_back_seconds` | gauge (s) | how long one open transaction has held the change feed back (below); 0 normally |
 | `ferritor.watch.resyncs` | `ferritor_watch_resyncs_total` | counter | `reason` (too_many, restarted: every stream told at once; lagged: one stream fell behind) |
+| `ferritor.secrets.rotation_overdue` | `ferritor_secrets_rotation_overdue` | gauge | secrets with the rotation flag (`ferritor.rotation=true`) whose current version is older than `rotation_max_age_days` (below) |
+| `ferritor.secrets.rotation_due_soon` | `ferritor_secrets_rotation_due_soon` | gauge | the same, within `rotation_warn_days` of it |
+| `ferritor.keks.rotation_overdue` | `ferritor_keks_rotation_overdue` | gauge | namespaces whose active KEK is older than `kek_max_age_days` |
+| `ferritor.keks.rotation_due_soon` | `ferritor_keks_rotation_due_soon` | gauge | the same, within `rotation_warn_days` of it |
+| `ferritor.root_key.rotation_overdue` | `ferritor_root_key_rotation_overdue` | gauge | 1 if the root key is older than `root_key_max_age_days` since its last rekey (or init) |
+| `ferritor.root_key.rotation_due_soon` | `ferritor_root_key_rotation_due_soon` | gauge | 1 within `rotation_warn_days` of it |
+
+**Rotation reminders.** The six `rotation_*` gauges count, server-wide and
+with no attribute (never a path or a namespace), what's past its maximum age
+and what's within `rotation_warn_days` of it
+([configuration](/reference/configuration)). A reminder only: nothing is
+refused for age. Each server counts every 5 minutes, so they move by the day
+and every server reports the same numbers: alert on the `max()` across
+servers. Each is absent until a server has counted once. A secret's age is
+its current version's (a restore of an older version counts from that
+version's creation), only for secrets with the flag. A KEK's is the active
+KEK's: a rotation makes a new active KEK at once, though rows stay on the
+retired one until a rewrap (`ferritor rewrap`), which these gauges don't
+see. There's no DEK gauge: every put makes a new DEK, and a rewrap keeps it,
+so a DEK's age is its version's. `ferritor metadata get` gives a flagged
+secret's due date.
 
 ### What to alert on
 
@@ -117,6 +138,12 @@ to 10 s.
   a person ([key management](/operations/key-management#auto-unseal)).
 - `ferritor_kek_vanished` above 0: urgent, see [high
   availability](/operations/high-availability).
+- `max(ferritor_secrets_rotation_overdue) > 0`, `max(ferritor_keks_rotation_overdue) > 0`
+  and `max(ferritor_root_key_rotation_overdue) > 0`: something is past its
+  rotation's maximum age, a ticket rather than a page; the `due_soon`
+  gauges as an earlier warning. Rotate a secret with a new version, a
+  namespace's KEK with `ferritor rotate`, the root key with `ferritor rekey`
+  ([key management](/operations/key-management)).
 - `ferritor_audit_queue_depth` rising (the audit log's file stalling, before requests are
   refused), any `ferritor_audit_failures_total`, and
   `ferritor_reloads_total{kind="audit_log",result="failed"}` (a reopen that

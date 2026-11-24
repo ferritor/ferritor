@@ -348,6 +348,72 @@ pub fn observe_watch(watch: Arc<Watch>) -> Vec<ObservableGauge<u64>> {
     vec![streams, live, held_back]
 }
 
+/// The rotation reminders' gauges (see `rotation`): how many flagged
+/// secrets, active KEKs and root keys (0 or 1) are overdue and due soon,
+/// server-wide, with no attribute (never a path or a namespace). Each is
+/// absent until counted once. Every server counts the same, so alerts take
+/// the `max()` across them. Keep the returned handles for as long as they
+/// should report.
+pub fn observe_rotation(counts: Arc<crate::rotation::RotationCounts>) -> Vec<ObservableGauge<u64>> {
+    use crate::rotation::{RotationCounts, Tally};
+    let meter = meter();
+    let gauge = |name: &'static str,
+                 description: &'static str,
+                 read: fn(&RotationCounts) -> Option<Tally>,
+                 field: fn(Tally) -> u64| {
+        let counts = Arc::clone(&counts);
+        meter
+            .u64_observable_gauge(name)
+            .with_description(description)
+            .with_callback(move |gauge| {
+                if let Some(tally) = read(&counts) {
+                    gauge.observe(field(tally), &[]);
+                }
+            })
+            .build()
+    };
+    let overdue = |tally: Tally| tally.overdue;
+    let due_soon = |tally: Tally| tally.due_soon;
+    vec![
+        gauge(
+            "ferritor.secrets.rotation_overdue",
+            "Secrets with the rotation flag whose current version is past rotation_max_age_days",
+            RotationCounts::secrets,
+            overdue,
+        ),
+        gauge(
+            "ferritor.secrets.rotation_due_soon",
+            "Secrets with the rotation flag within rotation_warn_days of rotation_max_age_days",
+            RotationCounts::secrets,
+            due_soon,
+        ),
+        gauge(
+            "ferritor.keks.rotation_overdue",
+            "Namespaces whose active KEK is past kek_max_age_days",
+            RotationCounts::keks,
+            overdue,
+        ),
+        gauge(
+            "ferritor.keks.rotation_due_soon",
+            "Namespaces whose active KEK is within rotation_warn_days of kek_max_age_days",
+            RotationCounts::keks,
+            due_soon,
+        ),
+        gauge(
+            "ferritor.root_key.rotation_overdue",
+            "1 if the root key is past root_key_max_age_days since its last rekey",
+            RotationCounts::root_key,
+            overdue,
+        ),
+        gauge(
+            "ferritor.root_key.rotation_due_soon",
+            "1 if the root key is within rotation_warn_days of root_key_max_age_days",
+            RotationCounts::root_key,
+            due_soon,
+        ),
+    ]
+}
+
 /// Gauges read at collection time from the server's state: whether it's
 /// sealed, the active KEK version, and (secured mode) when the server
 /// certificate expires. Keep the returned handles for as long as they

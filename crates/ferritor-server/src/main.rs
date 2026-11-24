@@ -23,7 +23,7 @@ use ferritor_server::namespaces::Namespaces;
 use ferritor_server::policies::Policies;
 use ferritor_server::purge::Purge;
 use ferritor_server::rewrap::Rewrap;
-use ferritor_server::rotation::Rotation;
+use ferritor_server::rotation::{Kind, Rotation, RotationCounts, Tally};
 use ferritor_server::seal::{Seal, SealError};
 use ferritor_server::secrets::Secrets;
 use ferritor_server::tls;
@@ -481,6 +481,46 @@ async fn reverify_policies_periodically(seal: Arc<Seal>, gate: Arc<Gate>) {
 
 /// Ends rate-limit episodes that went quiet, reporting them, and forgets
 /// idle callers (see `ratelimit`).
+/// How often the rotation reminders are counted: their gauges move by the
+/// day, so a coarse interval costs the databases almost nothing.
+const ROTATION_COUNT_EVERY: Duration = Duration::from_secs(300);
+
+/// Counts the rotation reminders for their gauges (`metrics::observe_rotation`),
+/// at once and every [`ROTATION_COUNT_EVERY`], under the policy in force at
+/// each count. A count that fails keeps the last one and says so.
+async fn count_rotation_periodically(
+    store: Datastore,
+    keys: Keystore,
+    rotation: Arc<Rotation>,
+    counts: Arc<RotationCounts>,
+) {
+    let mut every = tokio::time::interval(ROTATION_COUNT_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        every.tick().await;
+        let policy = rotation.policy();
+        let now = time::OffsetDateTime::now_utc();
+        let (overdue_at, due_soon_at) = ferritor_server::rotation::secret_cutoffs(&policy, now);
+        match store.rotation_counts(overdue_at, due_soon_at).await {
+            Ok((overdue, due_soon)) => counts.set_secrets(Tally { overdue, due_soon }),
+            Err(error) => tracing::warn!(
+                error = %error_chain(&error),
+                "the rotation reminders' secrets count failed: the gauges keep the last one"
+            ),
+        }
+        match keys.rotation_ages().await {
+            Ok(ages) => {
+                counts.set_keks(Tally::of(&policy, Kind::Kek, ages.keks, now));
+                counts.set_root_key(Tally::of(&policy, Kind::RootKey, ages.root_key, now));
+            }
+            Err(error) => tracing::warn!(
+                error = %error_chain(&error),
+                "the rotation reminders' KEK and root key count failed: the gauges keep the last one"
+            ),
+        }
+    }
+}
+
 async fn end_quiet_limits(gate: Arc<Gate>) {
     let mut ticks = tokio::time::interval(Duration::from_secs(2));
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -590,6 +630,8 @@ async fn main() -> anyhow::Result<()> {
     // commitments live in the data database, out of a keys-database
     // writer's reach (see `policy_store::RevisionFloor`, `root_ledger`).
     let floors = Datastore::new(data_pool.clone()).with_timeout(database_timeout);
+    // For the rotation reminders' count: metadata only, sealed or not.
+    let rotation_keys = Keystore::new(keys_pool.clone()).with_timeout(database_timeout);
     let seal = Seal::new(Keystore::new(keys_pool).with_timeout(database_timeout))
         .with_commit_check_timeout(lock_timeout)
         .with_revision_floor(Arc::new(floors.clone()))
@@ -817,6 +859,14 @@ async fn main() -> anyhow::Result<()> {
     // WatchSecrets' change feed (see `watch`).
     let watch = Watch::new();
     let _watch_gauges = metrics::observe_watch(Arc::clone(&watch));
+    let rotation_counts = Arc::new(RotationCounts::default());
+    let _rotation_gauges = metrics::observe_rotation(Arc::clone(&rotation_counts));
+    tokio::spawn(count_rotation_periodically(
+        datastore.clone(),
+        rotation_keys,
+        Arc::clone(&rotation),
+        rotation_counts,
+    ));
     tokio::spawn(Arc::clone(&watch).run(datastore.clone()));
     let secrets = Arc::new(
         Secrets::new(Arc::clone(&seal), datastore.clone(), Arc::clone(&gate))
