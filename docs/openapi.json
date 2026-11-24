@@ -1133,12 +1133,22 @@
           "oldest_version",
           "versions",
           "labels",
-          "labels_updated_at"
+          "labels_updated_at",
+          "current_created_at",
+          "rotation_due"
         ],
         "properties": {
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "current_created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the latest live version was created, what a rotation's age\ncounts from; null if every version is deleted."
           },
           "current_version": {
             "type": [
@@ -1177,6 +1187,14 @@
           },
           "path": {
             "type": "string"
+          },
+          "rotation_due": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "With the rotation flag (`ferritor.rotation=true`) and a live\nversion: when it's due for rotation, by the server's\n`rotation_max_age_days`; null otherwise. A reminder only."
           },
           "updated_at": {
             "type": "string",

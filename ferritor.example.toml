@@ -68,6 +68,16 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 # seconds, so load balancers stop routing here first. 0 drains at once.
 #shutdown_delay_secs = 0
 
+# Rotation reminders: how many days a secret with the rotation flag
+# (ferritor.rotation=true) may go without a new version, a namespace's active
+# KEK may live, and the root key may go without a rekey; and how many days
+# before its maximum something counts as due soon (below the shortest). A
+# reminder only: nothing is refused for age. 1 to 3650; reloaded on SIGHUP.
+#rotation_max_age_days = 90
+#kek_max_age_days = 365
+#root_key_max_age_days = 365
+#rotation_warn_days = 14
+
 # The Ed25519 key (PKCS#8 PEM) that signs the audit log's checkpoints.
 # Required in secured mode; optional in dev mode (the log is then chained but
 # unsigned). Keep it readable by the server's user only:

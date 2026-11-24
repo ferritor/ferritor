@@ -98,6 +98,20 @@ pub struct Settings {
     /// A second signal still exits at once. Default 0: drain at once; at
     /// most [`MAX_SHUTDOWN_DELAY_SECS`].
     pub shutdown_delay_secs: u64,
+    /// Rotation reminders (see `rotation`): how many days a secret with the
+    /// rotation flag (`ferritor.rotation=true`) may go without a new
+    /// version. Default 90. A reminder only: nothing is refused for age.
+    /// From 1 to 3650; reloaded on SIGHUP.
+    pub rotation_max_age_days: u32,
+    /// How many days a namespace's active KEK may live before a rotation is
+    /// due. Default 365.
+    pub kek_max_age_days: u32,
+    /// How many days the root key may go without a rekey (which needs the
+    /// share holders). Default 365.
+    pub root_key_max_age_days: u32,
+    /// How many days before its maximum something counts as due soon:
+    /// below the shortest of the three. Default 14.
+    pub rotation_warn_days: u32,
     /// The Ed25519 private key (PKCS#8 PEM, e.g. `openssl genpkey
     /// -algorithm ed25519`) that signs the audit log's checkpoints (see
     /// `audit`), so edits to the log can be detected with the public key
@@ -478,6 +492,19 @@ impl Settings {
             .set_default("keyring_refresh_secs", 60)?
             .set_default("policy_refresh_secs", 5)?
             .set_default("shutdown_delay_secs", 0)?
+            .set_default(
+                "rotation_max_age_days",
+                crate::rotation::DEFAULT.secret_max_age_days,
+            )?
+            .set_default(
+                "kek_max_age_days",
+                crate::rotation::DEFAULT.kek_max_age_days,
+            )?
+            .set_default(
+                "root_key_max_age_days",
+                crate::rotation::DEFAULT.root_key_max_age_days,
+            )?
+            .set_default("rotation_warn_days", crate::rotation::DEFAULT.warn_days)?
             .build()?
             .try_deserialize()?;
         ensure_timeouts(settings.database_timeout_ms, settings.lock_timeout_ms)?;
@@ -487,6 +514,7 @@ impl Settings {
         )?;
         ensure_shutdown_delay(settings.shutdown_delay_secs)?;
         settings.limits().map_err(config::ConfigError::Message)?;
+        settings.rotation().map_err(config::ConfigError::Message)?;
         settings.identity().map_err(config::ConfigError::Message)?;
         settings.metrics().map_err(config::ConfigError::Message)?;
         if let Some(otlp) = &settings.audit_otlp {
@@ -586,6 +614,18 @@ impl Settings {
             connection_age_grace: Duration::from_secs(tls_settings.connection_age_grace_secs),
             audit_key,
         })
+    }
+}
+
+impl Settings {
+    /// The rotation reminders' ages, checked (see [`crate::rotation`]).
+    pub fn rotation(&self) -> Result<crate::rotation::Policy, String> {
+        crate::rotation::Policy::new(
+            self.rotation_max_age_days,
+            self.kek_max_age_days,
+            self.root_key_max_age_days,
+            self.rotation_warn_days,
+        )
     }
 }
 
@@ -935,6 +975,10 @@ pub const KNOWN_KEYS: &[&str] = &[
     "keyring_refresh_secs",
     "policy_refresh_secs",
     "shutdown_delay_secs",
+    "rotation_max_age_days",
+    "kek_max_age_days",
+    "root_key_max_age_days",
+    "rotation_warn_days",
     "audit_signing_key",
     "audit_file",
     "audit_file_max_bytes",
@@ -1754,6 +1798,7 @@ mod tests {
             "listen_addr = \"127.0.0.1:7070\"\ndatabase_timeout_ms = 5000\nlock_timeout_ms = 2000\n\
              keys_database_max_connections = 4\ndata_database_max_connections = 32\n\
              purge_deleted_after_days = 7\nmax_versions = 3\nkeyring_refresh_secs = 30\npolicy_refresh_secs = 2\nshutdown_delay_secs = 5\n\
+             rotation_max_age_days = 60\nkek_max_age_days = 180\nroot_key_max_age_days = 400\nrotation_warn_days = 10\n\
              {TLS}\n{POLICY}\n\
              [rate_limit]\nserver_max_in_flight = 40\nmax_in_flight = 8\nrequests_per_second = 50\nburst = 60\n\
              [[rate_limit.identity]]\nidentity = \"apps/a\"\nmax_in_flight = 4\nrequests_per_second = 5\nburst = 6\n\
@@ -1769,7 +1814,22 @@ mod tests {
         assert_eq!(parse("").unwrap().policy_refresh_secs, 5);
         assert_eq!(all.shutdown_delay_secs, 5);
         assert_eq!(parse("").unwrap().shutdown_delay_secs, 0);
-        assert_eq!(KNOWN_KEYS.len(), 23);
+        assert_eq!(KNOWN_KEYS.len(), 27);
+        assert_eq!(
+            all.rotation(),
+            crate::rotation::Policy::new(60, 180, 400, 10)
+        );
+        assert_eq!(parse("").unwrap().rotation(), Ok(crate::rotation::DEFAULT));
+        // Checked at load: out of range, or a warning no shorter than a
+        // maximum, refuses to start.
+        for (bad, says) in [
+            ("rotation_max_age_days = 0", "rotation_max_age_days (0)"),
+            ("kek_max_age_days = 4000", "kek_max_age_days (4000)"),
+            ("rotation_warn_days = 90", "below the shortest"),
+        ] {
+            let error = parse(bad).unwrap_err();
+            assert!(error.contains(says), "{bad}: {error}");
+        }
         assert!(matches!(all.metrics().unwrap(), Metrics::Prometheus(_)));
         assert_eq!(all.identity().unwrap().unwrap().issuers.len(), 1);
         assert_eq!(

@@ -71,7 +71,8 @@ A path as a whole has metadata, never its values:
 |---|---|
 | created | when the path was first written |
 | updated | when it was last written by a put (a new version, e.g. a rotation) |
-| current version | the latest live version; none if every version is deleted |
+| current version | the latest live version, and when it was created; none if every version is deleted |
+| rotation due | with the rotation flag (`ferritor.rotation=true`, below): when it's due for a new version, the server's `rotation_max_age_days` after the current version's creation (a restore of an older version counts from that version's) |
 | oldest version | the oldest version still stored (live or deleted, not purged) |
 | versions stored | how many, live and deleted |
 | labels | custom `key=value` metadata (`team=a`, `project=b`) |

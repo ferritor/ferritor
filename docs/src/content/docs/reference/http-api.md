@@ -291,10 +291,16 @@ A secret's history, newest first, deleted versions included (with
 ```json
 {"path": "billing/db", "created_at": "2026-10-20T12:29:38Z", "updated_at": "2026-10-20T12:29:38Z",
  "current_version": 2, "oldest_version": 1, "versions": 2,
- "labels": {"env": "prod"}, "labels_updated_at": "2026-10-20T12:29:38Z"}
+ "labels": {"env": "prod"}, "labels_updated_at": "2026-10-20T12:29:38Z",
+ "current_created_at": "2026-10-20T12:30:01Z", "rotation_due": null}
 ```
 
-`current_version` is `null` when every version is deleted.
+`current_version` and `current_created_at` are `null` when every version is
+deleted. `rotation_due` is set only for a secret with the rotation flag
+(`ferritor.rotation=true`) and a live version: the server's
+`rotation_max_age_days` after `current_created_at`
+([configuration](/reference/configuration)). A reminder only: nothing is
+refused past it.
 
 ### `PATCH /v1/metadata/{path}` (`label`)
 

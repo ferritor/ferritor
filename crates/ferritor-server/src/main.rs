@@ -23,6 +23,7 @@ use ferritor_server::namespaces::Namespaces;
 use ferritor_server::policies::Policies;
 use ferritor_server::purge::Purge;
 use ferritor_server::rewrap::Rewrap;
+use ferritor_server::rotation::Rotation;
 use ferritor_server::seal::{Seal, SealError};
 use ferritor_server::secrets::Secrets;
 use ferritor_server::tls;
@@ -218,6 +219,7 @@ async fn reload_on_hangup(
     seal: Arc<Seal>,
     gate: Arc<Gate>,
     exchange: Option<Arc<Exchange>>,
+    rotation: Arc<Rotation>,
 ) {
     while hangup.recv().await.is_some() {
         // First, so everything this reload records lands in the new file.
@@ -254,6 +256,24 @@ async fn reload_on_hangup(
             }
             Err(error) => {
                 tracing::error!(%error, "RATE LIMITS NOT RELOADED: still running the previous ones");
+            }
+        }
+        match settings.rotation() {
+            Ok(policy) => {
+                tracing::info!(
+                    secret_days = policy.secret_max_age_days,
+                    kek_days = policy.kek_max_age_days,
+                    root_key_days = policy.root_key_max_age_days,
+                    warn_days = policy.warn_days,
+                    "reloaded the rotation reminders' ages"
+                );
+                rotation.reload(policy);
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "ROTATION AGES NOT RELOADED: still running the previous ones"
+                );
             }
         }
         match settings.authz_for_reload(tls.is_some()) {
@@ -654,6 +674,16 @@ async fn main() -> anyhow::Result<()> {
     };
     // Rate limits (see `ratelimit`), checked when the settings loaded.
     let limits = settings.limits().map_err(anyhow::Error::msg)?;
+    // The rotation reminders' ages, swapped on SIGHUP.
+    let policy = settings.rotation().map_err(anyhow::Error::msg)?;
+    tracing::info!(
+        secret_days = policy.secret_max_age_days,
+        kek_days = policy.kek_max_age_days,
+        root_key_days = policy.root_key_max_age_days,
+        warn_days = policy.warn_days,
+        "rotation reminders (reloaded on SIGHUP; a reminder, never a refusal)"
+    );
+    let rotation = Arc::new(Rotation::new(policy));
     tracing::info!(
         server_max_in_flight = limits.server_max_in_flight.get(),
         "rate limits in force (reloaded on SIGHUP; the server-wide cap at restart)"
@@ -752,6 +782,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&seal),
         Arc::clone(&gate),
         exchange.as_ref().map(|(_, exchange)| Arc::clone(exchange)),
+        Arc::clone(&rotation),
     ));
     if settings.keyring_refresh_secs > 0 {
         tokio::spawn(refresh_keyring_periodically(
@@ -789,7 +820,8 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(Arc::clone(&watch).run(datastore.clone()));
     let secrets = Arc::new(
         Secrets::new(Arc::clone(&seal), datastore.clone(), Arc::clone(&gate))
-            .with_watch(Arc::clone(&watch)),
+            .with_watch(Arc::clone(&watch))
+            .with_rotation(Arc::clone(&rotation)),
     );
     // The stored policies decide what the config rules don't (secret
     // actions only), once unsealed and verified.

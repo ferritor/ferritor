@@ -129,6 +129,10 @@ pub struct PathMetadata {
     pub updated_at: OffsetDateTime,
     /// The latest live version; `None` if every version is deleted.
     pub current_version: Option<u32>,
+    /// When the latest live version was created: a rotation's age, never
+    /// `updated_at` (a restore makes an older value live without a put).
+    /// `None` with no live version.
+    pub current_created_at: Option<OffsetDateTime>,
     /// The oldest version still stored (live or deleted, not purged).
     pub oldest_version: Option<u32>,
     /// How many versions are stored, live and deleted.
@@ -1669,12 +1673,15 @@ impl Datastore {
     /// What's known about `path` as a whole: when it was first and last
     /// written, its current and oldest versions, how many are stored, its
     /// labels. `None` for a path with nothing stored (never written, or
-    /// every version purged), like the history. One `paths` row and two
+    /// every version purged), like the history. One `paths` row and three
     /// probes and a count on the primary key.
     pub async fn path_metadata(&self, path: &SecretPath) -> Result<Option<PathMetadata>> {
         bounded(self.timeout, async move {
             let row = sqlx::query!(
                 r#"SELECT p.created_at, p.updated_at, p.current_version,
+                       (SELECT v.created_at FROM secret_versions v
+                        WHERE v.path_id = p.id AND v.version = p.current_version
+                          AND v.deleted_at IS NULL) AS current_created_at,
                        (SELECT min(version) FROM secret_versions
                         WHERE path_id = p.id) AS oldest_version,
                        (SELECT count(*) FROM secret_versions WHERE path_id = p.id) AS "versions!",
@@ -1697,6 +1704,7 @@ impl Datastore {
                     .current_version
                     .map(|v| u32_from_db("version", v))
                     .transpose()?,
+                current_created_at: row.current_created_at,
                 oldest_version: row
                     .oldest_version
                     .map(|v| u32_from_db("version", v))

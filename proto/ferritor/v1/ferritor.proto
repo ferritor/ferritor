@@ -703,6 +703,14 @@ message PathMetadata {
   map<string, string> labels = 7;
   // When the labels last changed; unset without labels.
   optional int64 labels_updated_at_unix = 8;
+  // When the latest live version was created: what a rotation's age counts
+  // from (a restore makes an older value live without a new put, so not
+  // updated_at). Unset if every version is deleted.
+  optional int64 current_created_at_unix = 9;
+  // With the rotation flag (the label ferritor.rotation=true) and a live
+  // version: when the secret is due for rotation, by the server's
+  // rotation_max_age_days. A reminder only: nothing is refused past it.
+  optional int64 rotation_due_unix = 10;
 }
 
 message UpdateLabelsRequest {

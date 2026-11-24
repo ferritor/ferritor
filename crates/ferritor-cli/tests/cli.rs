@@ -1536,10 +1536,38 @@ async fn metadata_and_labels_from_the_cli() {
     assert!(get.success, "{}", get.stderr);
     let out = get.out();
     assert!(out.starts_with("path: app/a\ncreated: "), "{out}");
+    assert!(out.contains("current version: 1 (created "), "{out}");
     assert!(
-        out.contains("current version: 1\noldest version: 1\nversions stored: 1\nlabels:\n  env=prod\n  team=a\nlabels updated: "),
+        out.contains(
+            "oldest version: 1\nversions stored: 1\nlabels:\n  env=prod\n  team=a\nlabels updated: "
+        ),
         "{out}"
     );
+    // No rotation flag, no due date.
+    assert!(!out.contains("rotation due"), "{out}");
+
+    // With the flag: a due date, the server's 90 days on, not overdue yet.
+    let flagged = server
+        .ferritor(&["metadata", "set", "app/a", "ferritor.rotation=true"], &[])
+        .await
+        .unwrap();
+    assert!(flagged.success, "{}", flagged.stderr);
+    let get = server
+        .ferritor(&["metadata", "get", "app/a"], &[])
+        .await
+        .unwrap();
+    let out = get.out();
+    assert!(out.contains("rotation due: "), "{out}");
+    assert!(!out.contains("(overdue)"), "{out}");
+    let off = server
+        .ferritor(
+            &["metadata", "set", "app/a", "ferritor.rotation=false"],
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(!off.success);
+    assert!(off.stderr.contains("remove the label"), "{}", off.stderr);
 
     let set = server
         .ferritor(

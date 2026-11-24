@@ -1605,6 +1605,59 @@ async fn the_rotation_flag_is_true_or_absent() {
     env.destroy().await.unwrap();
 }
 
+/// A rotation's age counts from the current version's creation, not the
+/// path's `updated_at`: a restore makes an older value live without a
+/// put, and its age is that older version's. The due date is reported
+/// only with the flag and a live version, the policy's days on.
+#[tokio::test]
+async fn the_rotation_due_date_follows_the_live_version() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    env.secrets
+        .put_labeled(&ANON, "app/db", b"one", None, &flag)
+        .await
+        .unwrap();
+    let v1 = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    let v1_created = v1.current_created_at.unwrap();
+    assert_eq!(
+        env.secrets.rotation_due(&v1),
+        Some(v1_created + time::Duration::days(90))
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    env.secrets.put(&ANON, "app/db", b"two").await.unwrap();
+    let v2 = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert!(v2.current_created_at.unwrap() > v1_created);
+
+    // Every version deleted: no live version, no due date.
+    env.secrets.delete(&ANON, "app/db").await.unwrap();
+    let deleted = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!(deleted.current_created_at, None);
+    assert_eq!(env.secrets.rotation_due(&deleted), None);
+
+    // Version 1 brought back: live again with its own, older age, though
+    // the path's updated_at is still the second put's.
+    env.secrets.restore(&ANON, "app/db", Some(1)).await.unwrap();
+    let restored = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!(restored.current_version, Some(1));
+    assert_eq!(restored.current_created_at, Some(v1_created));
+    assert!(restored.updated_at > v1_created);
+
+    // Without the flag: no due date, though the age is still there.
+    env.secrets
+        .update_labels(
+            &ANON,
+            "app/db",
+            &Labels::new(),
+            &["ferritor.rotation".to_owned()],
+        )
+        .await
+        .unwrap();
+    let plain = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!(env.secrets.rotation_due(&plain), None);
+    assert!(plain.current_created_at.is_some());
+    env.destroy().await.unwrap();
+}
+
 /// Listing filters by labels: every one must match, inside the prefix.
 #[tokio::test]
 async fn listing_filters_by_label() {

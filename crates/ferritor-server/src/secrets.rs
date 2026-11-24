@@ -305,6 +305,8 @@ pub struct Secrets {
     /// When a read last finished refreshing the keyring (see
     /// [`Secrets::refresh_due`]).
     refreshed_at: Mutex<Option<Instant>>,
+    /// The rotation reminders' ages (see `rotation`), for due dates.
+    rotation: Arc<crate::rotation::Rotation>,
 }
 
 impl Secrets {
@@ -315,7 +317,30 @@ impl Secrets {
             gate,
             watch: None,
             refreshed_at: Mutex::new(None),
+            rotation: Arc::default(),
         }
+    }
+
+    /// Reports due dates by `rotation`'s ages (the config's, reloaded on
+    /// SIGHUP); without it, the defaults.
+    #[must_use]
+    pub fn with_rotation(mut self, rotation: Arc<crate::rotation::Rotation>) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    /// When the secret `metadata` describes is due for rotation: only with
+    /// the rotation flag and a live version, from that version's creation.
+    pub fn rotation_due(&self, metadata: &PathMetadata) -> Option<time::OffsetDateTime> {
+        if !ferritor_core::labels::rotates(&metadata.labels) {
+            return None;
+        }
+        let since = metadata.current_created_at?;
+        Some(
+            self.rotation
+                .policy()
+                .due(crate::rotation::Kind::Secret, since),
+        )
     }
 
     /// Serves watches from `watch`'s change feed; without it, a watch is

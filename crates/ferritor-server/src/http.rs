@@ -408,6 +408,15 @@ struct PathMetadataBody {
     /// When the labels last changed; null if they never did.
     #[schema(format = DateTime, required)]
     labels_updated_at: Option<String>,
+    /// When the latest live version was created, what a rotation's age
+    /// counts from; null if every version is deleted.
+    #[schema(format = DateTime, required)]
+    current_created_at: Option<String>,
+    /// With the rotation flag (`ferritor.rotation=true`) and a live
+    /// version: when it's due for rotation, by the server's
+    /// `rotation_max_age_days`; null otherwise. A reminder only.
+    #[schema(format = DateTime, required)]
+    rotation_due: Option<String>,
 }
 
 /// Which deleted version to bring back.
@@ -770,6 +779,14 @@ async fn get_metadata(
     let Path(path) = path.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
     let m = secrets.metadata(&caller, &path).await?;
     Ok(Json(PathMetadataBody {
+        rotation_due: secrets
+            .rotation_due(&m)
+            .map(|at| rfc3339(at, &m.path))
+            .transpose()?,
+        current_created_at: m
+            .current_created_at
+            .map(|at| rfc3339(at, &m.path))
+            .transpose()?,
         created_at: rfc3339(m.created_at, &m.path)?,
         updated_at: rfc3339(m.updated_at, &m.path)?,
         labels_updated_at: m

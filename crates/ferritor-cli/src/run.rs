@@ -1266,9 +1266,17 @@ async fn metadata(
     writeln!(out, "path: {}", m.path)?;
     writeln!(out, "created: {}", utc(m.created_at_unix))?;
     writeln!(out, "updated: {}", utc(m.updated_at_unix))?;
-    match m.current_version {
-        Some(version) => writeln!(out, "current version: {version}")?,
-        None => writeln!(out, "current version: none (every version is deleted)")?,
+    match (m.current_version, m.current_created_at_unix) {
+        (Some(version), Some(at)) => {
+            writeln!(out, "current version: {version} (created {})", utc(at))?;
+        }
+        (Some(version), None) => writeln!(out, "current version: {version}")?,
+        (None, _) => writeln!(out, "current version: none (every version is deleted)")?,
+    }
+    if let Some(due) = m.rotation_due_unix {
+        let overdue = time::OffsetDateTime::now_utc().unix_timestamp() >= due;
+        let state = if overdue { " (overdue)" } else { "" };
+        writeln!(out, "rotation due: {}{state}", utc(due))?;
     }
     match m.oldest_version {
         Some(version) => writeln!(out, "oldest version: {version}")?,

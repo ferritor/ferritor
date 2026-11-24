@@ -1907,7 +1907,7 @@ impl SecretsService for Secrets {
             .metadata(&caller, &request.into_inner().path)
             .await?;
         Ok(Response::new(pb::GetMetadataResponse {
-            metadata: Some(path_metadata(metadata)),
+            metadata: Some(path_metadata(&self.secrets, metadata)),
         }))
     }
 
@@ -1928,8 +1928,11 @@ impl SecretsService for Secrets {
     }
 }
 
-fn path_metadata(m: PathMetadata) -> pb::PathMetadata {
+fn path_metadata(secrets: &crate::secrets::Secrets, m: PathMetadata) -> pb::PathMetadata {
+    let rotation_due_unix = secrets.rotation_due(&m).map(|at| at.unix_timestamp());
     pb::PathMetadata {
+        rotation_due_unix,
+        current_created_at_unix: m.current_created_at.map(|at| at.unix_timestamp()),
         path: m.path.to_string(),
         created_at_unix: m.created_at.unix_timestamp(),
         updated_at_unix: m.updated_at.unix_timestamp(),
