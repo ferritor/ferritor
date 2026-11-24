@@ -71,7 +71,8 @@ A path as a whole has metadata, never its values:
 |---|---|
 | created | when the path was first written |
 | updated | when it was last written by a put (a new version, e.g. a rotation) |
-| current version | the latest live version; none if every version is deleted |
+| current version | the latest live version, and when it was created; none if every version is deleted |
+| rotation due | with the rotation flag (`ferritor.rotation=true`, below): when it's due for a new version, the server's `rotation_max_age_days` after the current version's creation (a restore of an older version counts from that version's) |
 | oldest version | the oldest version still stored (live or deleted, not purged) |
 | versions stored | how many, live and deleted |
 | labels | custom `key=value` metadata (`team=a`, `project=b`) |
@@ -91,7 +92,24 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   (`([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]`, never empty). So nothing
   invisible or confusable fits in a label. At most 64 per path.
   Anything else is refused, never rewritten, and so is a change that sets
-  and removes nothing.
+  and removes nothing. Two keys take wider values (below).
+- **Metadata keys**, all optional, for who to ask about a secret:
+  - `owner`: a team, a person or a ferritor identity, the rule's
+    characters and `/` (`billing-team`, `apps/billing`), no `//`;
+  - `contact`: an email address or a chat channel, the rule's characters
+    and `@` and `#` (`alice@example.com`, `#billing-oncall`);
+  - `description`: what it is, printable ASCII with spaces, not beginning
+    or ending with one, up to 255 characters.
+
+  ```sh
+  ferritor metadata set billing/db owner=billing-team contact=#billing-oncall \
+    "description=the billing database's password"
+  ```
+
+  Like every label they're plain metadata, readable by anyone allowed to
+  list the path, and audited by key only. **A `contact` may be personal
+  data** (a person's email address): prefer a team's address or channel,
+  and treat the labels as visible to everyone with `list` on the path.
 - Changing them needs the **`label`** action (see [policy](/guides/policy)): a
   tool can tag secrets without being able to read or write their values,
   and a writer can store values without being able to change tags.
@@ -109,6 +127,42 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   asked for.
 - The audit log records which keys were set and removed, never their
   values.
+- **Keys starting with `ferritor.` are reserved**, ferritor's own: only
+  those it knows are accepted, so a typo is refused rather than stored and
+  ignored. The one there is:
+  - **`ferritor.rotation=true`**, the rotation flag: the secret must be
+    rotated (given a new version) on a schedule, and the rotation reminders
+    count it. Only `true` is stored: without the label it's off, and
+    `false` is refused (remove the label instead), so a write never stores
+    something other than what was sent. A namespace takes no `ferritor.`
+    label: it never rotates, its secrets do.
+
+  ```sh
+  ferritor metadata set billing/db ferritor.rotation=true   # remind me to rotate it
+  ferritor metadata unset billing/db ferritor.rotation      # and not any more
+  ferritor list billing --label ferritor.rotation=true      # what's on a schedule
+  ```
+
+## Listing by age
+
+For rotation reminders ([configuration](/reference/configuration)), a
+listing can keep only the secrets of a certain age, by their live version's
+creation (a restore of an older version counts from that version's):
+
+```sh
+ferritor list billing --overdue                     # flagged, past rotation_max_age_days
+ferritor list billing --overdue --older-than 60d    # flagged, at least 60 days old
+ferritor list billing --older-than 365d             # any secret a year old, flagged or not
+```
+
+They compose with `--label` and the paging, and need `list` on the
+prefix, as any listing: a caller sees only what it may list. With either,
+each line also gives when its version was created. Over the APIs it's
+`overdue` and `older_than_days` on the listing (gRPC `ListSecrets`, the
+JSON API's query parameters). Each path of the range is read to find the
+old ones (one probe each, as a listing makes), so a page may take longer
+than an unfiltered one. Server-wide counts, without names, are the
+[rotation gauges](/operations/monitoring#the-server).
 
 ## The CLI
 

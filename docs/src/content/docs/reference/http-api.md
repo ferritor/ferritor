@@ -264,7 +264,14 @@ Brings a deleted version back: `{}` undoes a delete (the newest deleted
 version, only while none is live; `409 live_version` otherwise), `{"version":
 N}` restores that one. Answers like a put.
 
-### `GET /v1/secrets?prefix=…&label=key=value&page_size=…&page_token=…` (`list`)
+### `GET /v1/secrets?prefix=…&label=key=value&overdue=true&older_than_days=…&page_size=…&page_token=…` (`list`)
+
+`overdue=true` keeps only the secrets with the rotation flag past the
+server's `rotation_max_age_days`, or past `older_than_days` if given too;
+`older_than_days` (1 to 3650) alone keeps any secret whose live version is
+at least that many days old ([listing by
+age](/guides/secrets#listing-by-age)). Both compose with `label` and the
+paging: keep them for every page.
 
 The latest version of every secret below `prefix` (whole segments; empty:
 everything, which needs `list` on all paths), with every `label` given
@@ -291,10 +298,16 @@ A secret's history, newest first, deleted versions included (with
 ```json
 {"path": "billing/db", "created_at": "2026-10-20T12:29:38Z", "updated_at": "2026-10-20T12:29:38Z",
  "current_version": 2, "oldest_version": 1, "versions": 2,
- "labels": {"env": "prod"}, "labels_updated_at": "2026-10-20T12:29:38Z"}
+ "labels": {"env": "prod"}, "labels_updated_at": "2026-10-20T12:29:38Z",
+ "current_created_at": "2026-10-20T12:30:01Z", "rotation_due": null}
 ```
 
-`current_version` is `null` when every version is deleted.
+`current_version` and `current_created_at` are `null` when every version is
+deleted. `rotation_due` is set only for a secret with the rotation flag
+(`ferritor.rotation=true`) and a live version: the server's
+`rotation_max_age_days` after `current_created_at`
+([configuration](/reference/configuration)). A reminder only: nothing is
+refused past it.
 
 ### `PATCH /v1/metadata/{path}` (`label`)
 

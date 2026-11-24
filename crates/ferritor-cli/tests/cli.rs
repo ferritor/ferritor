@@ -1536,10 +1536,38 @@ async fn metadata_and_labels_from_the_cli() {
     assert!(get.success, "{}", get.stderr);
     let out = get.out();
     assert!(out.starts_with("path: app/a\ncreated: "), "{out}");
+    assert!(out.contains("current version: 1 (created "), "{out}");
     assert!(
-        out.contains("current version: 1\noldest version: 1\nversions stored: 1\nlabels:\n  env=prod\n  team=a\nlabels updated: "),
+        out.contains(
+            "oldest version: 1\nversions stored: 1\nlabels:\n  env=prod\n  team=a\nlabels updated: "
+        ),
         "{out}"
     );
+    // No rotation flag, no due date.
+    assert!(!out.contains("rotation due"), "{out}");
+
+    // With the flag: a due date, the server's 90 days on, not overdue yet.
+    let flagged = server
+        .ferritor(&["metadata", "set", "app/a", "ferritor.rotation=true"], &[])
+        .await
+        .unwrap();
+    assert!(flagged.success, "{}", flagged.stderr);
+    let get = server
+        .ferritor(&["metadata", "get", "app/a"], &[])
+        .await
+        .unwrap();
+    let out = get.out();
+    assert!(out.contains("rotation due: "), "{out}");
+    assert!(!out.contains("(overdue)"), "{out}");
+    let off = server
+        .ferritor(
+            &["metadata", "set", "app/a", "ferritor.rotation=false"],
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(!off.success);
+    assert!(off.stderr.contains("remove the label"), "{}", off.stderr);
 
     let set = server
         .ferritor(
@@ -1575,6 +1603,53 @@ async fn metadata_and_labels_from_the_cli() {
         bad.stderr.contains("`team` is not a `key=value` label"),
         "{}",
         bad.stderr
+    );
+    // By age: nothing here is old yet, so nothing comes back; the age is
+    // given in days and checked before anything is sent.
+    for args in [
+        &["list", "app", "--overdue"][..],
+        &["list", "app", "--older-than", "60d"],
+        &[
+            "list",
+            "--overdue",
+            "--older-than",
+            "30d",
+            "--label",
+            "team=a",
+        ],
+    ] {
+        let aged = server.ferritor(args, &[]).await.unwrap();
+        assert!(aged.success, "{args:?}: {}", aged.stderr);
+        assert_eq!(aged.out(), "", "{args:?}");
+    }
+    for (age, says) in [("60", "like `60d`"), ("0d", "from 1d to 3650d")] {
+        let bad = server
+            .ferritor(&["list", "--older-than", age], &[])
+            .await
+            .unwrap();
+        assert!(!bad.success);
+        assert!(bad.stderr.contains(says), "{age}: {}", bad.stderr);
+    }
+    // The metadata keys, as a shell passes them: one argument each.
+    let meta = server
+        .ferritor(
+            &[
+                "metadata",
+                "set",
+                "app/b",
+                "description=the second secret",
+                "contact=#billing-oncall",
+            ],
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(meta.success, "{}", meta.stderr);
+    assert!(
+        meta.out()
+            .contains("  contact=#billing-oncall\n  description=the second secret\n"),
+        "{}",
+        meta.out()
     );
     let twice = server
         .ferritor(&["list", "--label", "t=a", "--label", "t=b"], &[])

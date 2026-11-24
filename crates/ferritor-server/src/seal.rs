@@ -2516,6 +2516,12 @@ impl Seal {
         Ok(self.keystore.namespaces().await?)
     }
 
+    /// The active KEKs' and the root key's ages, for the rotation reminders
+    /// in `status` (metadata only, sealed or not).
+    pub async fn rotation_ages(&self) -> Result<ferritor_keystore::RotationAges> {
+        Ok(self.keystore.rotation_ages().await?)
+    }
+
     /// Changes a live namespace's labels in the keys database (no keys
     /// involved, so no admin lock).
     pub async fn update_namespace_labels(

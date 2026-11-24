@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FILTER (WHERE v.created_at <= $2) AS \"overdue!\",\n                          count(*) FILTER (WHERE v.created_at > $2 AND v.created_at <= $3)\n                              AS \"due_soon!\"\n                   FROM paths p\n                   CROSS JOIN LATERAL (\n                       SELECT v.created_at FROM secret_versions v\n                       WHERE v.path_id = p.id AND v.version = p.current_version\n                         AND v.deleted_at IS NULL\n                       LIMIT 1) v\n                   WHERE p.current_version IS NOT NULL AND p.labels @> $1\n                     AND p.labels <> '{}'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "overdue!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "due_soon!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "3485e21f6f1d4117646f7eca1a90816a60ae2ca28c3ac1cd09752157607732d3"
+}

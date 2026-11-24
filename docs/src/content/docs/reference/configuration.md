@@ -59,6 +59,10 @@ rebinding from a browser on the same machine.
 | `keyring_refresh_secs` | 60 | How often an unsealed server reloads its KEKs, to follow rotations by other servers. 0 turns the periodic refresh off. |
 | `policy_refresh_secs` | 5 | How often an unsealed server checks whether the stored policies changed (one tiny read), reloading them if so: the longest a change through another server takes to reach this one. 0 turns the poll off. (Separately, every server re-reads and re-verifies the whole set once a minute, on its own schedule.) |
 | `shutdown_delay_secs` | 0 | On the first SIGINT/SIGTERM, how long to keep serving while reporting not ready before draining (at most 300). See [operations](/operations/running). |
+| `rotation_max_age_days` | 90 | Rotation reminders: how many days a secret with the rotation flag (`ferritor.rotation=true`, see [secrets](/guides/secrets#metadata-and-labels)) may go without a new version, counted from its current version's creation. A reminder only: nothing is refused for age. 1 to 3650. |
+| `kek_max_age_days` | 365 | How many days a namespace's active KEK may live before a rotation is due. 1 to 3650. |
+| `root_key_max_age_days` | 365 | How many days the root key may go without a rekey (which needs the share holders). 1 to 3650. |
+| `rotation_warn_days` | 14 | How many days before its maximum something counts as due soon: 1 to 3650, and below the shortest of the three maximums. |
 | `audit_signing_key` | (secured: required) | Ed25519 private key, PKCS#8 PEM, signing the audit log's checkpoints. Startup warns if group or others can read it. |
 | `audit_file` | (secured: it or `[audit_otlp]`; dev: stdout) | The file the audit log is appended to, created `0600` (startup warns if an existing one is readable by group or others). Reopened on SIGHUP, for rotation ([audit log](/operations/audit#the-file)). The server won't start if it can't open it, and refuses requests while it can't write to it. |
 | `audit_file_max_bytes` | (unset: no rotation by size) | Rotate `audit_file` once it holds this many bytes (at least 1 MiB): renamed `<audit_file>.1`, older ones moving up, a new file started, each holding whole chains. For where nothing else rotates it (a pod). |
@@ -241,6 +245,9 @@ The CLI over TLS: `--addr https://…` with `--ca`, `--cert` and `--key` (or
   (applied to open connections too);
 - the keyring, in its own task, so a policy reload (how access is revoked in
   a hurry) never waits behind it;
+- the rotation reminders' ages (`rotation_max_age_days`, `kek_max_age_days`,
+  `root_key_max_age_days`, `rotation_warn_days`), for every due date from
+  then on;
 - the rate limits but `server_max_in_flight` (a change to it warns, and
   waits for a restart). Counters carry over: a reload doesn't refill
   anyone's burst;

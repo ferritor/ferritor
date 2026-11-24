@@ -684,6 +684,24 @@ async fn bounded<T>(timeout: Duration, op: impl Future<Output = Result<T>>) -> R
         .map_err(|_| KeystoreError::Timeout)?
 }
 
+/// Each live namespace's active KEK, by name, and when the root key was
+/// last rekeyed (else created; `None` before init): the rotation reminders'
+/// input ([`Keystore::rotation_ages`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RotationAges {
+    /// By namespace name.
+    pub keks: Vec<ActiveKek>,
+    pub root_key: Option<OffsetDateTime>,
+}
+
+/// A live namespace's active KEK, and when it was created.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveKek {
+    pub namespace: String,
+    pub version: u32,
+    pub created_at: OffsetDateTime,
+}
+
 impl Keystore {
     pub fn new(pool: PgPool) -> Self {
         Self {
@@ -748,6 +766,40 @@ impl Keystore {
     pub async fn seal_config(&self) -> Result<Option<SealConfig>> {
         bounded(self.timeout, async move {
             seal_config_in(&mut *self.pool.acquire().await?).await
+        })
+        .await
+    }
+
+    /// What the rotation reminders count (ferritor-server `rotation`): when
+    /// each live namespace's active KEK was created, and when the root key
+    /// was last rekeyed (or created; `None` before init). Metadata only,
+    /// sealed or not.
+    pub async fn rotation_ages(&self) -> Result<RotationAges> {
+        bounded(self.timeout, async move {
+            let mut conn = self.pool.acquire().await?;
+            let keks = sqlx::query!(
+                "SELECT k.namespace, k.version, k.created_at FROM keks k
+                 JOIN namespaces n ON n.name = k.namespace
+                 WHERE n.state = 'active' AND k.state = 'active'
+                 ORDER BY k.namespace"
+            )
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(ActiveKek {
+                    namespace: row.namespace,
+                    version: u32_from_db("version", row.version)?,
+                    created_at: row.created_at,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+            let root_key = sqlx::query_scalar!(
+                r#"SELECT COALESCE(rekeyed_at, created_at) AS "since!" FROM seal_config"#
+            )
+            .fetch_optional(&mut *conn)
+            .await?;
+            Ok(RotationAges { keks, root_key })
         })
         .await
     }

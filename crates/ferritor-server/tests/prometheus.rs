@@ -71,6 +71,16 @@ async fn prometheus_scrapes_every_documented_metric_and_no_path() {
         Arc::clone(&env.gate),
     );
     let _watch_gauges = metrics::observe_watch(ferritor_server::watch::Watch::new());
+    // Counted once, so every rotation gauge reports (they're absent until).
+    let rotation_counts = Arc::new(ferritor_server::rotation::RotationCounts::default());
+    let counted = ferritor_server::rotation::Tally {
+        overdue: 1,
+        due_soon: 0,
+    };
+    rotation_counts.set_secrets(counted);
+    rotation_counts.set_keks(counted);
+    rotation_counts.set_root_key(counted);
+    let _rotation_gauges = metrics::observe_rotation(rotation_counts);
     env.gate
         .reload_policy(PolicyReload::Skipped("dev mode: no policy"));
     env.secrets.put(&ANON, "app/db", b"x").await.unwrap();
@@ -109,7 +119,7 @@ async fn prometheus_scrapes_every_documented_metric_and_no_path() {
     // Exactly the documented families, under their Prometheus names.
     let documented = documented_families().unwrap();
     assert_eq!(families(&unsealed), documented);
-    assert_eq!(documented.len(), 29);
+    assert_eq!(documented.len(), 35);
     let line = |body: &str, prefix: &str| {
         body.lines()
             .find(|l| l.starts_with(prefix))

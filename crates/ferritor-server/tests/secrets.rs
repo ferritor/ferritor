@@ -1,6 +1,7 @@
 //! Secret CRUD against real keys and data databases (one each per test, see
 //! `ferritor-testkit`), plus an end-to-end pass over gRPC for status codes.
 
+use ferritor_core::labels::LabelError;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use ferritor_server::grpc;
 use ferritor_server::namespaces::{NamespaceError, Namespaces};
 use ferritor_server::policy::{Policy, Rule};
 use ferritor_server::seal::Seal;
-use ferritor_server::secrets::{Secrets, SecretsError, VersionPage};
+use ferritor_server::secrets::{AgeFilter, Secrets, SecretsError, VersionPage};
 use ferritor_testkit::data::insert_version;
 use ferritor_testkit::{Captured, TestDatabase, TestResult};
 use serde_json::json;
@@ -1401,7 +1402,7 @@ async fn grpc_secrets_round_trip_and_status_codes() {
                     prefix: "app".to_owned(),
                     page_size: 1,
                     page_token: "zz".to_owned(),
-                    labels: Default::default(),
+                    ..Default::default()
                 })
                 .await
         ),
@@ -1528,6 +1529,392 @@ async fn metadata_and_labels_follow_a_secret() {
             .versions,
         2
     );
+    env.destroy().await.unwrap();
+}
+
+/// The rotation flag, `ferritor.rotation=true`, is a label like any
+/// other on a secret: set with a put or on its own, removed, filtered on.
+/// Only `true` is stored: `false` and anything else are refused, as is an
+/// unknown `ferritor.` key, and nothing changes.
+#[tokio::test]
+async fn the_rotation_flag_is_true_or_absent() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    env.secrets
+        .put_labeled(&ANON, "app/db", b"x", None, &flag)
+        .await
+        .unwrap();
+    env.secrets.put(&ANON, "app/other", b"x").await.unwrap();
+    assert_eq!(
+        env.secrets.metadata(&ANON, "app/db").await.unwrap().labels,
+        flag
+    );
+    let flagged = env
+        .secrets
+        .list(&ANON, "app", 0, "", &flag)
+        .await
+        .unwrap()
+        .secrets
+        .into_iter()
+        .map(|m| m.path.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(flagged, ["app/db"]);
+    for (key, value, refused) in [
+        ("ferritor.rotation", "false", LabelError::RotationFalse),
+        (
+            "ferritor.rotation",
+            "yes",
+            LabelError::RotationValue("yes".to_owned()),
+        ),
+        (
+            "ferritor.rotate",
+            "true",
+            LabelError::UnknownReserved("ferritor.rotate".to_owned()),
+        ),
+    ] {
+        let set = labels(&[(key, value)]);
+        match env
+            .secrets
+            .update_labels(&ANON, "app/other", &set, &[])
+            .await
+        {
+            Err(SecretsError::InvalidLabels(error)) => assert_eq!(error, refused, "{key}={value}"),
+            other => panic!("{key}={value}: {other:?}"),
+        }
+        assert!(matches!(
+            env.secrets
+                .put_labeled(&ANON, "app/other", b"y", None, &set)
+                .await,
+            Err(SecretsError::InvalidLabels(_))
+        ));
+    }
+    let other = env.secrets.metadata(&ANON, "app/other").await.unwrap();
+    assert!(other.labels.is_empty());
+    assert_eq!(other.versions, 1, "a refused put stores nothing");
+    let off = env
+        .secrets
+        .update_labels(
+            &ANON,
+            "app/db",
+            &Labels::new(),
+            &["ferritor.rotation".to_owned()],
+        )
+        .await
+        .unwrap();
+    assert!(off.is_empty());
+    env.destroy().await.unwrap();
+}
+
+/// A rotation's age counts from the current version's creation, not the
+/// path's `updated_at`: a restore makes an older value live without a
+/// put, and its age is that older version's. The due date is reported
+/// only with the flag and a live version, the policy's days on.
+#[tokio::test]
+async fn the_rotation_due_date_follows_the_live_version() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    env.secrets
+        .put_labeled(&ANON, "app/db", b"one", None, &flag)
+        .await
+        .unwrap();
+    let v1 = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    let v1_created = v1.current_created_at.unwrap();
+    assert_eq!(
+        env.secrets.rotation_due(&v1),
+        Some(v1_created + time::Duration::days(90))
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    env.secrets.put(&ANON, "app/db", b"two").await.unwrap();
+    let v2 = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert!(v2.current_created_at.unwrap() > v1_created);
+
+    // Every version deleted: no live version, no due date.
+    env.secrets.delete(&ANON, "app/db").await.unwrap();
+    let deleted = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!(deleted.current_created_at, None);
+    assert_eq!(env.secrets.rotation_due(&deleted), None);
+
+    // Version 1 brought back: live again with its own, older age, though
+    // the path's updated_at is still the second put's.
+    env.secrets.restore(&ANON, "app/db", Some(1)).await.unwrap();
+    let restored = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!(restored.current_version, Some(1));
+    assert_eq!(restored.current_created_at, Some(v1_created));
+    assert!(restored.updated_at > v1_created);
+
+    // Without the flag: no due date, though the age is still there.
+    env.secrets
+        .update_labels(
+            &ANON,
+            "app/db",
+            &Labels::new(),
+            &["ferritor.rotation".to_owned()],
+        )
+        .await
+        .unwrap();
+    let plain = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!(env.secrets.rotation_due(&plain), None);
+    assert!(plain.current_created_at.is_some());
+    env.destroy().await.unwrap();
+}
+
+/// The rotation reminders' inputs, from the two databases: flagged
+/// secrets with a live version counted against the cutoffs (unflagged
+/// ones, and flagged ones with nothing live, never), and the active KEKs'
+/// and the root key's ages.
+#[tokio::test]
+async fn the_rotation_counts_come_from_both_databases() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    for path in ["app/a", "app/b", "app/gone"] {
+        env.secrets
+            .put_labeled(&ANON, path, b"x", None, &flag)
+            .await
+            .unwrap();
+    }
+    env.secrets.put(&ANON, "app/plain", b"x").await.unwrap();
+    env.secrets.delete(&ANON, "app/gone").await.unwrap();
+    let store = Datastore::new(env.data.pool().clone());
+    let now = time::OffsetDateTime::now_utc();
+    let hour = time::Duration::hours(1);
+    // Every flagged live version created before the overdue cutoff.
+    assert_eq!(
+        store.rotation_counts(now + hour, now + hour).await.unwrap(),
+        (2, 0)
+    );
+    // After it, and before the due-soon one.
+    assert_eq!(
+        store.rotation_counts(now - hour, now + hour).await.unwrap(),
+        (0, 2)
+    );
+    // After both: current.
+    assert_eq!(
+        store.rotation_counts(now - hour, now - hour).await.unwrap(),
+        (0, 0)
+    );
+
+    let ages = Keystore::new(env.keys.pool().clone())
+        .rotation_ages()
+        .await
+        .unwrap();
+    assert_eq!(
+        ages.keks.len(),
+        NAMESPACES.len(),
+        "one active KEK per namespace"
+    );
+    let mut names: Vec<_> = NAMESPACES.to_vec();
+    names.sort_unstable();
+    assert_eq!(
+        ages.keks
+            .iter()
+            .map(|kek| kek.namespace.as_str())
+            .collect::<Vec<_>>(),
+        names,
+        "by name"
+    );
+    assert!(ages.keks.iter().all(|kek| kek.version == 1));
+    for made in ages
+        .keks
+        .iter()
+        .map(|kek| &kek.created_at)
+        .chain(&ages.root_key)
+    {
+        assert!((now - *made).abs() < time::Duration::minutes(5), "{made}");
+    }
+    assert!(ages.root_key.is_some(), "initialized");
+    env.destroy().await.unwrap();
+}
+
+/// Makes `path`'s versions `days` old, in the data database: ages a test
+/// can't wait for.
+async fn backdate(env: &Env, path: &str, days: i32) -> TestResult<()> {
+    sqlx::query(
+        "UPDATE secret_versions SET created_at = now() - make_interval(days => $2)
+         WHERE path_id = (SELECT id FROM paths WHERE path = $1)",
+    )
+    .bind(path)
+    .bind(days)
+    .execute(env.data.pool())
+    .await?;
+    Ok(())
+}
+
+/// Listing by age: `overdue` keeps the flagged secrets past the policy's 90
+/// days, or older than `older_than_days` if given too (an age cutoff);
+/// `older_than_days` alone keeps any secret that old. Each composes with
+/// the prefix, the labels and the paging; an age out of range is refused.
+#[tokio::test]
+async fn listing_by_age_finds_whats_overdue_and_due_soon() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true"), ("team", "a")]);
+    for (path, set, days) in [
+        ("app/old", flag.clone(), 100),
+        ("app/soon", flag.clone(), 80),
+        ("app/new", flag.clone(), 1),
+        ("app/plain", labels(&[("team", "a")]), 120),
+        ("other/old", flag.clone(), 100),
+    ] {
+        env.secrets
+            .put_labeled(&ANON, path, b"x", None, &set)
+            .await
+            .unwrap();
+        backdate(&env, path, days).await.unwrap();
+    }
+    let secrets = &env.secrets;
+    let list = |prefix: &'static str, filter: Labels, age: AgeFilter| async move {
+        secrets
+            .list_filtered(&ANON, prefix, 0, "", &filter, age)
+            .await
+            .map(|page| {
+                page.secrets
+                    .into_iter()
+                    .map(|m| m.path.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let overdue = AgeFilter {
+        overdue: true,
+        older_than_days: None,
+    };
+    let older = |days| AgeFilter {
+        overdue: false,
+        older_than_days: Some(days),
+    };
+    assert_eq!(
+        list("app", Labels::new(), overdue).await.unwrap(),
+        ["app/old"]
+    );
+    assert_eq!(
+        list("", Labels::new(), overdue).await.unwrap(),
+        ["app/old", "other/old"]
+    );
+    // Due soon too: flagged, past 60 days.
+    let soon = AgeFilter {
+        overdue: true,
+        older_than_days: Some(60),
+    };
+    assert_eq!(
+        list("app", Labels::new(), soon).await.unwrap(),
+        ["app/old", "app/soon"]
+    );
+    // Any secret that old, flagged or not.
+    assert_eq!(
+        list("app", Labels::new(), older(60)).await.unwrap(),
+        ["app/old", "app/plain", "app/soon"]
+    );
+    // With the labels.
+    assert_eq!(
+        list("app", labels(&[("team", "b")]), older(60))
+            .await
+            .unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        list("app", labels(&[("team", "a")]), overdue)
+            .await
+            .unwrap(),
+        ["app/old"]
+    );
+    // Paging walks the filtered set, one at a time.
+    let first = secrets
+        .list_filtered(&ANON, "app", 1, "", &Labels::new(), older(60))
+        .await
+        .unwrap();
+    assert_eq!(first.secrets[0].path.to_string(), "app/old");
+    let second = secrets
+        .list_filtered(
+            &ANON,
+            "app",
+            1,
+            &first.next_page_token,
+            &Labels::new(),
+            older(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.secrets[0].path.to_string(), "app/plain");
+    // Without a filter, a listing is what it was.
+    assert_eq!(
+        list("app", Labels::new(), AgeFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+    for bad in [0, 3651] {
+        assert!(matches!(
+            list("app", Labels::new(), older(bad)).await,
+            Err(SecretsError::InvalidAge(days)) if days == bad
+        ));
+    }
+    // `overdue` adds the flag to the caller's labels: a conflicting filter
+    // never gets that far, since `ferritor.rotation=false` is refused like
+    // any invalid label, before the listing.
+    assert!(matches!(
+        list("app", labels(&[("ferritor.rotation", "false")]), overdue).await,
+        Err(SecretsError::InvalidLabels(LabelError::RotationFalse))
+    ));
+    env.destroy().await.unwrap();
+}
+
+/// The metadata keys through the API: a description with spaces and
+/// punctuation and a contact with `@` stored and read back as sent, the
+/// contact usable as a listing filter; their wider values for those keys
+/// only.
+#[tokio::test]
+async fn the_metadata_keys_take_their_wider_values() {
+    let env = Env::unsealed().await.unwrap();
+    let meta = labels(&[
+        ("owner", "billing-team"),
+        ("contact", "alice@example.com"),
+        (
+            "description",
+            "the billing database's password (see RUNBOOK.md #4)",
+        ),
+    ]);
+    env.secrets
+        .put_labeled(&ANON, "app/db", b"x", None, &meta)
+        .await
+        .unwrap();
+    assert_eq!(
+        env.secrets.metadata(&ANON, "app/db").await.unwrap().labels,
+        meta
+    );
+    let found = env
+        .secrets
+        .list(
+            &ANON,
+            "app",
+            0,
+            "",
+            &labels(&[("contact", "alice@example.com")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(found.secrets.len(), 1);
+    // An owner may be a ferritor identity.
+    let owner = labels(&[("owner", "apps/billing")]);
+    env.secrets
+        .update_labels(&ANON, "app/db", &owner, &[])
+        .await
+        .unwrap();
+    for (key, value) in [
+        ("owner", "two words"),
+        ("owner", "apps//billing"),
+        ("team", "a@b"),
+        ("team", "apps/billing"),
+        ("contact", "alice smith"),
+    ] {
+        assert!(
+            matches!(
+                env.secrets
+                    .update_labels(&ANON, "app/db", &labels(&[(key, value)]), &[])
+                    .await,
+                Err(SecretsError::InvalidLabels(_))
+            ),
+            "{key}={value}"
+        );
+    }
     env.destroy().await.unwrap();
 }
 

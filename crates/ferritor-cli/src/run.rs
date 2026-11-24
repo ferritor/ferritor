@@ -447,11 +447,17 @@ pub async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Versions { path } => {
             history(secrets_client(&addr().await?).await?, path, out).await
         }
-        Command::List { prefix, labels } => {
+        Command::List {
+            prefix,
+            labels,
+            overdue,
+            older_than,
+        } => {
             list(
                 secrets_client(&addr().await?).await?,
                 prefix,
                 label_map(labels)?,
+                (*overdue, *older_than),
                 out,
             )
             .await
@@ -488,6 +494,36 @@ async fn status(mut client: SystemClient, out: &mut impl Write) -> anyhow::Resul
     let status = reply.status.context("no status in the reply")?;
     print_status(out, &status)?;
     if status.initialized {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let overdue = |due: i64| if now >= due { " (overdue)" } else { "" };
+        if let Some(root) = &reply.root_key_rotation {
+            writeln!(
+                out,
+                "root key: since {}, rotation due {}{}",
+                utc(root.since_unix),
+                utc(root.due_unix),
+                overdue(root.due_unix)
+            )?;
+        }
+        writeln!(
+            out,
+            "KEK rotation: {} overdue, {} due soon",
+            reply.keks_rotation_overdue, reply.keks_rotation_due_soon
+        )?;
+        for kek in &reply.active_keks {
+            if let Some(rotation) = &kek.rotation {
+                writeln!(
+                    out,
+                    "  {}\tKEK {}\tsince {}\tdue {}{}",
+                    kek.namespace,
+                    kek.version,
+                    utc(rotation.since_unix),
+                    utc(rotation.due_unix),
+                    overdue(rotation.due_unix)
+                )?;
+            }
+        }
+        // Last, as it always was: scripts read the count from the end.
         writeln!(out, "namespaces: {}", reply.namespaces)?;
         if reply.namespaces == 0 {
             eprintln!(
@@ -1157,6 +1193,7 @@ async fn list(
     mut client: SecretsClient,
     prefix: &str,
     labels: HashMap<String, String>,
+    (overdue, older_than_days): (bool, Option<u32>),
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
     let mut secrets = Vec::new();
@@ -1170,6 +1207,8 @@ async fn list(
                     page_size: 0,
                     page_token: page_token.clone(),
                     labels: labels.clone(),
+                    overdue,
+                    older_than_days,
                 })
                 .await,
         )?;
@@ -1184,8 +1223,20 @@ async fn list(
         );
         page_token = reply.next_page_token;
     }
+    // Filtered by age: the age it was judged by, too.
+    let by_age = overdue || older_than_days.is_some();
     for secret in secrets {
-        writeln!(out, "{}\tversion {}", secret.path, secret.version)?;
+        if by_age {
+            writeln!(
+                out,
+                "{}\tversion {}\tcreated {}",
+                secret.path,
+                secret.version,
+                utc(secret.created_at_unix)
+            )?;
+        } else {
+            writeln!(out, "{}\tversion {}", secret.path, secret.version)?;
+        }
     }
     Ok(())
 }
@@ -1266,9 +1317,17 @@ async fn metadata(
     writeln!(out, "path: {}", m.path)?;
     writeln!(out, "created: {}", utc(m.created_at_unix))?;
     writeln!(out, "updated: {}", utc(m.updated_at_unix))?;
-    match m.current_version {
-        Some(version) => writeln!(out, "current version: {version}")?,
-        None => writeln!(out, "current version: none (every version is deleted)")?,
+    match (m.current_version, m.current_created_at_unix) {
+        (Some(version), Some(at)) => {
+            writeln!(out, "current version: {version} (created {})", utc(at))?;
+        }
+        (Some(version), None) => writeln!(out, "current version: {version}")?,
+        (None, _) => writeln!(out, "current version: none (every version is deleted)")?,
+    }
+    if let Some(due) = m.rotation_due_unix {
+        let overdue = time::OffsetDateTime::now_utc().unix_timestamp() >= due;
+        let state = if overdue { " (overdue)" } else { "" };
+        writeln!(out, "rotation due: {}{state}", utc(due))?;
     }
     match m.oldest_version {
         Some(version) => writeln!(out, "oldest version: {version}")?,

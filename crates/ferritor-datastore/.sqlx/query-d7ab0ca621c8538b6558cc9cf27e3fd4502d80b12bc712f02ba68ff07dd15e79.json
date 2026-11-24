@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.created_at, p.updated_at, p.current_version,\n                       (SELECT min(version) FROM secret_versions\n                        WHERE path_id = p.id) AS oldest_version,\n                       (SELECT count(*) FROM secret_versions WHERE path_id = p.id) AS \"versions!\",\n                       p.labels AS \"labels: Json<Labels>\",\n                       p.labels_updated_at\n                   FROM paths p\n                   WHERE p.path = $1",
+  "query": "SELECT p.created_at, p.updated_at, p.current_version,\n                       (SELECT v.created_at FROM secret_versions v\n                        WHERE v.path_id = p.id AND v.version = p.current_version\n                          AND v.deleted_at IS NULL) AS current_created_at,\n                       (SELECT min(version) FROM secret_versions\n                        WHERE path_id = p.id) AS oldest_version,\n                       (SELECT count(*) FROM secret_versions WHERE path_id = p.id) AS \"versions!\",\n                       p.labels AS \"labels: Json<Labels>\",\n                       p.labels_updated_at\n                   FROM paths p\n                   WHERE p.path = $1",
   "describe": {
     "columns": [
       {
@@ -38,18 +38,24 @@
       },
       {
         "ordinal": 3,
+        "name": "current_created_at",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
         "name": "oldest_version",
         "type_info": "Int4",
         "origin": "Expression"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "versions!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "labels: Json<Labels>",
         "type_info": "Jsonb",
         "origin": {
@@ -60,7 +66,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "labels_updated_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -82,9 +88,10 @@
       true,
       null,
       null,
+      null,
       false,
       true
     ]
   },
-  "hash": "e0cb34dc143a3adf42c68787da2ea604be7000eee8bc510356143adb496e8fec"
+  "hash": "d7ab0ca621c8538b6558cc9cf27e3fd4502d80b12bc712f02ba68ff07dd15e79"
 }

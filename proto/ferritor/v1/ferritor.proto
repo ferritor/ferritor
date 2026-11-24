@@ -230,6 +230,32 @@ message StatusResponse {
   // see ListNamespaces for which, rewrap against this server to rescue their
   // rows, and don't seal or restart it first. 0 while sealed.
   uint32 vanished_keks = 6;
+  // The rotation reminders, by the server's root_key_max_age_days,
+  // kek_max_age_days and rotation_warn_days: a reminder only, nothing is
+  // refused for age. The root key's: since its last rekey (or init); unset
+  // before init.
+  RotationDue root_key_rotation = 7;
+  // Totals, for every caller: how many live namespaces' active KEKs are past
+  // kek_max_age_days, and how many within rotation_warn_days of it.
+  uint32 keks_rotation_overdue = 8;
+  uint32 keks_rotation_due_soon = 9;
+  // Each live namespace's active KEK with its age and due date, by name:
+  // only for callers with the namespace permission (names are behind it, as
+  // for ListNamespaces); empty otherwise.
+  repeated ActiveKekRotation active_keks = 10;
+}
+
+// When something was made (or last rotated), and when it's due for
+// rotation.
+message RotationDue {
+  int64 since_unix = 1;
+  int64 due_unix = 2;
+}
+
+message ActiveKekRotation {
+  string namespace = 1;
+  uint32 version = 2;
+  RotationDue rotation = 3;
 }
 
 message KekRef {
@@ -642,6 +668,15 @@ message ListSecretsRequest {
   // Only paths whose labels include every one of these (empty: no filter).
   // Keep the same filter for every page.
   map<string, string> labels = 4;
+  // Only the secrets with the rotation flag (the label
+  // ferritor.rotation=true) whose live version is past the server's
+  // rotation_max_age_days, or older than older_than_days if that's set too
+  // (an age cutoff, the overdue ones included). Keep it for every page.
+  bool overdue = 5;
+  // Only the secrets whose live version was created at least this many days
+  // ago (1 to 3650), flagged or not unless overdue is set. Keep it for every
+  // page. Every path of the range is read to find them.
+  optional uint32 older_than_days = 6;
 }
 
 message ListSecretsResponse {
@@ -703,6 +738,14 @@ message PathMetadata {
   map<string, string> labels = 7;
   // When the labels last changed; unset without labels.
   optional int64 labels_updated_at_unix = 8;
+  // When the latest live version was created: what a rotation's age counts
+  // from (a restore makes an older value live without a new put, so not
+  // updated_at). Unset if every version is deleted.
+  optional int64 current_created_at_unix = 9;
+  // With the rotation flag (the label ferritor.rotation=true) and a live
+  // version: when the secret is due for rotation, by the server's
+  // rotation_max_age_days. A reminder only: nothing is refused past it.
+  optional int64 rotation_due_unix = 10;
 }
 
 message UpdateLabelsRequest {

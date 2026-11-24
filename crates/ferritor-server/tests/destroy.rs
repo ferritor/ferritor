@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferritor_core::crypto::ShareParams;
-use ferritor_core::labels::Labels;
+use ferritor_core::labels::{LabelError, Labels};
 use ferritor_core::path::Namespace;
 use ferritor_datastore::Datastore;
 use ferritor_keystore::{KekState, Keystore};
@@ -1013,5 +1013,30 @@ async fn deleting_a_namespace_reclaims_its_paths_and_never_reuses_a_version() {
     assert_eq!(fresh.version, 4);
     let x = env.secrets.put(&ANON, "keep/x", b"x2").await.unwrap();
     assert_eq!(x.version, 2);
+    env.destroy().await.unwrap();
+}
+
+/// A namespace never rotates: it takes no `ferritor.` label, the rotation
+/// flag included, neither at creation nor after.
+#[tokio::test]
+async fn a_namespace_takes_no_rotation_flag() {
+    let env = Env::new().await.unwrap();
+    let flag = Labels::from([("ferritor.rotation".to_owned(), "true".to_owned())]);
+    assert!(matches!(
+        env.namespaces.create("flagged", &flag).await,
+        Err(NamespaceError::InvalidLabels(
+            LabelError::ReservedOnNamespace(_)
+        ))
+    ));
+    env.namespaces
+        .create("plain", &Labels::new())
+        .await
+        .unwrap();
+    assert!(matches!(
+        env.namespaces.update_labels("plain", &flag, &[]).await,
+        Err(NamespaceError::InvalidLabels(
+            LabelError::ReservedOnNamespace(_)
+        ))
+    ));
     env.destroy().await.unwrap();
 }

@@ -49,6 +49,8 @@ pub struct System {
     /// KEK check after an unseal, the rotate and init guards).
     store: Datastore,
     gate: Arc<Gate>,
+    /// The rotation reminders' ages, for `status`'s due dates.
+    rotation: Arc<crate::rotation::Rotation>,
 }
 
 impl System {
@@ -69,7 +71,21 @@ impl System {
             namespaces,
             store,
             gate,
+            rotation: Arc::default(),
         }
+    }
+
+    /// Reports due dates by `rotation`'s ages (the config's, reloaded on
+    /// SIGHUP); without it, the defaults.
+    #[must_use]
+    pub fn with_rotation(mut self, rotation: Arc<crate::rotation::Rotation>) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    /// Whether a reply may name namespaces (as `ListNamespaces` does).
+    fn may_see_namespaces(&self, caller: &Caller) -> bool {
+        self.gate.permits(caller, Action::Namespace, Target::System)
     }
 
     /// Refuses `operation` for a keys database that doesn't match the data
@@ -795,6 +811,44 @@ impl SystemService for System {
         } else {
             0
         };
+        // The rotation reminders: the root key's due date and the KEKs'
+        // totals for everyone, the KEKs by name only with `namespace`.
+        let (root_key_rotation, keks_tally, active_keks) = if status.initialized {
+            let policy = self.rotation.policy();
+            let now = time::OffsetDateTime::now_utc();
+            let ages = self.seal.rotation_ages().await?;
+            let due = |kind, since: time::OffsetDateTime| pb::RotationDue {
+                since_unix: since.unix_timestamp(),
+                due_unix: policy.due(kind, since).unix_timestamp(),
+            };
+            let tally = crate::rotation::Tally::of(
+                &policy,
+                crate::rotation::Kind::Kek,
+                ages.keks.iter().map(|kek| kek.created_at),
+                now,
+            );
+            let named = if self.may_see_namespaces(&caller) {
+                ages.keks
+                    .iter()
+                    .map(|kek| pb::ActiveKekRotation {
+                        namespace: kek.namespace.clone(),
+                        version: kek.version,
+                        rotation: Some(due(crate::rotation::Kind::Kek, kek.created_at)),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            (
+                ages.root_key
+                    .map(|since| due(crate::rotation::Kind::RootKey, since)),
+                tally,
+                named,
+            )
+        } else {
+            (None, crate::rotation::Tally::default(), Vec::new())
+        };
+        let total = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
         Ok(Response::new(pb::StatusResponse {
             status: Some(seal_status(
                 status,
@@ -806,6 +860,10 @@ impl SystemService for System {
                 .seal
                 .vanished_kek_count()
                 .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)),
+            root_key_rotation,
+            keks_rotation_overdue: total(keks_tally.overdue),
+            keks_rotation_due_soon: total(keks_tally.due_soon),
+            active_keks,
         }))
     }
 
@@ -1662,6 +1720,7 @@ impl From<SecretsError> for Status {
         match e {
             E::InvalidPath(_)
             | E::InvalidPageToken
+            | E::InvalidAge(_)
             | E::ValueTooLarge { .. }
             | E::InvalidLabels(_)
             | E::TooManyLabels { .. }
@@ -1858,14 +1917,19 @@ impl SecretsService for Secrets {
         let caller = caller(self.secrets.gate(), &request, Action::List)?;
         let req = request.into_inner();
         let labels: Labels = req.labels.into_iter().collect();
+        let age = crate::secrets::AgeFilter {
+            overdue: req.overdue,
+            older_than_days: req.older_than_days,
+        };
         let page = self
             .secrets
-            .list(
+            .list_filtered(
                 &caller,
                 &req.prefix,
                 req.page_size,
                 &req.page_token,
                 &labels,
+                age,
             )
             .await?;
         Ok(Response::new(pb::ListSecretsResponse {
@@ -1907,7 +1971,7 @@ impl SecretsService for Secrets {
             .metadata(&caller, &request.into_inner().path)
             .await?;
         Ok(Response::new(pb::GetMetadataResponse {
-            metadata: Some(path_metadata(metadata)),
+            metadata: Some(path_metadata(&self.secrets, metadata)),
         }))
     }
 
@@ -1928,8 +1992,11 @@ impl SecretsService for Secrets {
     }
 }
 
-fn path_metadata(m: PathMetadata) -> pb::PathMetadata {
+fn path_metadata(secrets: &crate::secrets::Secrets, m: PathMetadata) -> pb::PathMetadata {
+    let rotation_due_unix = secrets.rotation_due(&m).map(|at| at.unix_timestamp());
     pb::PathMetadata {
+        rotation_due_unix,
+        current_created_at_unix: m.current_created_at.map(|at| at.unix_timestamp()),
         path: m.path.to_string(),
         created_at_unix: m.created_at.unix_timestamp(),
         updated_at_unix: m.updated_at.unix_timestamp(),

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT COALESCE(rekeyed_at, created_at) AS \"since!\" FROM seal_config",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "since!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d0d1197a9c8dff5f7c0b212dff9ba9824a2535ed7960ce568064854d524401ef"
+}

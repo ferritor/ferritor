@@ -191,7 +191,7 @@ impl Namespaces {
         labels: &Labels,
     ) -> Result<(Namespace, u32), NamespaceError> {
         let namespace = parse(name)?;
-        labels::check(labels).map_err(NamespaceError::InvalidLabels)?;
+        labels::check_namespace(labels).map_err(NamespaceError::InvalidLabels)?;
         let epoch = self.seal.unsealed_epoch()?;
         // A live namespace has rows of its own: say it exists, not that the
         // keys database lost it. (The keys database checks again when it
@@ -215,7 +215,7 @@ impl Namespaces {
         labels: &Labels,
     ) -> Result<(Namespace, u32), NamespaceError> {
         let namespace = parse(name)?;
-        labels::check(labels).map_err(NamespaceError::InvalidLabels)?;
+        labels::check_namespace(labels).map_err(NamespaceError::InvalidLabels)?;
         let epoch = self.seal.unsealed_epoch()?;
         if self.is_live(&namespace).await? {
             return Err(NamespaceError::Exists(namespace));
@@ -387,7 +387,7 @@ impl Namespaces {
         remove: &[String],
     ) -> Result<Labels, NamespaceError> {
         let namespace = parse(name)?;
-        labels::check_change(set, remove).map_err(NamespaceError::InvalidLabels)?;
+        labels::check_namespace_change(set, remove).map_err(NamespaceError::InvalidLabels)?;
         Ok(self
             .seal
             .update_namespace_labels(&namespace, set, remove)

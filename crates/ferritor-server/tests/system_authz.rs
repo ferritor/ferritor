@@ -265,11 +265,13 @@ async fn every_system_call_asks_for_its_action_on_the_server() {
     let asked = env.authz.asked();
     let actions: Vec<Action> = asked.iter().map(|(a, _)| *a).collect();
     // Replies carrying a status also ask Rekey (whether to show the nonce)
-    // and Unseal (whether to show the auto-unseal key and errors).
+    // and Unseal (whether to show the auto-unseal key and errors); `status`
+    // itself asks Namespace too (whether to name the active KEKs).
     assert_eq!(
         actions,
         [
             Action::Status,
+            Action::Namespace,
             Action::Rekey,
             Action::Unseal,
             Action::Rotate,
@@ -1076,4 +1078,67 @@ async fn the_hold_is_released_explicitly_and_auto_needs_a_provider() {
     env.serving.abort();
     env.keys.destroy().await.unwrap();
     env.data.destroy().await.unwrap();
+}
+
+/// `status`'s rotation reminders: the root key's due date and the KEKs'
+/// totals for any caller allowed `status`; each namespace's active KEK, by
+/// name, only for a caller allowed `namespace` too (names are behind it, as
+/// for `ListNamespaces`).
+#[tokio::test]
+async fn status_names_the_active_keks_only_with_the_namespace_permission() {
+    let mut env = Env::unsealed().await.unwrap();
+    env.client
+        .create_namespace(pb::CreateNamespaceRequest {
+            name: "billing".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let year = 365 * 24 * 3600;
+    let status = env
+        .client
+        .status(pb::StatusRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    let root = status.root_key_rotation.unwrap();
+    assert_eq!(
+        root.due_unix - root.since_unix,
+        year,
+        "root_key_max_age_days"
+    );
+    assert_eq!(
+        (status.keks_rotation_overdue, status.keks_rotation_due_soon),
+        (0, 0)
+    );
+    let billing = status
+        .active_keks
+        .iter()
+        .find(|kek| kek.namespace == "billing")
+        .unwrap();
+    assert_eq!(billing.version, 1);
+    let rotation = billing.rotation.as_ref().unwrap();
+    assert_eq!(
+        rotation.due_unix - rotation.since_unix,
+        year,
+        "kek_max_age_days"
+    );
+
+    env.authz.deny(&[Action::Namespace]);
+    let without = env
+        .client
+        .status(pb::StatusRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(without.active_keks.is_empty(), "{:?}", without.active_keks);
+    assert_eq!(without.root_key_rotation, Some(root));
+    assert_eq!(
+        (
+            without.keks_rotation_overdue,
+            without.keks_rotation_due_soon
+        ),
+        (0, 0)
+    );
+    env.destroy().await.unwrap();
 }

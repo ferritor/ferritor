@@ -52,6 +52,24 @@ KEKs this server holds), never names: namespace names are often customer or
 team names, so they're behind the `namespace` action (`ferritor namespace list`
 and `get`).
 
+It also gives the rotation reminders for the keys
+([configuration](/reference/configuration): `root_key_max_age_days`,
+`kek_max_age_days`, `rotation_warn_days`; a reminder only, nothing is
+refused for age): when the root key was last rekeyed (or initialized) and
+when a rekey is due, and how many namespaces' active KEKs are overdue or due
+soon. A caller with the `namespace` action sees each namespace's active KEK
+too, with its age and due date:
+
+```
+root key: since 2026-11-24T08:29:47Z, rotation due 2027-11-24T08:29:47Z
+KEK rotation: 0 overdue, 1 due soon
+  billing	KEK 3	since 2025-12-01T09:00:00Z	due 2026-12-01T09:00:00Z
+namespaces: 2
+```
+
+The same counts, without names, are the [rotation
+gauges](/operations/monitoring#the-server).
+
 After every unseal the server checks, in the background, that every KEK a
 row in the data database uses is in its keyring; see
 [backup and restore](/operations/backup-restore).
@@ -324,7 +342,9 @@ stored KEK).
 
 ## Rekey: new root key, new shares
 
-Two phases, so a lost reply can never lose the root key:
+When one is due (`root_key_max_age_days`, from the last rekey or the init)
+is in `ferritor status` (above). Two phases, so a lost reply can never lose
+the root key:
 
 ```sh
 ferritor rekey start --shares 5 --threshold 3   # prints a nonce
@@ -377,6 +397,9 @@ keys-database backup from before a rekey needs the *old* shares.
 ```sh
 ferritor rotate --namespace billing
 ```
+
+How old each namespace's active KEK is, and when a rotation is due
+(`kek_max_age_days`), is in `ferritor status` (above).
 
 Adds a new active KEK version to the namespace; its previous one becomes
 decrypt-only. Other namespaces are untouched. The
