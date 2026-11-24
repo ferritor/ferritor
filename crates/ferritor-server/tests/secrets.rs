@@ -1,6 +1,7 @@
 //! Secret CRUD against real keys and data databases (one each per test, see
 //! `ferritor-testkit`), plus an end-to-end pass over gRPC for status codes.
 
+use ferritor_core::labels::LabelError;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -1528,6 +1529,79 @@ async fn metadata_and_labels_follow_a_secret() {
             .versions,
         2
     );
+    env.destroy().await.unwrap();
+}
+
+/// The rotation flag, `ferritor.rotation=true`, is a label like any
+/// other on a secret: set with a put or on its own, removed, filtered on.
+/// Only `true` is stored: `false` and anything else are refused, as is an
+/// unknown `ferritor.` key, and nothing changes.
+#[tokio::test]
+async fn the_rotation_flag_is_true_or_absent() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    env.secrets
+        .put_labeled(&ANON, "app/db", b"x", None, &flag)
+        .await
+        .unwrap();
+    env.secrets.put(&ANON, "app/other", b"x").await.unwrap();
+    assert_eq!(
+        env.secrets.metadata(&ANON, "app/db").await.unwrap().labels,
+        flag
+    );
+    let flagged = env
+        .secrets
+        .list(&ANON, "app", 0, "", &flag)
+        .await
+        .unwrap()
+        .secrets
+        .into_iter()
+        .map(|m| m.path.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(flagged, ["app/db"]);
+    for (key, value, refused) in [
+        ("ferritor.rotation", "false", LabelError::RotationFalse),
+        (
+            "ferritor.rotation",
+            "yes",
+            LabelError::RotationValue("yes".to_owned()),
+        ),
+        (
+            "ferritor.rotate",
+            "true",
+            LabelError::UnknownReserved("ferritor.rotate".to_owned()),
+        ),
+    ] {
+        let set = labels(&[(key, value)]);
+        match env
+            .secrets
+            .update_labels(&ANON, "app/other", &set, &[])
+            .await
+        {
+            Err(SecretsError::InvalidLabels(error)) => assert_eq!(error, refused, "{key}={value}"),
+            other => panic!("{key}={value}: {other:?}"),
+        }
+        assert!(matches!(
+            env.secrets
+                .put_labeled(&ANON, "app/other", b"y", None, &set)
+                .await,
+            Err(SecretsError::InvalidLabels(_))
+        ));
+    }
+    let other = env.secrets.metadata(&ANON, "app/other").await.unwrap();
+    assert!(other.labels.is_empty());
+    assert_eq!(other.versions, 1, "a refused put stores nothing");
+    let off = env
+        .secrets
+        .update_labels(
+            &ANON,
+            "app/db",
+            &Labels::new(),
+            &["ferritor.rotation".to_owned()],
+        )
+        .await
+        .unwrap();
+    assert!(off.is_empty());
     env.destroy().await.unwrap();
 }
 

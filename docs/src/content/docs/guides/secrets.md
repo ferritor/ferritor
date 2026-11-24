@@ -109,6 +109,21 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   asked for.
 - The audit log records which keys were set and removed, never their
   values.
+- **Keys starting with `ferritor.` are reserved**, ferritor's own: only
+  those it knows are accepted, so a typo is refused rather than stored and
+  ignored. The one there is:
+  - **`ferritor.rotation=true`**, the rotation flag: the secret must be
+    rotated (given a new version) on a schedule, and the rotation reminders
+    count it. Only `true` is stored: without the label it's off, and
+    `false` is refused (remove the label instead), so a write never stores
+    something other than what was sent. A namespace takes no `ferritor.`
+    label: it never rotates, its secrets do.
+
+  ```sh
+  ferritor metadata set billing/db ferritor.rotation=true   # remind me to rotate it
+  ferritor metadata unset billing/db ferritor.rotation      # and not any more
+  ferritor list billing --label ferritor.rotation=true      # what's on a schedule
+  ```
 
 ## The CLI
 

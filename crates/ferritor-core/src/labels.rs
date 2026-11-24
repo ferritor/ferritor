@@ -8,6 +8,19 @@
 //! `([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]`. Nothing invisible or
 //! confusable fits. A path holds at most [`MAX_LABELS`]. Like paths,
 //! invalid input is refused, never rewritten.
+//!
+//! **Reserved keys.** Keys starting with `ferritor.` ([`RESERVED_PREFIX`])
+//! are ferritor's own, and only those it knows are allowed, so a typo is an
+//! error rather than a label silently ignored:
+//! - [`ROTATION`] (`ferritor.rotation`), on a secret's path only: `true`
+//!   says the secret must be rotated (a new version) within the server's
+//!   `rotation_max_age_days`, and counts it in the rotation reminders.
+//!   Only `true` is stored: absent is off, and `false` is refused (remove
+//!   the label instead), so no write stores something other than what was
+//!   sent.
+//!
+//! A namespace takes no reserved key at all ([`check_namespace`]): it never
+//! rotates, its secrets do.
 //! Shared by the server (which checks everything it stores) and the CLI
 //! (which checks `key=value` arguments before sending them).
 
@@ -24,6 +37,13 @@ pub const MAX_VALUE_LEN: usize = 63;
 /// longest. The transports' message limits are sized from it (with the
 /// largest value), so a put with the most labels fits through both APIs.
 pub const MAX_LABELS_SIZE: usize = MAX_LABELS * (MAX_KEY_LEN + MAX_VALUE_LEN);
+
+/// What every reserved key starts with: ferritor's own keys.
+pub const RESERVED_PREFIX: &str = "ferritor.";
+/// The rotation flag: `true` on a secret that must be rotated on schedule.
+pub const ROTATION: &str = "ferritor.rotation";
+/// The one value [`ROTATION`] takes.
+pub const ROTATION_ON: &str = "true";
 
 /// A path's labels, ordered by key.
 pub type Labels = BTreeMap<String, String>;
@@ -60,6 +80,19 @@ pub enum LabelError {
     NotAPair(String),
     #[error("a label change must set or remove at least one label")]
     NothingToChange,
+    #[error(
+        "label key `{0}` is reserved: keys starting with `ferritor.` are ferritor's own, and the \
+         only one is `ferritor.rotation`"
+    )]
+    UnknownReserved(String),
+    #[error(
+        "`ferritor.rotation` is `true` or absent: remove the label to turn rotation reminders off"
+    )]
+    RotationFalse,
+    #[error("`ferritor.rotation` takes only `true`, not `{0}`")]
+    RotationValue(String),
+    #[error("label `{0}` is a secret's: a namespace takes no `ferritor.` label (it never rotates)")]
+    ReservedOnNamespace(String),
 }
 
 /// What a key and a value share: the alphabet, and letters or digits at
@@ -79,8 +112,20 @@ fn shape(s: &str) -> Result<(), Option<char>> {
     Ok(())
 }
 
-/// Checks a label key.
+/// Checks a label key: its shape, and, if it's reserved, that it's one
+/// ferritor knows.
 pub fn check_key(key: &str) -> Result<(), LabelError> {
+    check_key_shape(key)?;
+    if key.starts_with(RESERVED_PREFIX) && key != ROTATION {
+        return Err(LabelError::UnknownReserved(key.to_owned()));
+    }
+    Ok(())
+}
+
+/// A key's shape alone: what a key to remove needs. Removing never adds a
+/// label, so an unknown `ferritor.` key stored before the reserved keys
+/// existed can still be removed.
+fn check_key_shape(key: &str) -> Result<(), LabelError> {
     if key.is_empty() {
         return Err(LabelError::EmptyKey);
     }
@@ -110,7 +155,13 @@ pub fn check_value(key: &str, value: &str) -> Result<(), LabelError> {
             char,
         },
         None => LabelError::ValueEnds(key.to_owned()),
-    })
+    })?;
+    match (key, value) {
+        (ROTATION, ROTATION_ON) => Ok(()),
+        (ROTATION, "false") => Err(LabelError::RotationFalse),
+        (ROTATION, other) => Err(LabelError::RotationValue(other.to_owned())),
+        _ => Ok(()),
+    }
 }
 
 /// Checks every key and value, and that there are at most [`MAX_LABELS`].
@@ -127,22 +178,53 @@ pub fn check(labels: &Labels) -> Result<(), LabelError> {
     Ok(())
 }
 
-/// Checks a change: labels to set, and keys to remove (each a valid key,
-/// none in both, and at least one of either: an empty change would only
-/// clutter the audit log). How many the path then holds is checked where
-/// it's stored.
+/// Checks a change: labels to set, and keys to remove (each a key of the
+/// right shape, none in both, and at least one of either: an empty change
+/// would only clutter the audit log). The reserved keys' rules apply to
+/// what's set only: removing can't add a label. How many the path then
+/// holds is checked where it's stored.
 pub fn check_change(set: &Labels, remove: &[String]) -> Result<(), LabelError> {
     if set.is_empty() && remove.is_empty() {
         return Err(LabelError::NothingToChange);
     }
     check(set)?;
     for key in remove {
-        check_key(key)?;
+        check_key_shape(key)?;
         if set.contains_key(key) {
             return Err(LabelError::SetAndRemoved(key.clone()));
         }
     }
     Ok(())
+}
+
+/// [`check`] for a namespace's labels: no reserved key at all.
+pub fn check_namespace(labels: &Labels) -> Result<(), LabelError> {
+    check(labels)?;
+    refuse_reserved(labels.keys())
+}
+
+/// [`check_change`] for a namespace's labels: no reserved key set. One may
+/// be removed (one stored before the reserved keys existed).
+pub fn check_namespace_change(set: &Labels, remove: &[String]) -> Result<(), LabelError> {
+    check_change(set, remove)?;
+    refuse_reserved(set.keys())
+}
+
+fn refuse_reserved<'a>(keys: impl IntoIterator<Item = &'a String>) -> Result<(), LabelError> {
+    match keys
+        .into_iter()
+        .find(|key| key.starts_with(RESERVED_PREFIX))
+    {
+        Some(key) => Err(LabelError::ReservedOnNamespace(key.clone())),
+        None => Ok(()),
+    }
+}
+
+/// Whether `labels` has the rotation flag on.
+pub fn rotates(labels: &Labels) -> bool {
+    labels
+        .get(ROTATION)
+        .is_some_and(|value| value == ROTATION_ON)
 }
 
 /// Parses `key=value` (split at the first `=`; neither half may hold
@@ -236,6 +318,71 @@ mod tests {
         assert_eq!(
             check_change(&Labels::new(), &[]),
             Err(LabelError::NothingToChange)
+        );
+    }
+
+    /// `ferritor.rotation` is the one reserved key, and takes `true` only;
+    /// `false` is refused with its own hint. Any other `ferritor.` key is
+    /// refused, a near miss included. A namespace takes none.
+    #[test]
+    fn the_rotation_flag_is_true_or_absent() {
+        assert_eq!(check_key(ROTATION), Ok(()));
+        assert_eq!(check_value(ROTATION, "true"), Ok(()));
+        assert_eq!(
+            check_value(ROTATION, "false"),
+            Err(LabelError::RotationFalse)
+        );
+        for other in ["yes", "True", "1", "on"] {
+            assert_eq!(
+                check_value(ROTATION, other),
+                Err(LabelError::RotationValue(other.to_owned())),
+                "{other}"
+            );
+        }
+        for typo in [
+            "ferritor.rotate",
+            "ferritor.rotation2",
+            "ferritor.owner",
+            "ferritor.x",
+        ] {
+            assert_eq!(
+                check_key(typo),
+                Err(LabelError::UnknownReserved(typo.to_owned())),
+                "{typo}"
+            );
+        }
+        // Not reserved: the prefix is `ferritor.`, dot included.
+        assert_eq!(check_key("ferritor"), Ok(()));
+        assert_eq!(check_key("ferritorx.rotation"), Ok(()));
+        let flagged = Labels::from([(ROTATION.to_owned(), "true".to_owned())]);
+        assert_eq!(check(&flagged), Ok(()));
+        assert!(rotates(&flagged));
+        assert!(!rotates(&Labels::new()));
+        assert_eq!(
+            check_namespace(&flagged),
+            Err(LabelError::ReservedOnNamespace(ROTATION.to_owned()))
+        );
+        assert_eq!(
+            check_namespace_change(&flagged, &[]),
+            Err(LabelError::ReservedOnNamespace(ROTATION.to_owned()))
+        );
+        // Removing never adds a label: a reserved key stored before the
+        // rules (`ferritor.owner`, say) can still be removed, on a path or
+        // a namespace, though it can't be set.
+        let legacy = ["ferritor.owner".to_owned()];
+        assert_eq!(check_change(&Labels::new(), &legacy), Ok(()));
+        assert_eq!(check_namespace_change(&Labels::new(), &legacy), Ok(()));
+        assert_eq!(
+            check_namespace_change(&Labels::new(), &[ROTATION.to_owned()]),
+            Ok(())
+        );
+        assert_eq!(
+            parse_pair("ferritor.rotation=true"),
+            Ok((ROTATION.to_owned(), "true".to_owned()))
+        );
+        assert_eq!(
+            parse_pair("ferritor.rotation=false"),
+            Err(LabelError::RotationFalse)
         );
     }
 
