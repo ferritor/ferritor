@@ -230,6 +230,32 @@ message StatusResponse {
   // see ListNamespaces for which, rewrap against this server to rescue their
   // rows, and don't seal or restart it first. 0 while sealed.
   uint32 vanished_keks = 6;
+  // The rotation reminders, by the server's root_key_max_age_days,
+  // kek_max_age_days and rotation_warn_days: a reminder only, nothing is
+  // refused for age. The root key's: since its last rekey (or init); unset
+  // before init.
+  RotationDue root_key_rotation = 7;
+  // Totals, for every caller: how many live namespaces' active KEKs are past
+  // kek_max_age_days, and how many within rotation_warn_days of it.
+  uint32 keks_rotation_overdue = 8;
+  uint32 keks_rotation_due_soon = 9;
+  // Each live namespace's active KEK with its age and due date, by name:
+  // only for callers with the namespace permission (names are behind it, as
+  // for ListNamespaces); empty otherwise.
+  repeated ActiveKekRotation active_keks = 10;
+}
+
+// When something was made (or last rotated), and when it's due for
+// rotation.
+message RotationDue {
+  int64 since_unix = 1;
+  int64 due_unix = 2;
+}
+
+message ActiveKekRotation {
+  string namespace = 1;
+  uint32 version = 2;
+  RotationDue rotation = 3;
 }
 
 message KekRef {

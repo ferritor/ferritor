@@ -510,7 +510,12 @@ async fn count_rotation_periodically(
         }
         match keys.rotation_ages().await {
             Ok(ages) => {
-                counts.set_keks(Tally::of(&policy, Kind::Kek, ages.keks, now));
+                counts.set_keks(Tally::of(
+                    &policy,
+                    Kind::Kek,
+                    ages.keks.iter().map(|kek| kek.created_at),
+                    now,
+                ));
                 counts.set_root_key(Tally::of(&policy, Kind::RootKey, ages.root_key, now));
             }
             Err(error) => tracing::warn!(
@@ -921,9 +926,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&policies),
     ))
     .add_service(readiness.grpc().await)
-    .add_service(SystemServiceServer::new(grpc::System::new(
-        seal, rewrap, purge, destroy, namespaces, datastore, gate,
-    )))
+    .add_service(SystemServiceServer::new(
+        grpc::System::new(seal, rewrap, purge, destroy, namespaces, datastore, gate)
+            .with_rotation(rotation),
+    ))
     .add_service(grpc::secrets_service(secrets))
     .add_service(grpc::policy_service(policies));
     tracing::info!(addr = %settings.listen_addr, mode, "serving gRPC and the JSON API; sealed");

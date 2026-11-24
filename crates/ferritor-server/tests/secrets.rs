@@ -1702,7 +1702,23 @@ async fn the_rotation_counts_come_from_both_databases() {
         NAMESPACES.len(),
         "one active KEK per namespace"
     );
-    for made in ages.keks.iter().chain(&ages.root_key) {
+    let mut names: Vec<_> = NAMESPACES.to_vec();
+    names.sort_unstable();
+    assert_eq!(
+        ages.keks
+            .iter()
+            .map(|kek| kek.namespace.as_str())
+            .collect::<Vec<_>>(),
+        names,
+        "by name"
+    );
+    assert!(ages.keks.iter().all(|kek| kek.version == 1));
+    for made in ages
+        .keks
+        .iter()
+        .map(|kek| &kek.created_at)
+        .chain(&ages.root_key)
+    {
         assert!((now - *made).abs() < time::Duration::minutes(5), "{made}");
     }
     assert!(ages.root_key.is_some(), "initialized");

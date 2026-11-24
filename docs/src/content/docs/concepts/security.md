@@ -166,7 +166,9 @@ says. The example systemd unit keeps its memory out of swap
 left of swap.
 
 **Enumeration.** A caller learns whether a namespace exists only for paths
-it's authorized for (`NO_NAMESPACE`); `status` shows totals, never names.
+it's authorized for (`NO_NAMESPACE`); `status` shows totals, and names
+(each namespace's active KEK, for the rotation reminders) only to a caller
+allowed `namespace`, who could list them anyway.
 
 **The supply chain**, as far as the build goes. Dependencies come from
 crates.io only, through committed lockfiles (`--locked` everywhere), and CI

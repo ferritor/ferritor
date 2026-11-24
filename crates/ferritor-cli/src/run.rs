@@ -494,6 +494,36 @@ async fn status(mut client: SystemClient, out: &mut impl Write) -> anyhow::Resul
     let status = reply.status.context("no status in the reply")?;
     print_status(out, &status)?;
     if status.initialized {
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let overdue = |due: i64| if now >= due { " (overdue)" } else { "" };
+        if let Some(root) = &reply.root_key_rotation {
+            writeln!(
+                out,
+                "root key: since {}, rotation due {}{}",
+                utc(root.since_unix),
+                utc(root.due_unix),
+                overdue(root.due_unix)
+            )?;
+        }
+        writeln!(
+            out,
+            "KEK rotation: {} overdue, {} due soon",
+            reply.keks_rotation_overdue, reply.keks_rotation_due_soon
+        )?;
+        for kek in &reply.active_keks {
+            if let Some(rotation) = &kek.rotation {
+                writeln!(
+                    out,
+                    "  {}\tKEK {}\tsince {}\tdue {}{}",
+                    kek.namespace,
+                    kek.version,
+                    utc(rotation.since_unix),
+                    utc(rotation.due_unix),
+                    overdue(rotation.due_unix)
+                )?;
+            }
+        }
+        // Last, as it always was: scripts read the count from the end.
         writeln!(out, "namespaces: {}", reply.namespaces)?;
         if reply.namespaces == 0 {
             eprintln!(

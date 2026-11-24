@@ -120,7 +120,7 @@ commands under one workload identity, exchange once with `ferritor login`
 
 | Command | Options | |
 |---|---|---|
-| `ferritor status` | | whether the server is initialized and sealed, its shares and threshold, the root key's generation, an unseal or rekey in progress, auto-unseal, how many namespaces |
+| `ferritor status` | | whether the server is initialized and sealed, its shares and threshold, the root key's generation, an unseal or rekey in progress, auto-unseal, how many namespaces; the rotation reminders: when the root key's rotation is due, how many namespaces' KEKs are overdue or due soon, and with the `namespace` action each namespace's active KEK and its due date ([key management](/operations/key-management#unseal-and-seal)) |
 | `ferritor init` | `--shares` (5), `--threshold` (3) | create the root key and print its shares, once only ([key management](/operations/key-management#init)) |
 | `ferritor unseal` | `--reset`, `--recommit`, `--auto`, `--release-hold` | submit one share from stdin; `--reset` discards those submitted so far, `--recommit` stores a missing root commitment once a secret proves the key ([the root commitment](/operations/key-management#the-root-commitment)), `--auto` releases the auto-unseal hold and unseals through the KMS, `--release-hold` releases it once unsealed ([auto-unseal](/operations/key-management#auto-unseal)) |
 | `ferritor seal` | | drop the server's keys; always succeeds, and holds auto-unseal ([unseal and seal](/operations/key-management#unseal-and-seal)) |
