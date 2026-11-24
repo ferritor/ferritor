@@ -61,6 +61,12 @@ pub enum SecretsError {
          listing (the same prefix, or the same path)"
     )]
     InvalidPageToken,
+    /// A listing's `older_than_days` outside 1 to 3650.
+    #[error(
+        "older_than_days is {0}; it must be from 1 to {max}",
+        max = crate::rotation::MAX_DAYS
+    )]
+    InvalidAge(u32),
     #[error("permission denied")]
     Denied(#[source] Denied),
     /// Allowed, but the decision couldn't be recorded (see `audit`).
@@ -189,6 +195,7 @@ impl SecretsError {
             Self::InvalidPath(_)
             | Self::ValueTooLarge { .. }
             | Self::InvalidPageToken
+            | Self::InvalidAge(_)
             | Self::InvalidLabels(_)
             | Self::TooManyLabels { .. }
             | Self::WatchSize { .. } => "invalid_argument",
@@ -294,6 +301,35 @@ fn mismatch(path: &SecretPath, expected: u32, latest: Option<u32>) -> String {
 pub struct Secret {
     pub metadata: SecretMetadata,
     pub value: Zeroizing<Vec<u8>>,
+}
+
+/// A listing's age filter (`ferritor list --overdue --older-than <n>d`):
+/// `overdue` keeps only the secrets with the rotation flag, past
+/// `rotation_max_age_days`, or past `older_than_days` if that's given too
+/// (what's due soon); `older_than_days` alone keeps any secret whose live
+/// version is older than that. Neither: no filter. An age is the live
+/// version's, from its creation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AgeFilter {
+    pub overdue: bool,
+    pub older_than_days: Option<u32>,
+}
+
+impl AgeFilter {
+    /// The cutoff: a live version created at or before it is kept. `None`
+    /// without a filter.
+    pub fn created_before(
+        &self,
+        policy: &crate::rotation::Policy,
+        now: time::OffsetDateTime,
+    ) -> Option<time::OffsetDateTime> {
+        let days = match (self.overdue, self.older_than_days) {
+            (_, Some(days)) => days,
+            (true, None) => policy.secret_max_age_days,
+            (false, None) => return None,
+        };
+        Some(now.saturating_sub(time::Duration::days(i64::from(days))))
+    }
 }
 
 pub struct Secrets {
@@ -897,9 +933,32 @@ impl Secrets {
         page_token: &str,
         labels: &Labels,
     ) -> Result<Page> {
+        self.list_filtered(
+            caller,
+            prefix,
+            page_size,
+            page_token,
+            labels,
+            AgeFilter::default(),
+        )
+        .await
+    }
+
+    /// [`Secrets::list`], filtered by age too (`ferritor list --overdue
+    /// --older-than`): see [`AgeFilter`]. Keep the same filter for every
+    /// page, as the labels.
+    pub async fn list_filtered(
+        &self,
+        caller: &Caller,
+        prefix: &str,
+        page_size: u32,
+        page_token: &str,
+        labels: &Labels,
+        age: AgeFilter,
+    ) -> Result<Page> {
         observed(
             "list",
-            self.list_unobserved(caller, prefix, page_size, page_token, labels),
+            self.list_unobserved(caller, prefix, page_size, page_token, labels, age),
         )
         .await
     }
@@ -911,12 +970,18 @@ impl Secrets {
         page_size: u32,
         page_token: &str,
         labels: &Labels,
+        age: AgeFilter,
     ) -> Result<Page> {
         let prefix = (!prefix.is_empty())
             .then(|| Self::path(prefix))
             .transpose()?;
         let after = page_token::decode(page_token, prefix.as_ref())?;
         labels::check(labels).map_err(SecretsError::InvalidLabels)?;
+        if let Some(days) = age.older_than_days
+            && !(1..=crate::rotation::MAX_DAYS).contains(&days)
+        {
+            return Err(SecretsError::InvalidAge(days));
+        }
         let target = prefix.as_ref().map_or(Target::All, Target::Below);
         self.authorize(caller, Action::List, target).await?;
         let epoch = self.unsealed_epoch()?;
@@ -926,10 +991,31 @@ impl Secrets {
         };
         // One more than asked for: whether it exists says if there's a next
         // page, so a full last page isn't followed by an empty one.
-        let mut secrets = self
-            .store
-            .list(prefix.as_ref(), after.as_ref(), size + 1, labels)
-            .await?;
+        let mut secrets =
+            match age.created_before(&self.rotation.policy(), time::OffsetDateTime::now_utc()) {
+                None => {
+                    self.store
+                        .list(prefix.as_ref(), after.as_ref(), size + 1, labels)
+                        .await?
+                }
+                Some(created_before) => {
+                    // `--overdue`: only the paths with the rotation flag, by the
+                    // labels index, with whatever else the caller filters on.
+                    let mut labels = labels.clone();
+                    if age.overdue {
+                        labels.insert(labels::ROTATION.to_owned(), labels::ROTATION_ON.to_owned());
+                    }
+                    self.store
+                        .list_created_before(
+                            prefix.as_ref(),
+                            after.as_ref(),
+                            size + 1,
+                            &labels,
+                            created_before,
+                        )
+                        .await?
+                }
+            };
         // Paths are metadata, but can still say a lot: none after a seal.
         self.unsealed_since(epoch)?;
         let next_page_token = if secrets.len() > size as usize {

@@ -440,6 +440,7 @@ struct ListQuery {
     page_size: u32,
     page_token: String,
     labels: Labels,
+    age: crate::secrets::AgeFilter,
 }
 
 impl ListQuery {
@@ -463,6 +464,18 @@ impl ListQuery {
                         .map_err(|_| ApiError::invalid("`page_size` must be a number"))?;
                 }
                 "page_token" => query.page_token = value,
+                "overdue" => {
+                    query.age.overdue = match value.as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err(ApiError::invalid("`overdue` must be true or false")),
+                    };
+                }
+                "older_than_days" => {
+                    query.age.older_than_days = Some(value.parse().map_err(|_| {
+                        ApiError::invalid("`older_than_days` must be a number of days")
+                    })?);
+                }
                 "label" => {
                     let (key, value) = labels::parse_pair(&value)
                         .map_err(|e| ApiError::invalid(&e.to_string()))?;
@@ -473,7 +486,7 @@ impl ListQuery {
                 other => {
                     return Err(ApiError::invalid(&format!(
                         "unknown query parameter `{other}`; known: prefix, page_size, \
-                         page_token, label"
+                         page_token, label, overdue, older_than_days"
                     )));
                 }
             }
@@ -691,6 +704,8 @@ async fn restore(
         ("label" = Option<Vec<String>>, Query, style = Form, explode, description = "`key=value`; repeatable, every one must match."),
         ("page_size" = Option<u32>, Query, description = "0 or absent: 100; capped at 1000."),
         ("page_token" = Option<String>, Query, description = "The previous page's `next_page_token`."),
+        ("overdue" = Option<bool>, Query, description = "`true`: only secrets with the rotation flag (`ferritor.rotation=true`) past the server's `rotation_max_age_days`, or past `older_than_days` if given."),
+        ("older_than_days" = Option<u32>, Query, description = "1 to 3650: only secrets whose live version is at least this many days old (flagged or not, without `overdue`). Every path of the range is read."),
     ),
     responses((status = 200, description = "One page.", body = ListBody), (status = "default", description = "An error: see `error.code`.", body = ErrorBody))
 )]
@@ -702,12 +717,13 @@ async fn list(
     let caller = caller(&secrets, &extensions, Action::List)?;
     let query = ListQuery::parse(raw.as_deref())?;
     let page = secrets
-        .list(
+        .list_filtered(
             &caller,
             &query.prefix,
             query.page_size,
             &query.page_token,
             &query.labels,
+            query.age,
         )
         .await?;
     Ok(Json(ListBody {

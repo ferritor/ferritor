@@ -221,6 +221,15 @@ pub enum Command {
         /// Only secrets with this label (repeatable: every one must match).
         #[arg(long = "label", value_name = "KEY=VALUE", value_parser = parse_label)]
         labels: Vec<(String, String)>,
+        /// Only secrets with the rotation flag (ferritor.rotation=true) past
+        /// the server's rotation_max_age_days, or past --older-than if given
+        /// (what's due soon).
+        #[arg(long)]
+        overdue: bool,
+        /// Only secrets whose latest version is at least this old, in days
+        /// (`60d`, 1 to 3650d): flagged or not, unless --overdue.
+        #[arg(long, value_name = "DAYSd", value_parser = parse_days)]
+        older_than: Option<u32>,
     },
     /// Show or change a secret's metadata: when it was created and last
     /// updated, its versions, and its labels (custom key=value metadata,
@@ -405,6 +414,19 @@ fn parse_secret_action(
 /// A `key=value` label argument, checked like the server checks it.
 fn parse_label(arg: &str) -> Result<(String, String), ferritor_core::labels::LabelError> {
     ferritor_core::labels::parse_pair(arg)
+}
+
+/// `<n>d`: a number of days, 1 to 3650 (the server checks the range too).
+fn parse_days(arg: &str) -> Result<u32, String> {
+    let days = arg
+        .strip_suffix('d')
+        .and_then(|n| n.parse::<u32>().ok())
+        .ok_or_else(|| format!("`{arg}` is not a number of days like `60d`"))?;
+    if (1..=3650).contains(&days) {
+        Ok(days)
+    } else {
+        Err(format!("`{arg}` must be from 1d to 3650d"))
+    }
 }
 
 #[derive(Debug, Subcommand)]

@@ -560,6 +560,26 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "overdue",
+            "in": "query",
+            "description": "`true`: only secrets with the rotation flag (`ferritor.rotation=true`) past the server's `rotation_max_age_days`, or past `older_than_days` if given.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "older_than_days",
+            "in": "query",
+            "description": "1 to 3650: only secrets whose live version is at least this many days old (flagged or not, without `overdue`). Every path of the range is read.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
           }
         ],
         "responses": {

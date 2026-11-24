@@ -642,6 +642,15 @@ message ListSecretsRequest {
   // Only paths whose labels include every one of these (empty: no filter).
   // Keep the same filter for every page.
   map<string, string> labels = 4;
+  // Only the secrets with the rotation flag (the label
+  // ferritor.rotation=true) whose live version is past the server's
+  // rotation_max_age_days, or past older_than_days if that's set too (what's
+  // due soon). Keep it for every page.
+  bool overdue = 5;
+  // Only the secrets whose live version was created at least this many days
+  // ago (1 to 3650), flagged or not unless overdue is set. Keep it for every
+  // page. Every path of the range is read to find them.
+  optional uint32 older_than_days = 6;
 }
 
 message ListSecretsResponse {

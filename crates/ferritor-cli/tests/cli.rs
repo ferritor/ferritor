@@ -1604,6 +1604,32 @@ async fn metadata_and_labels_from_the_cli() {
         "{}",
         bad.stderr
     );
+    // By age: nothing here is old yet, so nothing comes back; the age is
+    // given in days and checked before anything is sent.
+    for args in [
+        &["list", "app", "--overdue"][..],
+        &["list", "app", "--older-than", "60d"],
+        &[
+            "list",
+            "--overdue",
+            "--older-than",
+            "30d",
+            "--label",
+            "team=a",
+        ],
+    ] {
+        let aged = server.ferritor(args, &[]).await.unwrap();
+        assert!(aged.success, "{args:?}: {}", aged.stderr);
+        assert_eq!(aged.out(), "", "{args:?}");
+    }
+    for (age, says) in [("60", "like `60d`"), ("0d", "from 1d to 3650d")] {
+        let bad = server
+            .ferritor(&["list", "--older-than", age], &[])
+            .await
+            .unwrap();
+        assert!(!bad.success);
+        assert!(bad.stderr.contains(says), "{age}: {}", bad.stderr);
+    }
     let twice = server
         .ferritor(&["list", "--label", "t=a", "--label", "t=b"], &[])
         .await

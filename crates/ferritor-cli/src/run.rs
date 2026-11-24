@@ -447,11 +447,17 @@ pub async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Versions { path } => {
             history(secrets_client(&addr().await?).await?, path, out).await
         }
-        Command::List { prefix, labels } => {
+        Command::List {
+            prefix,
+            labels,
+            overdue,
+            older_than,
+        } => {
             list(
                 secrets_client(&addr().await?).await?,
                 prefix,
                 label_map(labels)?,
+                (*overdue, *older_than),
                 out,
             )
             .await
@@ -1157,6 +1163,7 @@ async fn list(
     mut client: SecretsClient,
     prefix: &str,
     labels: HashMap<String, String>,
+    (overdue, older_than_days): (bool, Option<u32>),
     out: &mut impl Write,
 ) -> anyhow::Result<()> {
     let mut secrets = Vec::new();
@@ -1170,6 +1177,8 @@ async fn list(
                     page_size: 0,
                     page_token: page_token.clone(),
                     labels: labels.clone(),
+                    overdue,
+                    older_than_days,
                 })
                 .await,
         )?;
@@ -1184,8 +1193,20 @@ async fn list(
         );
         page_token = reply.next_page_token;
     }
+    // Filtered by age: the age it was judged by, too.
+    let by_age = overdue || older_than_days.is_some();
     for secret in secrets {
-        writeln!(out, "{}\tversion {}", secret.path, secret.version)?;
+        if by_age {
+            writeln!(
+                out,
+                "{}\tversion {}\tcreated {}",
+                secret.path,
+                secret.version,
+                utc(secret.created_at_unix)
+            )?;
+        } else {
+            writeln!(out, "{}\tversion {}", secret.path, secret.version)?;
+        }
     }
     Ok(())
 }

@@ -1662,6 +1662,7 @@ impl From<SecretsError> for Status {
         match e {
             E::InvalidPath(_)
             | E::InvalidPageToken
+            | E::InvalidAge(_)
             | E::ValueTooLarge { .. }
             | E::InvalidLabels(_)
             | E::TooManyLabels { .. }
@@ -1858,14 +1859,19 @@ impl SecretsService for Secrets {
         let caller = caller(self.secrets.gate(), &request, Action::List)?;
         let req = request.into_inner();
         let labels: Labels = req.labels.into_iter().collect();
+        let age = crate::secrets::AgeFilter {
+            overdue: req.overdue,
+            older_than_days: req.older_than_days,
+        };
         let page = self
             .secrets
-            .list(
+            .list_filtered(
                 &caller,
                 &req.prefix,
                 req.page_size,
                 &req.page_token,
                 &labels,
+                age,
             )
             .await?;
         Ok(Response::new(pb::ListSecretsResponse {

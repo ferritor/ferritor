@@ -159,7 +159,7 @@ labels.
 | `ferritor delete` | `PATH` | delete every version (restorable within the server's retention) |
 | `ferritor restore` | `PATH`, `--version` | undo a delete, or bring back a deleted or trimmed version |
 | `ferritor versions` | `PATH` | its history, newest first: metadata only |
-| `ferritor list` | `PREFIX` (everything), `--label KEY=VALUE` (repeatable) | the latest version of every secret below a prefix, every page |
+| `ferritor list` | `PREFIX` (everything), `--label KEY=VALUE` (repeatable), `--overdue`, `--older-than <n>d` | the latest version of every secret below a prefix, every page. `--overdue`: only secrets with the rotation flag past the server's `rotation_max_age_days`; with `--older-than 60d`, past 60 days instead (what's due soon); `--older-than` alone: any secret that old. With either, each line also gives when its version was created ([rotation](/guides/secrets#listing-by-age)) |
 | `ferritor metadata get` | `PATH` | created, updated, versions, labels: never the value |
 | `ferritor metadata set` | `PATH`, `KEY=VALUE…` | set labels |
 | `ferritor metadata unset` | `PATH`, `KEY…` | remove labels |

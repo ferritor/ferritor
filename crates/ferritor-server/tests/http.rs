@@ -1516,8 +1516,24 @@ async fn metadata_and_labels_over_json() {
     )
     .await;
     assert!(paths(&none).is_empty());
+    // The age filter: accepted (nothing here is old yet), composing with
+    // the labels.
+    let (status, _, aged) = send(
+        Method::GET,
+        "/v1/secrets?prefix=app&overdue=true&older_than_days=60&label=team%3Da",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{aged}");
+    assert!(paths(&aged).is_empty());
 
     for (uri, message) in [
+        ("/v1/secrets?overdue=yes", "`overdue` must be true or false"),
+        (
+            "/v1/secrets?older_than_days=60d",
+            "`older_than_days` must be a number of days",
+        ),
+        ("/v1/secrets?older_than_days=0", "older_than_days is 0"),
         (
             "/v1/secrets?lable=team%3Da",
             "unknown query parameter `lable`",

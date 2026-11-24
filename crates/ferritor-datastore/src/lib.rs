@@ -1901,6 +1901,127 @@ impl Datastore {
         })
         .await
     }
+
+    /// [`Datastore::list`], only the paths whose live version was created
+    /// at or before `created_before` (what `ferritor list --older-than`
+    /// and `--overdue` ask). The age is the version's, read by the same
+    /// probe a listing makes, so it costs no more reads: but every path of
+    /// the range is probed, and a page may read far past `limit` paths to
+    /// find enough that old. Separate queries per variant, as `list`'s.
+    pub async fn list_created_before(
+        &self,
+        prefix: Option<&SecretPath>,
+        after: Option<&SecretPath>,
+        limit: u32,
+        labels: &Labels,
+        created_before: OffsetDateTime,
+    ) -> Result<Vec<SecretMetadata>> {
+        bounded(self.timeout, async move {
+            let after = after.map_or("", SecretPath::as_str);
+            let limit = i64::from(limit);
+            let rows: Vec<(String, i32, OffsetDateTime)> = match (prefix, labels.is_empty()) {
+                (Some(prefix), false) => {
+                    let (lo, hi) = prefix.descendant_range();
+                    sqlx::query!(
+                    "SELECT p.path, v.version, v.created_at
+                     FROM paths p
+                     CROSS JOIN LATERAL (
+                         SELECT version, created_at FROM secret_versions
+                         WHERE path_id = p.id AND version = p.current_version AND deleted_at IS NULL
+                         LIMIT 1
+                     ) v
+                     WHERE p.current_version IS NOT NULL AND p.path >= $1 AND p.path < $2 AND p.path > $3
+                       AND p.labels @> $4 AND p.labels <> '{}' AND v.created_at <= $5
+                     ORDER BY p.path
+                     LIMIT $6",
+                    lo,
+                    hi,
+                    after,
+                    Json(labels) as _,
+                    created_before,
+                    limit,
+                )
+                    .fetch_all(&self.pool)
+                    .await?
+                    .into_iter()
+                    .map(|r| (r.path, r.version, r.created_at))
+                    .collect()
+                }
+                (None, false) => sqlx::query!(
+                    "SELECT p.path, v.version, v.created_at
+                     FROM paths p
+                     CROSS JOIN LATERAL (
+                         SELECT version, created_at FROM secret_versions
+                         WHERE path_id = p.id AND version = p.current_version AND deleted_at IS NULL
+                         LIMIT 1
+                     ) v
+                     WHERE p.current_version IS NOT NULL AND p.path > $1 AND p.labels @> $2 AND p.labels <> '{}'
+                       AND v.created_at <= $3
+                     ORDER BY p.path
+                     LIMIT $4",
+                    after,
+                    Json(labels) as _,
+                    created_before,
+                    limit,
+                )
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .map(|r| (r.path, r.version, r.created_at))
+                .collect(),
+                (Some(prefix), true) => {
+                    let (lo, hi) = prefix.descendant_range();
+                    sqlx::query!(
+                    "SELECT p.path, v.version, v.created_at
+                     FROM paths p
+                     CROSS JOIN LATERAL (
+                         SELECT version, created_at FROM secret_versions
+                         WHERE path_id = p.id AND version = p.current_version AND deleted_at IS NULL
+                         LIMIT 1
+                     ) v
+                     WHERE p.current_version IS NOT NULL AND p.path >= $1 AND p.path < $2 AND p.path > $3
+                       AND v.created_at <= $4
+                     ORDER BY p.path
+                     LIMIT $5",
+                    lo,
+                    hi,
+                    after,
+                    created_before,
+                    limit,
+                )
+                    .fetch_all(&self.pool)
+                    .await?
+                    .into_iter()
+                    .map(|r| (r.path, r.version, r.created_at))
+                    .collect()
+                }
+                (None, true) => sqlx::query!(
+                    "SELECT p.path, v.version, v.created_at
+                     FROM paths p
+                     CROSS JOIN LATERAL (
+                         SELECT version, created_at FROM secret_versions
+                         WHERE path_id = p.id AND version = p.current_version AND deleted_at IS NULL
+                         LIMIT 1
+                     ) v
+                     WHERE p.current_version IS NOT NULL AND p.path > $1 AND v.created_at <= $2
+                     ORDER BY p.path
+                     LIMIT $3",
+                    after,
+                    created_before,
+                    limit,
+                )
+                .fetch_all(&self.pool)
+                .await?
+                .into_iter()
+                .map(|r| (r.path, r.version, r.created_at))
+                .collect(),
+            };
+            rows.into_iter()
+                .map(|(path, version, created_at)| metadata(path, version, created_at))
+                .collect()
+        })
+        .await
+    }
 }
 
 /// A stored secret version, encrypted ([`Datastore::version_per_kek`]).

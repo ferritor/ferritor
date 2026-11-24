@@ -19,7 +19,7 @@ use ferritor_server::grpc;
 use ferritor_server::namespaces::{NamespaceError, Namespaces};
 use ferritor_server::policy::{Policy, Rule};
 use ferritor_server::seal::Seal;
-use ferritor_server::secrets::{Secrets, SecretsError, VersionPage};
+use ferritor_server::secrets::{AgeFilter, Secrets, SecretsError, VersionPage};
 use ferritor_testkit::data::insert_version;
 use ferritor_testkit::{Captured, TestDatabase, TestResult};
 use serde_json::json;
@@ -1402,7 +1402,7 @@ async fn grpc_secrets_round_trip_and_status_codes() {
                     prefix: "app".to_owned(),
                     page_size: 1,
                     page_token: "zz".to_owned(),
-                    labels: Default::default(),
+                    ..Default::default()
                 })
                 .await
         ),
@@ -1706,6 +1706,138 @@ async fn the_rotation_counts_come_from_both_databases() {
         assert!((now - *made).abs() < time::Duration::minutes(5), "{made}");
     }
     assert!(ages.root_key.is_some(), "initialized");
+    env.destroy().await.unwrap();
+}
+
+/// Makes `path`'s versions `days` old, in the data database: ages a test
+/// can't wait for.
+async fn backdate(env: &Env, path: &str, days: i32) -> TestResult<()> {
+    sqlx::query(
+        "UPDATE secret_versions SET created_at = now() - make_interval(days => $2)
+         WHERE path_id = (SELECT id FROM paths WHERE path = $1)",
+    )
+    .bind(path)
+    .bind(days)
+    .execute(env.data.pool())
+    .await?;
+    Ok(())
+}
+
+/// Listing by age: `overdue` keeps the flagged secrets past the policy's 90
+/// days, or past `older_than_days` if given too (what's due soon);
+/// `older_than_days` alone keeps any secret that old. Each composes with
+/// the prefix, the labels and the paging; an age out of range is refused.
+#[tokio::test]
+async fn listing_by_age_finds_whats_overdue_and_due_soon() {
+    let env = Env::unsealed().await.unwrap();
+    let flag = labels(&[("ferritor.rotation", "true"), ("team", "a")]);
+    for (path, set, days) in [
+        ("app/old", flag.clone(), 100),
+        ("app/soon", flag.clone(), 80),
+        ("app/new", flag.clone(), 1),
+        ("app/plain", labels(&[("team", "a")]), 120),
+        ("other/old", flag.clone(), 100),
+    ] {
+        env.secrets
+            .put_labeled(&ANON, path, b"x", None, &set)
+            .await
+            .unwrap();
+        backdate(&env, path, days).await.unwrap();
+    }
+    let secrets = &env.secrets;
+    let list = |prefix: &'static str, filter: Labels, age: AgeFilter| async move {
+        secrets
+            .list_filtered(&ANON, prefix, 0, "", &filter, age)
+            .await
+            .map(|page| {
+                page.secrets
+                    .into_iter()
+                    .map(|m| m.path.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let overdue = AgeFilter {
+        overdue: true,
+        older_than_days: None,
+    };
+    let older = |days| AgeFilter {
+        overdue: false,
+        older_than_days: Some(days),
+    };
+    assert_eq!(
+        list("app", Labels::new(), overdue).await.unwrap(),
+        ["app/old"]
+    );
+    assert_eq!(
+        list("", Labels::new(), overdue).await.unwrap(),
+        ["app/old", "other/old"]
+    );
+    // Due soon too: flagged, past 60 days.
+    let soon = AgeFilter {
+        overdue: true,
+        older_than_days: Some(60),
+    };
+    assert_eq!(
+        list("app", Labels::new(), soon).await.unwrap(),
+        ["app/old", "app/soon"]
+    );
+    // Any secret that old, flagged or not.
+    assert_eq!(
+        list("app", Labels::new(), older(60)).await.unwrap(),
+        ["app/old", "app/plain", "app/soon"]
+    );
+    // With the labels.
+    assert_eq!(
+        list("app", labels(&[("team", "b")]), older(60))
+            .await
+            .unwrap(),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        list("app", labels(&[("team", "a")]), overdue)
+            .await
+            .unwrap(),
+        ["app/old"]
+    );
+    // Paging walks the filtered set, one at a time.
+    let first = secrets
+        .list_filtered(&ANON, "app", 1, "", &Labels::new(), older(60))
+        .await
+        .unwrap();
+    assert_eq!(first.secrets[0].path.to_string(), "app/old");
+    let second = secrets
+        .list_filtered(
+            &ANON,
+            "app",
+            1,
+            &first.next_page_token,
+            &Labels::new(),
+            older(60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.secrets[0].path.to_string(), "app/plain");
+    // Without a filter, a listing is what it was.
+    assert_eq!(
+        list("app", Labels::new(), AgeFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+    for bad in [0, 3651] {
+        assert!(matches!(
+            list("app", Labels::new(), older(bad)).await,
+            Err(SecretsError::InvalidAge(days)) if days == bad
+        ));
+    }
+    // `overdue` adds the flag to the caller's labels: a conflicting filter
+    // never gets that far, since `ferritor.rotation=false` is refused like
+    // any invalid label, before the listing.
+    assert!(matches!(
+        list("app", labels(&[("ferritor.rotation", "false")]), overdue).await,
+        Err(SecretsError::InvalidLabels(LabelError::RotationFalse))
+    ));
     env.destroy().await.unwrap();
 }
 

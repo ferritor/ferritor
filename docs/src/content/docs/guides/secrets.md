@@ -126,6 +126,27 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   ferritor list billing --label ferritor.rotation=true      # what's on a schedule
   ```
 
+## Listing by age
+
+For rotation reminders ([configuration](/reference/configuration)), a
+listing can keep only the secrets of a certain age, by their live version's
+creation (a restore of an older version counts from that version's):
+
+```sh
+ferritor list billing --overdue                     # flagged, past rotation_max_age_days
+ferritor list billing --overdue --older-than 60d    # flagged, past 60 days: what's due soon
+ferritor list billing --older-than 365d             # any secret a year old, flagged or not
+```
+
+They compose with `--label` and the paging, and need `list` on the
+prefix, as any listing: a caller sees only what it may list. With either,
+each line also gives when its version was created. Over the APIs it's
+`overdue` and `older_than_days` on the listing (gRPC `ListSecrets`, the
+JSON API's query parameters). Each path of the range is read to find the
+old ones (one probe each, as a listing makes), so a page may take longer
+than an unfiltered one. Server-wide counts, without names, are the
+[rotation gauges](/operations/monitoring#the-server).
+
 ## The CLI
 
 ```sh
