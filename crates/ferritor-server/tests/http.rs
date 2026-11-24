@@ -1584,23 +1584,27 @@ async fn metadata_and_labels_over_json() {
 }
 
 /// The largest put fits through both APIs: the largest value with the most
-/// labels at their longest. Over HTTP escaped as badly as JSON allows: a
+/// labels at their longest, one a `description` at its longest (the one
+/// longer value). Over HTTP escaped as badly as JSON allows: a
 /// value of 0xFF bytes is all `/` in base64, each sent as `\/`, and every
 /// label character as `\uXXXX`. So a put one API accepts, the other does
 /// too (the transport limits are computed from the same constants).
 #[tokio::test]
 async fn the_largest_put_fits_through_both_apis() {
-    use ferritor_core::labels::{MAX_KEY_LEN, MAX_LABELS, MAX_VALUE_LEN};
+    use ferritor_core::labels::{
+        DESCRIPTION, MAX_DESCRIPTION_LEN, MAX_KEY_LEN, MAX_LABELS, MAX_VALUE_LEN,
+    };
 
     let env = Env::plaintext().await.unwrap();
     let value = vec![0xFF_u8; MAX_VALUE_SIZE];
-    let labels: Vec<(String, String)> = (0..MAX_LABELS)
+    let mut labels: Vec<(String, String)> = (0..MAX_LABELS - 1)
         .map(|i| {
             let mut key = format!("k{i:02}");
             key.push_str(&"k".repeat(MAX_KEY_LEN - key.len()));
             (key, "a".repeat(MAX_VALUE_LEN))
         })
         .collect();
+    labels.push((DESCRIPTION.to_owned(), "d".repeat(MAX_DESCRIPTION_LEN)));
 
     let escape =
         |s: &str| -> String { s.chars().map(|c| format!("\\u{:04x}", c as u32)).collect() };

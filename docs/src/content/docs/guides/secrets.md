@@ -92,7 +92,23 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   (`([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]`, never empty). So nothing
   invisible or confusable fits in a label. At most 64 per path.
   Anything else is refused, never rewritten, and so is a change that sets
-  and removes nothing.
+  and removes nothing. Two keys take wider values (below).
+- **Metadata keys**, all optional, for who to ask about a secret:
+  - `owner`: a team or a person, by the rule above;
+  - `contact`: an email address or a chat channel, the rule's characters
+    and `@` and `#` (`alice@example.com`, `#billing-oncall`);
+  - `description`: what it is, printable ASCII with spaces, not beginning
+    or ending with one, up to 255 characters.
+
+  ```sh
+  ferritor metadata set billing/db owner=billing-team contact=#billing-oncall \
+    "description=the billing database's password"
+  ```
+
+  Like every label they're plain metadata, readable by anyone allowed to
+  list the path, and audited by key only. **A `contact` may be personal
+  data** (a person's email address): prefer a team's address or channel,
+  and treat the labels as visible to everyone with `list` on the path.
 - Changing them needs the **`label`** action (see [policy](/guides/policy)): a
   tool can tag secrets without being able to read or write their values,
   and a writer can store values without being able to change tags.

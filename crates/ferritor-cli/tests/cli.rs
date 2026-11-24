@@ -1630,6 +1630,27 @@ async fn metadata_and_labels_from_the_cli() {
         assert!(!bad.success);
         assert!(bad.stderr.contains(says), "{age}: {}", bad.stderr);
     }
+    // The metadata keys, as a shell passes them: one argument each.
+    let meta = server
+        .ferritor(
+            &[
+                "metadata",
+                "set",
+                "app/b",
+                "description=the second secret",
+                "contact=#billing-oncall",
+            ],
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(meta.success, "{}", meta.stderr);
+    assert!(
+        meta.out()
+            .contains("  contact=#billing-oncall\n  description=the second secret\n"),
+        "{}",
+        meta.out()
+    );
     let twice = server
         .ferritor(&["list", "--label", "t=a", "--label", "t=b"], &[])
         .await

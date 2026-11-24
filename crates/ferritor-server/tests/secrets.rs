@@ -1841,6 +1841,59 @@ async fn listing_by_age_finds_whats_overdue_and_due_soon() {
     env.destroy().await.unwrap();
 }
 
+/// The metadata keys through the API: a description with spaces and
+/// punctuation and a contact with `@` stored and read back as sent, the
+/// contact usable as a listing filter; their wider values for those keys
+/// only.
+#[tokio::test]
+async fn the_metadata_keys_take_their_wider_values() {
+    let env = Env::unsealed().await.unwrap();
+    let meta = labels(&[
+        ("owner", "billing-team"),
+        ("contact", "alice@example.com"),
+        (
+            "description",
+            "the billing database's password (see RUNBOOK.md #4)",
+        ),
+    ]);
+    env.secrets
+        .put_labeled(&ANON, "app/db", b"x", None, &meta)
+        .await
+        .unwrap();
+    assert_eq!(
+        env.secrets.metadata(&ANON, "app/db").await.unwrap().labels,
+        meta
+    );
+    let found = env
+        .secrets
+        .list(
+            &ANON,
+            "app",
+            0,
+            "",
+            &labels(&[("contact", "alice@example.com")]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(found.secrets.len(), 1);
+    for (key, value) in [
+        ("owner", "two words"),
+        ("team", "a@b"),
+        ("contact", "alice smith"),
+    ] {
+        assert!(
+            matches!(
+                env.secrets
+                    .update_labels(&ANON, "app/db", &labels(&[(key, value)]), &[])
+                    .await,
+                Err(SecretsError::InvalidLabels(_))
+            ),
+            "{key}={value}"
+        );
+    }
+    env.destroy().await.unwrap();
+}
+
 /// Listing filters by labels: every one must match, inside the prefix.
 #[tokio::test]
 async fn listing_filters_by_label() {

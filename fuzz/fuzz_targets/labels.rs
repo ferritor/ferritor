@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use arbitrary::Arbitrary;
 use ferritor_core::labels::{
-    self, LabelError, MAX_KEY_LEN, MAX_LABELS, MAX_VALUE_LEN, check_change, check_key,
+    self, LabelError, MAX_DESCRIPTION_LEN, MAX_KEY_LEN, MAX_LABELS, MAX_VALUE_LEN, check_change,
+    check_key,
     check_namespace, check_namespace_change, check_value, parse_pair,
 };
 use libfuzzer_sys::fuzz_target;
@@ -38,9 +39,30 @@ fn key_ok(key: &str) -> bool {
     label_shape(key, MAX_KEY_LEN) && (!key.starts_with("ferritor.") || key == "ferritor.rotation")
 }
 
-/// The shape, and `ferritor.rotation`'s value `true` only.
+/// By the key: `description` printable ASCII without a space at either end,
+/// up to `MAX_DESCRIPTION_LEN`; `contact` the shape's alphabet with `@` and
+/// `#`, beginning with a letter, digit or `#`; `ferritor.rotation` `true`
+/// only; any other key the shape.
 fn value_ok(key: &str, value: &str) -> bool {
-    label_shape(value, MAX_VALUE_LEN) && (key != "ferritor.rotation" || value == "true")
+    let bytes = value.as_bytes();
+    match key {
+        "description" => {
+            (1..=MAX_DESCRIPTION_LEN).contains(&value.len())
+                && bytes.iter().all(|b| (b' '..=b'~').contains(b))
+                && bytes[0] != b' '
+                && bytes[bytes.len() - 1] != b' '
+        }
+        "contact" => {
+            (1..=MAX_VALUE_LEN).contains(&value.len())
+                && bytes
+                    .iter()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.@#".contains(b))
+                && (bytes[0].is_ascii_alphanumeric() || bytes[0] == b'#')
+                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        }
+        "ferritor.rotation" => value == "true",
+        _ => label_shape(value, MAX_VALUE_LEN),
+    }
 }
 
 fuzz_target!(|input: Input| {
