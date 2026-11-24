@@ -222,8 +222,9 @@ pub enum Command {
         #[arg(long = "label", value_name = "KEY=VALUE", value_parser = parse_label)]
         labels: Vec<(String, String)>,
         /// Only secrets with the rotation flag (ferritor.rotation=true) past
-        /// the server's rotation_max_age_days, or past --older-than if given
-        /// (what's due soon).
+        /// the server's rotation_max_age_days; with --older-than, older than
+        /// that instead (an age cutoff: the overdue ones included, to see
+        /// what's coming up).
         #[arg(long)]
         overdue: bool,
         /// Only secrets whose latest version is at least this old, in days

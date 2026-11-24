@@ -305,8 +305,9 @@ pub struct Secret {
 
 /// A listing's age filter (`ferritor list --overdue --older-than <n>d`):
 /// `overdue` keeps only the secrets with the rotation flag, past
-/// `rotation_max_age_days`, or past `older_than_days` if that's given too
-/// (what's due soon); `older_than_days` alone keeps any secret whose live
+/// `rotation_max_age_days`, or older than `older_than_days` if that's given
+/// too (an age cutoff, the overdue ones included, not the due-soon window);
+/// `older_than_days` alone keeps any secret whose live
 /// version is older than that. Neither: no filter. An age is the live
 /// version's, from its creation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

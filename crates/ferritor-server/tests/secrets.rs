@@ -1740,7 +1740,7 @@ async fn backdate(env: &Env, path: &str, days: i32) -> TestResult<()> {
 }
 
 /// Listing by age: `overdue` keeps the flagged secrets past the policy's 90
-/// days, or past `older_than_days` if given too (what's due soon);
+/// days, or older than `older_than_days` if given too (an age cutoff);
 /// `older_than_days` alone keeps any secret that old. Each composes with
 /// the prefix, the labels and the paging; an age out of range is refused.
 #[tokio::test]

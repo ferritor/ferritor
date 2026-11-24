@@ -705,7 +705,7 @@ async fn restore(
         ("page_size" = Option<u32>, Query, description = "0 or absent: 100; capped at 1000."),
         ("page_token" = Option<String>, Query, description = "The previous page's `next_page_token`."),
         ("overdue" = Option<bool>, Query, description = "`true`: only secrets with the rotation flag (`ferritor.rotation=true`) past the server's `rotation_max_age_days`, or past `older_than_days` if given."),
-        ("older_than_days" = Option<u32>, Query, description = "1 to 3650: only secrets whose live version is at least this many days old (flagged or not, without `overdue`). Every path of the range is read."),
+        ("older_than_days" = Option<u32>, Query, minimum = 1, maximum = 3650, description = "1 to 3650: only secrets whose live version is at least this many days old (flagged or not, without `overdue`). Every path of the range is read."),
     ),
     responses((status = 200, description = "One page.", body = ListBody), (status = "default", description = "An error: see `error.code`.", body = ErrorBody))
 )]
@@ -1671,6 +1671,12 @@ mod tests {
             policies::MAX_PAGE_SIZE
         );
         says(&query("/v1/policies", "page_size"), &policy_pages);
+
+        // A listing's age, as `Secrets::list` checks it.
+        let age = query("/v1/secrets", "older_than_days");
+        assert_eq!(age["schema"]["minimum"], 1, "{age}");
+        assert_eq!(age["schema"]["maximum"], crate::rotation::MAX_DAYS, "{age}");
+        says(&age, &format!("1 to {}", crate::rotation::MAX_DAYS));
     }
 
     #[test]

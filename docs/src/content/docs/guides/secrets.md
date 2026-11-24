@@ -151,7 +151,7 @@ creation (a restore of an older version counts from that version's):
 
 ```sh
 ferritor list billing --overdue                     # flagged, past rotation_max_age_days
-ferritor list billing --overdue --older-than 60d    # flagged, past 60 days: what's due soon
+ferritor list billing --overdue --older-than 60d    # flagged, older than 60 days: overdue and coming up
 ferritor list billing --older-than 365d             # any secret a year old, flagged or not
 ```
 
