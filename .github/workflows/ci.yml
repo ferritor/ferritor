@@ -67,7 +67,7 @@ jobs:
       # regenerated offline (from the downloaded crates alone, so the same
       # everywhere) and compared. Every platform's crates are fetched first,
       # the images' musl-only ones included.
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-about@0.9.0
       - name: THIRD-PARTY-LICENSES.txt up to date
@@ -410,13 +410,13 @@ jobs:
       # --workspace: the root Cargo.toml is a package too (release-plz), and
       # without it cargo-deny checks only that one's (no) dependencies.
       # --all-features is the action's default, kept.
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
         with:
           arguments: --all-features --workspace
           command: check advisories sources licenses
       # The fuzz crate's own lockfile (libFuzzer and its dependencies): never
       # distributed, so no license check.
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
         with:
           command: check advisories sources
           manifest-path: ./fuzz/Cargo.toml
