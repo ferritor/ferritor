@@ -7,8 +7,7 @@ use std::collections::BTreeMap;
 use arbitrary::Arbitrary;
 use ferritor_core::labels::{
     self, LabelError, MAX_DESCRIPTION_LEN, MAX_KEY_LEN, MAX_LABELS, MAX_VALUE_LEN, check_change,
-    check_key,
-    check_namespace, check_namespace_change, check_value, parse_pair,
+    check_key, check_namespace, check_namespace_change, check_value, parse_pair,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -84,7 +83,13 @@ fuzz_target!(|input: Input| {
     match parse_pair(&input.pair) {
         Ok((key, value)) => {
             assert_eq!(format!("{key}={value}"), input.pair);
-            assert!(!key.contains('=') && !value.contains('='));
+            // Split at the first `=`: never one in the key; in the value
+            // only where its key allows one (a description).
+            assert!(!key.contains('='));
+            assert!(
+                !value.contains('=') || key == "description",
+                "{key}={value}"
+            );
             assert!(key_ok(&key) && value_ok(&key, &value));
         }
         Err(LabelError::NotAPair(_)) => assert!(!input.pair.contains('=')),
@@ -94,8 +99,8 @@ fuzz_target!(|input: Input| {
         }
     }
 
-    let set_ok = input.set.len() <= MAX_LABELS
-        && input.set.iter().all(|(k, v)| key_ok(k) && value_ok(k, v));
+    let set_ok =
+        input.set.len() <= MAX_LABELS && input.set.iter().all(|(k, v)| key_ok(k) && value_ok(k, v));
     assert_eq!(labels::check(&input.set).is_ok(), set_ok);
     // A key to remove needs the shape alone: removing adds no label, so a
     // reserved key stored before the rules can still go.

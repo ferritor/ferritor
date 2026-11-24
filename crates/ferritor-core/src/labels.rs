@@ -305,8 +305,9 @@ pub fn rotates(labels: &Labels) -> bool {
         .is_some_and(|value| value == ROTATION_ON)
 }
 
-/// Parses `key=value` (split at the first `=`; neither half may hold
-/// another), and checks both.
+/// Parses `key=value` (split at the first `=`, so the key never holds one;
+/// the value only where its key's rule allows, a `description`), and checks
+/// both.
 pub fn parse_pair(pair: &str) -> Result<(String, String), LabelError> {
     let (key, value) = pair
         .split_once('=')
@@ -542,11 +543,16 @@ mod tests {
             parse_pair("team=a"),
             Ok(("team".to_owned(), "a".to_owned()))
         );
-        // Neither half may hold a `=`, nor be empty.
+        // Split at the first `=`: a value holds another only where its key
+        // allows one (a description), and neither half may be empty.
         assert!(matches!(
             parse_pair("query=a=b"),
             Err(LabelError::InvalidValueChar { char: '=', .. })
         ));
+        assert_eq!(
+            parse_pair("description=a=b"),
+            Ok((DESCRIPTION.to_owned(), "a=b".to_owned()))
+        );
         assert_eq!(
             parse_pair("empty="),
             Err(LabelError::EmptyValue("empty".to_owned()))
