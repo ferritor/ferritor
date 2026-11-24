@@ -1892,9 +1892,17 @@ async fn the_metadata_keys_take_their_wider_values() {
         .await
         .unwrap();
     assert_eq!(found.secrets.len(), 1);
+    // An owner may be a ferritor identity.
+    let owner = labels(&[("owner", "apps/billing")]);
+    env.secrets
+        .update_labels(&ANON, "app/db", &owner, &[])
+        .await
+        .unwrap();
     for (key, value) in [
         ("owner", "two words"),
+        ("owner", "apps//billing"),
         ("team", "a@b"),
+        ("team", "apps/billing"),
         ("contact", "alice smith"),
     ] {
         assert!(

@@ -40,8 +40,9 @@ fn key_ok(key: &str) -> bool {
 
 /// By the key: `description` printable ASCII without a space at either end,
 /// up to `MAX_DESCRIPTION_LEN`; `contact` the shape's alphabet with `@` and
-/// `#`, beginning with a letter, digit or `#`; `ferritor.rotation` `true`
-/// only; any other key the shape.
+/// `#`, beginning with a letter, digit or `#`; `owner` the shape's alphabet
+/// with `/`, no `//`; `ferritor.rotation` `true` only; any other key the
+/// shape.
 fn value_ok(key: &str, value: &str) -> bool {
     let bytes = value.as_bytes();
     match key {
@@ -58,6 +59,15 @@ fn value_ok(key: &str, value: &str) -> bool {
                     .all(|b| b.is_ascii_alphanumeric() || b"-_.@#".contains(b))
                 && (bytes[0].is_ascii_alphanumeric() || bytes[0] == b'#')
                 && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        }
+        "owner" => {
+            (1..=MAX_VALUE_LEN).contains(&value.len())
+                && bytes
+                    .iter()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(b))
+                && bytes[0].is_ascii_alphanumeric()
+                && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+                && !value.contains("//")
         }
         "ferritor.rotation" => value == "true",
         _ => label_shape(value, MAX_VALUE_LEN),

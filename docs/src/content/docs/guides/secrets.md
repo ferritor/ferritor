@@ -94,7 +94,8 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   Anything else is refused, never rewritten, and so is a change that sets
   and removes nothing. Two keys take wider values (below).
 - **Metadata keys**, all optional, for who to ask about a secret:
-  - `owner`: a team or a person, by the rule above;
+  - `owner`: a team, a person or a ferritor identity, the rule's
+    characters and `/` (`billing-team`, `apps/billing`), no `//`;
   - `contact`: an email address or a chat channel, the rule's characters
     and `@` and `#` (`alice@example.com`, `#billing-oncall`);
   - `description`: what it is, printable ASCII with spaces, not beginning

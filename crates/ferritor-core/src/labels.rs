@@ -30,7 +30,9 @@
 //! - [`CONTACT`] (`contact`): the rule's alphabet and `@` and `#` (an
 //!   email address, a chat channel), beginning with a letter, a digit or
 //!   `#`, ending with a letter or digit.
-//! - [`OWNER`] (`owner`): the rule, like any key.
+//! - [`OWNER`] (`owner`): the rule's alphabet and `/`, so it can name a
+//!   ferritor identity (`apps/billing`) as well as a team; beginning and
+//!   ending with a letter or digit, no `//`.
 //!
 //! Still nothing invisible or confusable fits, and like every label they're
 //! readable by anyone who may list the path: a contact may be personal
@@ -49,7 +51,8 @@ pub const MAX_VALUE_LEN: usize = 63;
 /// The longest [`DESCRIPTION`].
 pub const MAX_DESCRIPTION_LEN: usize = 255;
 
-/// Who a secret belongs to: a team or a person, by the usual rule.
+/// Who a secret belongs to: a team, a person, or a ferritor identity
+/// (`apps/billing`).
 pub const OWNER: &str = "owner";
 /// Who to ask about it: an email address or a chat channel.
 pub const CONTACT: &str = "contact";
@@ -176,6 +179,7 @@ fn value_alphabet(key: &str) -> &'static str {
     match key {
         DESCRIPTION => "only printable ASCII is allowed (letters, digits, punctuation, spaces)",
         CONTACT => "only ASCII letters, digits, `-`, `_`, `.`, `@` and `#` are allowed",
+        OWNER => "only ASCII letters, digits, `-`, `_`, `.` and `/` are allowed",
         _ => "only ASCII letters, digits, `-`, `_` and `.` are allowed",
     }
 }
@@ -184,6 +188,7 @@ fn value_ends(key: &str) -> &'static str {
     match key {
         DESCRIPTION => "not begin or end with a space",
         CONTACT => "begin with a letter, a digit or `#`, and end with a letter or digit",
+        OWNER => "begin and end with a letter or digit, with no `//`",
         _ => "begin and end with a letter or digit",
     }
 }
@@ -214,6 +219,20 @@ fn value_shape(key: &str, value: &str) -> Result<(), Option<char>> {
                 .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'#');
             let last = bytes.last().is_some_and(u8::is_ascii_alphanumeric);
             if first && last { Ok(()) } else { Err(None) }
+        }
+        OWNER => {
+            if let Some(c) = value
+                .chars()
+                .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')))
+            {
+                return Err(Some(c));
+            }
+            let edge = |b: Option<&u8>| b.is_some_and(u8::is_ascii_alphanumeric);
+            let bytes = value.as_bytes();
+            if !edge(bytes.first()) || !edge(bytes.last()) || value.contains("//") {
+                return Err(None);
+            }
+            Ok(())
         }
         _ => shape(value),
     }
@@ -517,12 +536,32 @@ mod tests {
                 "{bad}"
             );
         }
-        // Not wider for any other key: owner, or a look-alike.
-        for key in [OWNER, "team", "descriptions"] {
+        // owner: a team, or a ferritor identity.
+        for ok in [
+            "billing-team",
+            "apps/billing",
+            "ops/alice",
+            "k8s/billing/api",
+        ] {
+            assert_eq!(check_value(OWNER, ok), Ok(()), "{ok}");
+        }
+        for bad in ["/apps", "apps/", "apps//billing"] {
+            assert_eq!(
+                check_value(OWNER, bad),
+                Err(LabelError::ValueEnds(OWNER.to_owned())),
+                "{bad}"
+            );
+        }
+        assert!(matches!(
+            check_value(OWNER, "two words"),
+            Err(LabelError::InvalidValueChar { char: ' ', .. })
+        ));
+        // Not wider for any other key, a look-alike included.
+        for key in ["team", "descriptions", "owners"] {
             assert!(check_value(key, "two words").is_err(), "{key}");
             assert!(check_value(key, "a@b").is_err(), "{key}");
+            assert!(check_value(key, "apps/billing").is_err(), "{key}");
         }
-        assert_eq!(check_value(OWNER, "billing-team"), Ok(()));
         // As a CLI argument: `description="two words"` arrives as one.
         assert_eq!(
             parse_pair("description=two words"),
