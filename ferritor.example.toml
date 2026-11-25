@@ -43,7 +43,9 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #lock_timeout_ms = 2000
 
 # Days a deleted secret version can still be restored (`ferritor restore`)
-# before `ferritor purge` may remove it for good. 0 makes every deletion
+# before purge may remove it for good. Past it, the next purge removes it:
+# the servers run one every purge_interval_minutes (below), unless every one
+# is sealed, the purge is paused, or its runs fail. 0 makes every deletion
 # purgeable at once (warned about at startup).
 #purge_deleted_after_days = 30
 
@@ -77,6 +79,16 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #kek_max_age_days = 365
 #root_key_max_age_days = 365
 #rotation_warn_days = 14
+
+# Scheduled tasks, in minutes: how often the servers purge deleted versions
+# past their retention, and rewrap (move DEKs to each namespace's active
+# KEK, retire the drained ones). One schedule shared by every server through
+# the data database: each task runs once per interval, on one of them,
+# whichever claims it (keep these alike on every server). From 1 to 43200;
+# reloaded on SIGHUP. `ferritor schedule pause <task>` stops a task on every
+# server.
+#purge_interval_minutes = 1440
+#rewrap_interval_minutes = 60
 
 # The Ed25519 key (PKCS#8 PEM) that signs the audit log's checkpoints.
 # Required in secured mode; optional in dev mode (the log is then chained but
@@ -153,7 +165,7 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #[[policy]]
 #name = "ops-admin"
 #identity = "ops/alice"
-#actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity"]
+#actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity", "schedule"]
 #
 #[[policy]]
 #identity = "apps/billing"

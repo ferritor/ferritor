@@ -165,6 +165,18 @@ pipelines (metrics, application logs) needn't keep them.
 - **Failed authentication** (`"event": "authentication"`): a certificate that
   passed the handshake but names no caller now (expired, revoked, no valid
   identity), with peer, action and reason.
+- **Scheduled runs** (`"event": "scheduled"`, [scheduled
+  tasks](/operations/running#scheduled-tasks)): a purge or rewrap the
+  servers start on their own, with `"caller": "ferritor:scheduler"` (no
+  identity can be that name: a `:` is never in one), the `action` and the
+  `task`. Written before the run's first batch, like an allowed request's
+  decision: one that can't be recorded doesn't run. Its outcome follows
+  when it ends (`"event": "outcome"`, the same caller): `succeeded` with
+  what it did (`purged`, or `rewrapped`, `failed`, `retired`,
+  `released`), or `failed` with why (`interrupted: sealed`, `paused`,
+  `shutting down`; `failed: …`; `lost: its lease ran out`) and what it
+  did before stopping: after an error, at least that much (the failing
+  call may have committed batches of its own before it failed).
 - **Token exchanges** (`"event": "exchange"`, [workload
   identity](/guides/workload-identity)): every certificate issued (`"outcome":
   "issued"`: peer, issuer, identity, the claims the mapping read, serial,
@@ -215,7 +227,8 @@ per stream.
 ## Fails closed
 
 An allowed request whose entry isn't written and flushed within 2 s is
-**refused** (`UNAVAILABLE`, reason `UNAUDITED`), before it touches any data.
+**refused** (`UNAVAILABLE`, reason `UNAUDITED`), before it touches any data;
+so is a scheduled run (it's tried again a minute later).
 Seal is the exception, as the emergency stop: its entry is queued without
 waiting. Outcomes are queued too, since nothing can be refused by then, and
 so are the rate-limit episodes, so a flood never waits on the audit

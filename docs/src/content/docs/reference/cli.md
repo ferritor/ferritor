@@ -120,7 +120,7 @@ commands under one workload identity, exchange once with `ferritor login`
 
 | Command | Options | |
 |---|---|---|
-| `ferritor status` | | whether the server is initialized and sealed, its shares and threshold, the root key's generation, an unseal or rekey in progress, auto-unseal, how many namespaces; the rotation reminders: when the root key's rotation is due, how many namespaces' KEKs are overdue or due soon, and with the `namespace` action each namespace's active KEK and its due date ([key management](/operations/key-management#unseal-and-seal)) |
+| `ferritor status` | | whether the server is initialized and sealed, its shares and threshold, the root key's generation, an unseal or rekey in progress, auto-unseal, how many namespaces; the rotation reminders: when the root key's rotation is due, how many namespaces' KEKs are overdue or due soon, and with the `namespace` action each namespace's active KEK and its due date ([key management](/operations/key-management#unseal-and-seal)); the scheduled tasks: when each is next due, how its last run ended, whether it's paused or running ([scheduled tasks](/operations/running#scheduled-tasks)) |
 | `ferritor init` | `--shares` (5), `--threshold` (3) | create the root key and print its shares, once only ([key management](/operations/key-management#init)) |
 | `ferritor unseal` | `--reset`, `--recommit`, `--auto`, `--release-hold` | submit one share from stdin; `--reset` discards those submitted so far, `--recommit` stores a missing root commitment once a secret proves the key ([the root commitment](/operations/key-management#the-root-commitment)), `--auto` releases the auto-unseal hold and unseals through the KMS, `--release-hold` releases it once unsealed ([auto-unseal](/operations/key-management#auto-unseal)) |
 | `ferritor seal` | | drop the server's keys; always succeeds, and holds auto-unseal ([unseal and seal](/operations/key-management#unseal-and-seal)) |
@@ -129,9 +129,11 @@ commands under one workload identity, exchange once with `ferritor login`
 | `ferritor rekey verify` | `--nonce` | one new share (stdin); the last commits the rekey |
 | `ferritor rekey cancel` | `--nonce` | abandon it; the current shares keep working |
 | `ferritor rotate` | `--namespace` | a new active KEK for a namespace ([rotate](/operations/key-management#rotate-a-new-kek)) |
-| `ferritor rewrap` | `--namespace` (every one), `--max-rows` (the server's) | move DEKs onto the active KEK, then retire versions nothing uses; repeats until done, safe to interrupt ([rewrap](/operations/key-management#rewrap-and-retire)) |
-| `ferritor purge` | `--max-rows` (the server's) | remove deleted versions past the server's retention for good; for cron ([routine tasks](/operations/running#routine-tasks)) |
+| `ferritor rewrap` | `--namespace` (every one), `--max-rows` (the server's) | move DEKs onto the active KEK, then retire versions nothing uses, now (the servers also do it on a schedule); repeats until done, safe to interrupt ([rewrap](/operations/key-management#rewrap-and-retire)) |
+| `ferritor purge` | `--max-rows` (the server's) | remove deleted versions past the server's retention for good, now (the servers also do it on a schedule: [scheduled tasks](/operations/running#scheduled-tasks)) |
 | `ferritor destroy-kek` | `--namespace`, `VERSION` | destroy a retired KEK for good: irreversible ([destroy](/operations/key-management#destroy-a-retired-kek)) |
+| `ferritor schedule pause` | `TASK` (`purge`, `rewrap`) | stop a task on every server, scheduled or by hand: none claims it, `ferritor purge` or `rewrap` is refused, and a run under way ends at its next batch; the `schedule` action ([scheduled tasks](/operations/running#scheduled-tasks)) |
+| `ferritor schedule resume` | `TASK` | let it run again, at once if it's due |
 
 ### Namespaces
 

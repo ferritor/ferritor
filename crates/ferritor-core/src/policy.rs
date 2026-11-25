@@ -60,6 +60,7 @@ pub const ADMIN_ACTIONS: &[&str] = &[
     "namespace",
     "policy",
     "identity",
+    "schedule",
 ];
 
 impl SecretAction {

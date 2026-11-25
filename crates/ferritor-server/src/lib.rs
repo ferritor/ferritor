@@ -30,6 +30,7 @@ pub mod ratelimit;
 pub mod rewrap;
 pub mod root_ledger;
 pub mod rotation;
+pub mod schedule;
 pub mod seal;
 pub mod secrets;
 pub mod tls;

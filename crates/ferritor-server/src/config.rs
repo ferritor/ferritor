@@ -112,6 +112,13 @@ pub struct Settings {
     /// How many days before its maximum something counts as due soon:
     /// below the shortest of the three. Default 14.
     pub rotation_warn_days: u32,
+    /// Scheduled tasks (see `schedule`): how often purge runs, in minutes.
+    /// Default 1440 (daily). From 1 to 43200 (30 days); reloaded on
+    /// SIGHUP. Every server shares one schedule: keep it alike on all of
+    /// them (the server claiming a run sets the next one from its own).
+    pub purge_interval_minutes: u32,
+    /// How often rewrap runs, in minutes. Default 60.
+    pub rewrap_interval_minutes: u32,
     /// The Ed25519 private key (PKCS#8 PEM, e.g. `openssl genpkey
     /// -algorithm ed25519`) that signs the audit log's checkpoints (see
     /// `audit`), so edits to the log can be detected with the public key
@@ -505,6 +512,14 @@ impl Settings {
                 crate::rotation::DEFAULT.root_key_max_age_days,
             )?
             .set_default("rotation_warn_days", crate::rotation::DEFAULT.warn_days)?
+            .set_default(
+                "purge_interval_minutes",
+                crate::schedule::DEFAULT.purge_minutes,
+            )?
+            .set_default(
+                "rewrap_interval_minutes",
+                crate::schedule::DEFAULT.rewrap_minutes,
+            )?
             .build()?
             .try_deserialize()?;
         ensure_timeouts(settings.database_timeout_ms, settings.lock_timeout_ms)?;
@@ -515,6 +530,7 @@ impl Settings {
         ensure_shutdown_delay(settings.shutdown_delay_secs)?;
         settings.limits().map_err(config::ConfigError::Message)?;
         settings.rotation().map_err(config::ConfigError::Message)?;
+        settings.schedule().map_err(config::ConfigError::Message)?;
         settings.identity().map_err(config::ConfigError::Message)?;
         settings.metrics().map_err(config::ConfigError::Message)?;
         if let Some(otlp) = &settings.audit_otlp {
@@ -626,6 +642,11 @@ impl Settings {
             self.root_key_max_age_days,
             self.rotation_warn_days,
         )
+    }
+
+    /// The scheduled tasks' intervals, checked (see [`crate::schedule`]).
+    pub fn schedule(&self) -> Result<crate::schedule::Intervals, String> {
+        crate::schedule::Intervals::new(self.purge_interval_minutes, self.rewrap_interval_minutes)
     }
 }
 
@@ -979,6 +1000,8 @@ pub const KNOWN_KEYS: &[&str] = &[
     "kek_max_age_days",
     "root_key_max_age_days",
     "rotation_warn_days",
+    "purge_interval_minutes",
+    "rewrap_interval_minutes",
     "audit_signing_key",
     "audit_file",
     "audit_file_max_bytes",
@@ -1715,6 +1738,7 @@ mod tests {
             Action::Namespace,
             Action::Policy,
             Action::Identity,
+            Action::Schedule,
         ] {
             assert!(action.is_admin());
             assert!(
@@ -1799,6 +1823,7 @@ mod tests {
              keys_database_max_connections = 4\ndata_database_max_connections = 32\n\
              purge_deleted_after_days = 7\nmax_versions = 3\nkeyring_refresh_secs = 30\npolicy_refresh_secs = 2\nshutdown_delay_secs = 5\n\
              rotation_max_age_days = 60\nkek_max_age_days = 180\nroot_key_max_age_days = 400\nrotation_warn_days = 10\n\
+             purge_interval_minutes = 720\nrewrap_interval_minutes = 30\n\
              {TLS}\n{POLICY}\n\
              [rate_limit]\nserver_max_in_flight = 40\nmax_in_flight = 8\nrequests_per_second = 50\nburst = 60\n\
              [[rate_limit.identity]]\nidentity = \"apps/a\"\nmax_in_flight = 4\nrequests_per_second = 5\nburst = 6\n\
@@ -1814,7 +1839,9 @@ mod tests {
         assert_eq!(parse("").unwrap().policy_refresh_secs, 5);
         assert_eq!(all.shutdown_delay_secs, 5);
         assert_eq!(parse("").unwrap().shutdown_delay_secs, 0);
-        assert_eq!(KNOWN_KEYS.len(), 27);
+        assert_eq!(KNOWN_KEYS.len(), 29);
+        assert_eq!(all.schedule(), crate::schedule::Intervals::new(720, 30));
+        assert_eq!(parse("").unwrap().schedule(), Ok(crate::schedule::DEFAULT));
         assert_eq!(
             all.rotation(),
             crate::rotation::Policy::new(60, 180, 400, 10)
@@ -1826,6 +1853,11 @@ mod tests {
             ("rotation_max_age_days = 0", "rotation_max_age_days (0)"),
             ("kek_max_age_days = 4000", "kek_max_age_days (4000)"),
             ("rotation_warn_days = 90", "below the shortest"),
+            ("purge_interval_minutes = 0", "purge_interval_minutes (0)"),
+            (
+                "rewrap_interval_minutes = 50000",
+                "rewrap_interval_minutes (50000)",
+            ),
         ] {
             let error = parse(bad).unwrap_err();
             assert!(error.contains(says), "{bad}: {error}");

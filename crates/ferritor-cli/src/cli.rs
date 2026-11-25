@@ -107,8 +107,9 @@ pub enum Command {
     },
     /// After a rotation: move DEKs still wrapped by older KEK versions of
     /// their namespace to its active one, then retire versions no secret
-    /// uses any more. Repeats the server's bounded pass until done; safe to
-    /// rerun or interrupt.
+    /// uses any more, now: the servers also do it on their own, on a
+    /// schedule. Repeats the server's bounded pass until done; safe to rerun
+    /// or interrupt.
     Rewrap {
         /// Rows per call (0: the server's default).
         #[arg(long, default_value_t = 0)]
@@ -118,8 +119,9 @@ pub enum Command {
         namespace: Option<String>,
     },
     /// Remove deleted secret versions for good once they're past the server's
-    /// retention (its `purge_deleted_after_days`). Repeats the server's
-    /// bounded pass until done; safe to rerun or interrupt, e.g. from cron.
+    /// retention (its `purge_deleted_after_days`), now: the servers also do
+    /// it on their own, on a schedule. Repeats the server's bounded pass
+    /// until done; safe to rerun or interrupt.
     Purge {
         /// Rows per call (0: the server's default).
         #[arg(long, default_value_t = 0)]
@@ -150,6 +152,11 @@ pub enum Command {
     /// short-lived client certificates workloads get for a platform token.
     #[command(subcommand)]
     Identity(IdentityCommand),
+    /// Pause or resume a scheduled task (purge, rewrap: the servers run
+    /// them on their own) on every server. The schedule itself is in
+    /// `ferritor status`.
+    #[command(subcommand)]
+    Schedule(ScheduleCommand),
     /// Exchange --token-file at --exchange for a short-lived client
     /// certificate, and write it and its key for later commands (--cert,
     /// --key): one exchange for a CI job's many commands.
@@ -254,6 +261,23 @@ pub enum Metadata {
         path: String,
         #[arg(required = true, value_name = "KEY")]
         keys: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ScheduleCommand {
+    /// Stop a task on every server, scheduled or by hand: none claims it,
+    /// `ferritor purge` or `rewrap` is refused, and a run under way ends at
+    /// its next batch. For an incident: purge deletes for good, and
+    /// deleted versions are the only way to restore.
+    Pause {
+        #[arg(value_parser = ["purge", "rewrap"])]
+        task: String,
+    },
+    /// Let a paused task run again (at once, if it's due).
+    Resume {
+        #[arg(value_parser = ["purge", "rewrap"])]
+        task: String,
     },
 }
 

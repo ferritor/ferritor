@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use ferritor_core::messages::SEALED;
 use ferritor_core::path::Namespace;
-use ferritor_datastore::{Datastore, DatastoreError, Rewrapped, RowKey};
+use ferritor_datastore::{Datastore, DatastoreError, Rewrapped, RowKey, Task};
 
 use crate::seal::{Seal, SealError};
 
@@ -47,6 +47,10 @@ pub const MAX_ROWS: u32 = 50_000;
 pub enum RewrapError {
     #[error("{}", SEALED)]
     Sealed,
+    /// Paused for every server (`ferritor schedule pause rewrap`): by hand
+    /// as on the schedule.
+    #[error("rewrap is paused for every server: `ferritor schedule resume rewrap` first")]
+    Paused,
     #[error("the data database did not respond in time")]
     DataTimeout,
     /// The active KEK of this server's keyring is below the KEK floor:
@@ -124,6 +128,9 @@ impl Rewrap {
             n => n.min(MAX_ROWS),
         };
         let epoch = self.seal.unsealed_epoch()?;
+        if self.store.task_paused(Task::Rewrap).await? {
+            return Err(RewrapError::Paused);
+        }
         let namespaces: Vec<Namespace> = {
             let keyring = self.seal.keyring_at(epoch)?;
             keyring
@@ -149,6 +156,10 @@ impl Rewrap {
                 loop {
                     if budget == 0 {
                         return Ok(report);
+                    }
+                    // A pause stops a manual pass too, at its next batch.
+                    if self.store.task_paused(Task::Rewrap).await? {
+                        return Err(RewrapError::Paused);
                     }
                     let rows = self
                         .store

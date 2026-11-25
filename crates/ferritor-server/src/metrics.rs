@@ -49,6 +49,10 @@
 //! | `ferritor.watch.feed.live` | gauge | (1 while the change feed polls the data database, 0 while it can't) |
 //! | `ferritor.watch.feed.held_back` | gauge (s) | (how long one transaction, open on the data database's Postgres server, has held the change feed back; 0 normally) |
 //! | `ferritor.watch.resyncs` | counter | `reason` (too_many, restarted: every stream told; lagged: one stream behind) |
+//! | `ferritor.schedule.runs` | counter | `task` (purge, rewrap), `result` (ok, failed, interrupted, lost): the runs this server made |
+//! | `ferritor.schedule.run.duration` | histogram (s) | `task` |
+//! | `ferritor.schedule.last_success` | gauge (unix s) | `task` (when a run, on any server, last finished everything: the shared schedule's, so every server reports the same; absent before the first) |
+//! | `ferritor.schedule.paused` | gauge | `task` (1 paused for every server, 0 not) |
 //!
 //! A secret request's `result` is `ok` or the error's category (`denied`,
 //! `sealed`, `not_found`, `version_mismatch`, …: see `secrets`).
@@ -111,6 +115,8 @@ pub struct Metrics {
     rate_limit_waited: Histogram<f64>,
     exchanges: Counter<u64>,
     watch_resyncs: Counter<u64>,
+    scheduled_runs: Counter<u64>,
+    scheduled_run_duration: Histogram<f64>,
     auto_unseals: Counter<u64>,
 }
 
@@ -207,6 +213,18 @@ impl Metrics {
                     "Watch streams told to read everything again, by reason: too_many and \
                      restarted count once for every stream, lagged once per stream",
                 )
+                .build(),
+            scheduled_runs: meter
+                .u64_counter("ferritor.schedule.runs")
+                .with_description("Scheduled runs this server made, by task and result")
+                .build(),
+            scheduled_run_duration: meter
+                .f64_histogram("ferritor.schedule.run.duration")
+                .with_unit("s")
+                .with_description("How long a scheduled run took, by task")
+                .with_boundaries(vec![
+                    0.01, 0.1, 1.0, 10.0, 60.0, 300.0, 900.0, 3600.0, 14_400.0,
+                ])
                 .build(),
         }
     }
@@ -305,6 +323,17 @@ impl Metrics {
             .add(1, &[KeyValue::new("reason", reason)]);
     }
 
+    /// A scheduled run ended (see `schedule`): `result` is ok, failed,
+    /// interrupted or lost.
+    pub fn scheduled_run(&self, task: &'static str, result: &'static str, took: Duration) {
+        self.scheduled_runs.add(
+            1,
+            &[KeyValue::new("task", task), KeyValue::new("result", result)],
+        );
+        self.scheduled_run_duration
+            .record(took.as_secs_f64(), &[KeyValue::new("task", task)]);
+    }
+
     /// `result`: the auto-unseal attempt's (see [`crate::seal::AutoReport`]).
     pub fn auto_unseal(&self, result: &'static str) {
         self.auto_unseals.add(1, &[KeyValue::new("result", result)]);
@@ -354,6 +383,48 @@ pub fn observe_watch(watch: Arc<Watch>) -> Vec<ObservableGauge<u64>> {
 /// absent until counted once. Every server counts the same, so alerts take
 /// the `max()` across them. Keep the returned handles for as long as they
 /// should report.
+/// The shared schedule's gauges, from the rows each tick reads (see
+/// [`crate::schedule::ScheduleStates`]): every server reports the same
+/// values, so an alert works whichever is scraped. Absent until the first
+/// read. Keep the handles for as long as they should report.
+pub fn observe_schedule(states: Arc<crate::schedule::ScheduleStates>) -> Vec<ObservableGauge<u64>> {
+    let meter = meter();
+    let last_success = {
+        let states = Arc::clone(&states);
+        meter
+            .u64_observable_gauge("ferritor.schedule.last_success")
+            .with_unit("s")
+            .with_description(
+                "When a scheduled run of the task, on any server, last finished everything \
+                 (unix time)",
+            )
+            .with_callback(move |gauge| {
+                for state in states.get() {
+                    if let Some(at) = state
+                        .last_success
+                        .and_then(|at| u64::try_from(at.unix_timestamp()).ok())
+                    {
+                        gauge.observe(at, &[KeyValue::new("task", state.task.name())]);
+                    }
+                }
+            })
+            .build()
+    };
+    let paused = meter
+        .u64_observable_gauge("ferritor.schedule.paused")
+        .with_description("1 if the scheduled task is paused for every server, 0 if not")
+        .with_callback(move |gauge| {
+            for state in states.get() {
+                gauge.observe(
+                    u64::from(state.paused),
+                    &[KeyValue::new("task", state.task.name())],
+                );
+            }
+        })
+        .build();
+    vec![last_success, paused]
+}
+
 pub fn observe_rotation(counts: Arc<crate::rotation::RotationCounts>) -> Vec<ObservableGauge<u64>> {
     use crate::rotation::{RotationCounts, Tally};
     let meter = meter();

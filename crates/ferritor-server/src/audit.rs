@@ -601,6 +601,10 @@ pub enum PolicyReload {
     Failed(String),
 }
 
+/// Where a caller would be, in the scheduler's entries (see `schedule`):
+/// no identity can be it (one never holds a `:`), so it's never a caller's.
+pub const SCHEDULER: &str = "ferritor:scheduler";
+
 /// What an admin call did, for [`Gate::outcome`].
 #[derive(Debug)]
 pub enum Outcome {
@@ -1531,6 +1535,43 @@ impl Gate {
         operation: &'static str,
         outcome: Outcome,
     ) {
+        self.record_outcome(caller_name(caller), action, target, operation, outcome);
+    }
+
+    /// Records that a scheduled run of `task` starts (see `schedule`), as
+    /// [`SCHEDULER`], and waits for it to be written: fail closed, like an
+    /// allowed request, so the run must not start if this fails.
+    pub async fn scheduled(&self, action: Action, task: &'static str) -> Result<(), AuditError> {
+        let recorded = line(Event::Scheduled {
+            caller: SCHEDULER,
+            action,
+            task,
+        });
+        match recorded {
+            Ok(line) => self.log.written(line).await,
+            Err(e) => Err(e),
+        }
+        .inspect_err(|e| {
+            let error = crate::error_chain(e);
+            tracing::error!(%error, task, "AUDIT LOG FAILED: a scheduled run didn't start");
+            metrics().audit_failure("refused");
+        })
+    }
+
+    /// Records how a scheduled run of `task` ended, as [`SCHEDULER`].
+    /// Queued, like any outcome.
+    pub fn scheduled_outcome(&self, action: Action, task: &'static str, outcome: Outcome) {
+        self.record_outcome(Some(SCHEDULER), action, Target::System, task, outcome);
+    }
+
+    fn record_outcome(
+        &self,
+        caller: Option<&str>,
+        action: Action,
+        target: Target<'_>,
+        operation: &'static str,
+        outcome: Outcome,
+    ) {
         let (result, details, error) = match outcome {
             Outcome::Succeeded(details) => ("succeeded", Some(details), None),
             Outcome::Failed { error, details } => ("failed", details, Some(error)),
@@ -1540,7 +1581,7 @@ impl Gate {
             metrics().admin_outcome(operation, result);
         }
         let recorded = line(Event::Outcome {
-            caller: caller_name(caller),
+            caller,
             action,
             target: target.into(),
             operation,
@@ -1551,7 +1592,8 @@ impl Gate {
         .and_then(|line| self.log.queued(line));
         if let Err(e) = recorded {
             let error = crate::error_chain(&e);
-            tracing::error!(%error, %caller, operation, result, "AUDIT LOG FAILED: an outcome went unrecorded");
+            let caller = caller.unwrap_or("unauthenticated");
+            tracing::error!(%error, caller, operation, result, "AUDIT LOG FAILED: an outcome went unrecorded");
             metrics().audit_failure("lost");
         }
     }
@@ -1749,6 +1791,13 @@ enum Event<'a> {
         crls: Option<Option<Vec<CrlInfo>>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+    },
+    /// A scheduled run starts (see `schedule`), written before its first
+    /// batch.
+    Scheduled {
+        caller: &'static str,
+        action: Action,
+        task: &'static str,
     },
     Outcome {
         caller: Option<&'a str>,

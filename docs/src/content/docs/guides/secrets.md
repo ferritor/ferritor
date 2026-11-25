@@ -60,8 +60,12 @@ have that number.
 - **Purge** removes deleted versions for good once they're past the
   retention (`purge_deleted_after_days`, default 30, a server setting so a
   caller can't purge recent deletions). It never touches a live version and
-  never frees a version number. Run it from cron or a systemd timer; see
-  [operations](/operations/running).
+  never frees a version number. Past the retention, a deleted version is
+  removed by the next purge, which the servers run on their own, daily by
+  default (`purge_interval_minutes`, [scheduled
+  tasks](/operations/running#scheduled-tasks)): later while every server is
+  sealed, the purge is paused, or its runs fail. `ferritor purge` runs it
+  now.
 
 ## Metadata and labels
 

@@ -189,7 +189,7 @@ client_ca = "/etc/ferritor/client-ca.pem"
 [[policy]]
 name = "ops-admin"
 identity = "ops/alice"
-actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity"]
+actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity", "schedule"]
 ```
 
 Keep the database passwords out of the file: pass the URLs as

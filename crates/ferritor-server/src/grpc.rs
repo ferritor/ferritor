@@ -18,7 +18,9 @@ use ferritor_core::proto::v1 as pb;
 use ferritor_core::proto::v1::policy_service_server::{PolicyService, PolicyServiceServer};
 use ferritor_core::proto::v1::secrets_service_server::{SecretsService, SecretsServiceServer};
 use ferritor_core::proto::v1::system_service_server::SystemService;
-use ferritor_datastore::{Datastore, DatastoreError, PathMetadata, SecretMetadata};
+use ferritor_datastore::{
+    Datastore, DatastoreError, PathMetadata, SecretMetadata, Task, TaskState,
+};
 use serde_json::json;
 use tonic::{Code, Request, Response, Status};
 use tonic_types::{ErrorDetails, StatusExt};
@@ -373,12 +375,32 @@ impl From<Refused> for Status {
     }
 }
 
+/// A scheduled task's row, as `StatusResponse` carries it.
+fn scheduled_task(state: TaskState) -> pb::ScheduledTask {
+    let unix = |t: time::OffsetDateTime| t.unix_timestamp();
+    pb::ScheduledTask {
+        task: state.task.name().to_owned(),
+        next_due_unix: unix(state.next_due),
+        paused: state.paused,
+        running: state.running,
+        last_started_unix: state.last_started.map(unix),
+        last_finished_unix: state.last_finished.map(unix),
+        last_result: state.last_result.unwrap_or_default(),
+        last_success_unix: state.last_success.map(unix),
+    }
+}
+
 impl From<PurgeError> for Status {
     fn from(e: PurgeError) -> Self {
         match e {
             PurgeError::Sealed => {
                 with_reason(Code::FailedPrecondition, error_chain(&e), reason::SEALED)
             }
+            PurgeError::Paused => with_reason(
+                Code::FailedPrecondition,
+                error_chain(&e),
+                reason::TASK_PAUSED,
+            ),
             PurgeError::DataTimeout => Status::unavailable(error_chain(&e)),
             PurgeError::Store(_) => {
                 tracing::error!(error = %error_chain(&e), "internal error");
@@ -446,6 +468,11 @@ impl From<RewrapError> for Status {
             RewrapError::Sealed => {
                 with_reason(Code::FailedPrecondition, error_chain(&e), reason::SEALED)
             }
+            RewrapError::Paused => with_reason(
+                Code::FailedPrecondition,
+                error_chain(&e),
+                reason::TASK_PAUSED,
+            ),
             RewrapError::DataTimeout | RewrapError::StaleKeyring(_) => {
                 Status::unavailable(error_chain(&e))
             }
@@ -849,6 +876,16 @@ impl SystemService for System {
             (None, crate::rotation::Tally::default(), Vec::new())
         };
         let total = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+        // The shared schedule, sealed or not (no key material); a data
+        // database that doesn't answer leaves it out rather than failing
+        // the status.
+        let scheduled_tasks = match self.store.scheduled_tasks().await {
+            Ok((tasks, _)) => tasks.into_iter().map(scheduled_task).collect(),
+            Err(e) => {
+                tracing::warn!(error = %error_chain(&e), "status without the schedule");
+                Vec::new()
+            }
+        };
         Ok(Response::new(pb::StatusResponse {
             status: Some(seal_status(
                 status,
@@ -864,7 +901,70 @@ impl SystemService for System {
             keks_rotation_overdue: total(keks_tally.overdue),
             keks_rotation_due_soon: total(keks_tally.due_soon),
             active_keks,
+            scheduled_tasks,
         }))
+    }
+
+    async fn set_task_paused(
+        &self,
+        request: Request<pb::SetTaskPausedRequest>,
+    ) -> Result<Response<pb::SetTaskPausedResponse>, Status> {
+        let caller = self.allow(&request, Action::Schedule).await?;
+        let req = request.into_inner();
+        let operation = if req.paused {
+            "pause_task"
+        } else {
+            "resume_task"
+        };
+        let Some(task) = Task::from_name(&req.task) else {
+            let error = format!(
+                "no scheduled task `{}`: {}",
+                req.task,
+                Task::ALL.map(Task::name).join(", ")
+            );
+            // Allowed, so its end is recorded too, as for every admin call.
+            self.gate.outcome(
+                &caller,
+                Action::Schedule,
+                Target::System,
+                operation,
+                Outcome::Failed {
+                    error: error.clone(),
+                    details: None,
+                },
+            );
+            return Err(Status::invalid_argument(error));
+        };
+        let result = self.store.set_task_paused(task, req.paused).await;
+        let outcome = match &result {
+            Ok(was_paused) => Outcome::Succeeded(json!({
+                "task": task.name(),
+                "paused": req.paused,
+                "was_paused": was_paused,
+            })),
+            // One statement: it may have committed before the answer was lost.
+            Err(e) => Outcome::Unknown(error_chain(e)),
+        };
+        self.gate.outcome(
+            &caller,
+            Action::Schedule,
+            Target::System,
+            operation,
+            outcome,
+        );
+        let was_paused = result.map_err(|e| match e {
+            DatastoreError::Timeout => Status::unavailable(error_chain(&e)),
+            other => {
+                tracing::error!(error = %error_chain(&other), "internal error");
+                Status::internal("internal error")
+            }
+        })?;
+        tracing::info!(
+            task = task.name(),
+            paused = req.paused,
+            "scheduled task {operation}d"
+        );
+        Ok(Response::new(pb::SetTaskPausedResponse { was_paused }))
     }
 
     async fn unseal(
@@ -1123,6 +1223,18 @@ impl SystemService for System {
         } else {
             Some(self.namespace(&caller, Action::Rewrap, "rewrap", &req.namespace)?)
         };
+        // First the keyring as stored, as a scheduled rewrap does: a server
+        // that missed another's rotation would take the old KEK for the
+        // active one and skip its rows. A failed refresh only warns: rewrap
+        // with what this server holds is also the rescue of vanished KEKs.
+        if let Err(e) = keyring::refresh(&self.seal, &self.gate, "rewrap", None, true).await
+            && !matches!(e, SealError::Sealed)
+        {
+            tracing::warn!(
+                error = %error_chain(&e),
+                "rewrap with this server's keyring as it is: the refresh failed"
+            );
+        }
         let result = self.rewrap.run(namespace.as_ref(), req.max_rows).await;
         let outcome = match &result {
             Ok(report) => Outcome::Succeeded(json!({

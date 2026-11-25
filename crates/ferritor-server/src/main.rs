@@ -24,6 +24,7 @@ use ferritor_server::policies::Policies;
 use ferritor_server::purge::Purge;
 use ferritor_server::rewrap::Rewrap;
 use ferritor_server::rotation::{Kind, Rotation, RotationCounts, Tally};
+use ferritor_server::schedule::{Schedule, Scheduler};
 use ferritor_server::seal::{Seal, SealError};
 use ferritor_server::secrets::Secrets;
 use ferritor_server::tls;
@@ -220,6 +221,7 @@ async fn reload_on_hangup(
     gate: Arc<Gate>,
     exchange: Option<Arc<Exchange>>,
     rotation: Arc<Rotation>,
+    schedule: Arc<Schedule>,
 ) {
     while hangup.recv().await.is_some() {
         // First, so everything this reload records lands in the new file.
@@ -273,6 +275,22 @@ async fn reload_on_hangup(
                 tracing::error!(
                     %error,
                     "ROTATION AGES NOT RELOADED: still running the previous ones"
+                );
+            }
+        }
+        match settings.schedule() {
+            Ok(intervals) => {
+                tracing::info!(
+                    purge_minutes = intervals.purge_minutes,
+                    rewrap_minutes = intervals.rewrap_minutes,
+                    "reloaded the scheduled tasks' intervals"
+                );
+                schedule.reload(intervals);
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "SCHEDULE NOT RELOADED: still running the previous intervals"
                 );
             }
         }
@@ -731,6 +749,14 @@ async fn main() -> anyhow::Result<()> {
         "rotation reminders (reloaded on SIGHUP; a reminder, never a refusal)"
     );
     let rotation = Arc::new(Rotation::new(policy));
+    // The scheduled tasks' intervals, swapped on SIGHUP.
+    let intervals = settings.schedule().map_err(anyhow::Error::msg)?;
+    tracing::info!(
+        purge_minutes = intervals.purge_minutes,
+        rewrap_minutes = intervals.rewrap_minutes,
+        "scheduled tasks (reloaded on SIGHUP; one schedule shared by every server)"
+    );
+    let schedule = Arc::new(Schedule::new(intervals));
     tracing::info!(
         server_max_in_flight = limits.server_max_in_flight.get(),
         "rate limits in force (reloaded on SIGHUP; the server-wide cap at restart)"
@@ -830,6 +856,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&gate),
         exchange.as_ref().map(|(_, exchange)| Arc::clone(exchange)),
         Arc::clone(&rotation),
+        Arc::clone(&schedule),
     ));
     if settings.keyring_refresh_secs > 0 {
         tokio::spawn(refresh_keyring_periodically(
@@ -860,6 +887,22 @@ async fn main() -> anyhow::Result<()> {
         settings.purge_retention(),
     ));
     let destroy = Arc::new(Destroy::new(Arc::clone(&seal), datastore.clone()));
+    // Purge and rewrap on the shared schedule (see `schedule`), stopped when
+    // the drain starts: a run under way ends at its next pass.
+    let scheduler_stop = CancellationToken::new();
+    let scheduler = Arc::new(Scheduler::new(
+        Arc::clone(&seal),
+        datastore.clone(),
+        Arc::clone(&purge),
+        Arc::clone(&rewrap),
+        Arc::clone(&gate),
+        Arc::clone(&schedule),
+    ));
+    let _schedule_gauges = metrics::observe_schedule(scheduler.states());
+    let scheduler_ended = tokio::spawn(scheduler.keep_running(scheduler_stop.clone()));
+    // Serving that ends for any reason (a listener failing, not only a
+    // signal) stops it too, or the wait for it below would never end.
+    let stop_scheduler = scheduler_stop.clone();
     let namespaces = Arc::new(Namespaces::new(Arc::clone(&seal), datastore.clone()));
     // WatchSecrets' change feed (see `watch`).
     let watch = Watch::new();
@@ -972,6 +1015,7 @@ async fn main() -> anyhow::Result<()> {
         );
         draining.send(()).ok();
         drain.cancel();
+        scheduler_stop.cancel();
         // Watch streams last as long as their clients: ended now, or they'd
         // hold the drain open to its limit.
         watch.close();
@@ -1018,8 +1062,32 @@ async fn main() -> anyhow::Result<()> {
             }
         })
     });
+    // A scheduled run under way ends at its next pass (stopped when the
+    // drain starts), recording its end and queuing its outcome before the
+    // audit drain below: waited for with the calls, under the same limit.
+    // Bounded on its own: a listener that fails sends no drain signal, so
+    // the deadline below never starts.
+    let scheduler_ended = async {
+        match tokio::time::timeout(DRAIN_LIMIT, scheduler_ended).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::error!(error = %e, "the scheduler stopped abnormally"),
+            Err(_) => tracing::warn!(
+                "a scheduled run still under way after {DRAIN_LIMIT:?}: no longer waiting for \
+                 it; its lease runs out, and the task is retried later"
+            ),
+        }
+    };
     tokio::select! {
-        served = async { tokio::try_join!(served, exchange_served) } => {
+        (served, ()) = async {
+            tokio::join!(
+                async {
+                    let served = tokio::try_join!(served, exchange_served);
+                    stop_scheduler.cancel();
+                    served
+                },
+                scheduler_ended
+            )
+        } => {
             served.context("serving")?;
         }
         () = deadline => tracing::warn!(

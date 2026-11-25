@@ -52,6 +52,12 @@ pub mod reason {
     /// keyring after it was retired. Nothing was destroyed; rewrap until
     /// done moves them, then destroy again.
     pub const KEK_IN_USE: &str = "KEK_IN_USE";
+    /// Purge or rewrap while the task is paused for every server
+    /// (`ferritor schedule pause`), refused (`FAILED_PRECONDITION`), by hand
+    /// as on the schedule: at the start, or at the next batch of a pass
+    /// under way. Resume it first (`ferritor schedule resume`), once the
+    /// reason it was paused for allows.
+    pub const TASK_PAUSED: &str = "TASK_PAUSED";
     /// A rotate or init refused because the keys database doesn't match
     /// the data database (`FAILED_PRECONDITION`): rows use a KEK version
     /// the keys database doesn't have (restored from an older backup), or

@@ -232,7 +232,9 @@ It lives only in this server's memory, until it seals or restarts. So
    audit entry or the gauge).
 4. **Run `ferritor rewrap` against every server that reports vanished
    versions**, each with `--addr` pointing at that server, not through a
-   load balancer. On the first, rewrap moves every row off older and
+   load balancer. Don't wait for the scheduled rewrap: it runs on
+   whichever server claims it, and releases only that server's vanished
+   KEKs. On the first, rewrap moves every row off older and
    vanished versions onto the active one, using the in-memory copy to
    unwrap, so those rows become readable from the keys database again:
    that's the rescue. Once no row uses a vanished KEK, rewrap **releases**
