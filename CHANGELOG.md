@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/ferritor/ferritor/compare/v1.0.1...v1.1.0) - 2026-11-25
+
+### Added
+
+- the server runs purge and rewrap on its own schedule
+- owner may name a ferritor identity
+- the root key's and the KEKs' rotation due dates in status
+- metadata labels owner, contact and description
+- ferritor list --overdue and --older-than
+- rotation gauges for flagged secrets, KEKs and the root key
+- rotation ages, and a flagged secret's due date in its metadata
+- the rotation flag, ferritor.rotation=true, and reserved label keys
+- *(datastore)* a shared schedule for the server's tasks
+- a rotation reminders row on the server dashboard
+
+### Changed
+
+- Postgres 19 in compose, CI, the e2e cluster and the Kubernetes guide; the load tests measured again on it
+
+### Fixed
+
+- a scheduled rewrap that stops partway counts the rows it moved
+- a purge pause holds inside each batch: once it returns, nothing deletes
+- schedule::JITTER public, so TICK's doc link resolves
+- the drain's limit on a scheduled run starts at the drain, not at startup
+- older_than_days bounded in OpenAPI, --older-than described as an age cutoff
+- dependencies to their latest compatible versions
+- the labels fuzz target formatted, and = allowed in a description's value
+
+### Other
+
+- name the merge subjects the changelog skips
+- merge commits never in the changelogs
+- the docs download and verify 1.1.0
+- no note on a major Postgres upgrade of the local volumes
+- --overdue --older-than 60d, flagged and at least 60 days old
+- bump the actions group with 2 updates
+
 ## [1.0.1](https://github.com/ferritor/ferritor/compare/v1.0.0...v1.0.1) - 2026-11-22
 
 ### Changed
