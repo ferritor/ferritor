@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/ferritor/ferritor/compare/ferritor-cli-v1.0.1...ferritor-cli-v1.1.0) - 2026-11-25
+
+### Added
+
+- the server runs purge and rewrap on its own schedule
+- the root key's and the KEKs' rotation due dates in status
+- metadata labels owner, contact and description
+- ferritor list --overdue and --older-than
+- rotation ages, and a flagged secret's due date in its metadata
+
+### Fixed
+
+- a purge pause holds inside each batch: once it returns, nothing deletes
+- older_than_days bounded in OpenAPI, --older-than described as an age cutoff
+
 ## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-cli-v1.0.0...ferritor-cli-v1.0.1) - 2026-11-22
 
 ### Other

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/ferritor/ferritor/compare/ferritor-keystore-v1.0.1...ferritor-keystore-v1.1.0) - 2026-11-25
+
+### Added
+
+- the root key's and the KEKs' rotation due dates in status
+- rotation gauges for flagged secrets, KEKs and the root key
+
 ## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-keystore-v1.0.0...ferritor-keystore-v1.0.1) - 2026-11-22
 
 ### Other

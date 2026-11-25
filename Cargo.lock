@@ -1395,11 +1395,11 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "ferritor"
-version = "1.0.1"
+version = "1.1.0"
 
 [[package]]
 name = "ferritor-agent"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "clap",
  "ferritor-client",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-cli"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-client"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "base64 0.23.1",
  "ferritor-core",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-core"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "aes-gcm",
  "ed25519-dalek",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-datastore"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "ferritor-core",
  "ferritor-testkit",
@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-keystore"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "ferritor-core",
  "ferritor-testkit",
@@ -1521,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-metrics"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "axum",
  "ferritor-core",
@@ -1539,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-server"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -1598,7 +1598,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-testkit"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "base64 0.23.1",
  "dotenvy",
@@ -1612,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "ferritor-winsec"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]

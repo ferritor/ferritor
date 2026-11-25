@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/ferritor/ferritor/compare/ferritor-core-v1.0.1...ferritor-core-v1.1.0) - 2026-11-25
+
+### Added
+
+- the server runs purge and rewrap on its own schedule
+- owner may name a ferritor identity
+- metadata labels owner, contact and description
+- the rotation flag, ferritor.rotation=true, and reserved label keys
+
+### Fixed
+
+- the labels fuzz target formatted, and = allowed in a description's value
+
 ## [1.0.1](https://github.com/ferritor/ferritor/compare/ferritor-core-v1.0.0...ferritor-core-v1.0.1) - 2026-11-22
 
 ### Changed
