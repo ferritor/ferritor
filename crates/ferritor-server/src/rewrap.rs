@@ -123,6 +123,21 @@ impl Rewrap {
         namespace: Option<&Namespace>,
         max_rows: u32,
     ) -> Result<RewrapReport, RewrapError> {
+        let mut report = RewrapReport::default();
+        self.run_into(namespace, max_rows, &mut report).await?;
+        Ok(report)
+    }
+
+    /// [`Rewrap::run`], adding to `report` as it goes: after an error it
+    /// still holds what the pass did first (each batch commits on its own),
+    /// for an exact count of a run that stopped partway. `done` is set only
+    /// by a pass that finished.
+    pub async fn run_into(
+        &self,
+        namespace: Option<&Namespace>,
+        max_rows: u32,
+        report: &mut RewrapReport,
+    ) -> Result<(), RewrapError> {
         let mut budget = match max_rows {
             0 => DEFAULT_MAX_ROWS,
             n => n.min(MAX_ROWS),
@@ -139,8 +154,6 @@ impl Rewrap {
                 .cloned()
                 .collect()
         };
-        let mut report = RewrapReport::default();
-
         for ns in &namespaces {
             let versions = self.seal.keyring_at(epoch)?.versions(ns);
             for version in versions {
@@ -155,7 +168,7 @@ impl Rewrap {
                 let mut after = RowKey::FIRST;
                 loop {
                     if budget == 0 {
-                        return Ok(report);
+                        return Ok(());
                     }
                     // A pause stops a manual pass too, at its next batch.
                     if self.store.task_paused(Task::Rewrap).await? {
@@ -250,6 +263,6 @@ impl Rewrap {
                 report.released.push((ns, version));
             }
         }
-        Ok(report)
+        Ok(())
     }
 }

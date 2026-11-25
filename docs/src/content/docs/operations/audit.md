@@ -175,8 +175,9 @@ pipelines (metrics, application logs) needn't keep them.
   what it did (`purged`, or `rewrapped`, `failed`, `retired`,
   `released`), or `failed` with why (`interrupted: sealed`, `paused`,
   `shutting down`; `failed: …`; `lost: its lease ran out`) and what it
-  did before stopping: after an error, at least that much (the failing
-  call may have committed batches of its own before it failed).
+  did before stopping: every batch that committed before the error is
+  counted, so the counts are exact unless the failing batch's own outcome
+  is unknown (a timeout at its commit), and then at most that batch short.
 - **Token exchanges** (`"event": "exchange"`, [workload
   identity](/guides/workload-identity)): every certificate issued (`"outcome":
   "issued"`: peer, issuer, identity, the claims the mapping read, serial,

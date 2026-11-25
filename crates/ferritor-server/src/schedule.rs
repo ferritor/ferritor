@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use crate::audit::{self, Gate, Outcome};
 use crate::authz::Action;
 use crate::purge::{Purge, PurgeError};
-use crate::rewrap::{Rewrap, RewrapError};
+use crate::rewrap::{Rewrap, RewrapError, RewrapReport};
 use crate::seal::Seal;
 
 /// How often each server looks for a due task (plus up to [`JITTER`]).
@@ -475,12 +475,19 @@ impl Scheduler {
             }
             // The most a call takes: rows that don't unwrap are read again
             // by every call, so a small one could spend itself on them.
-            match self.rewrap.run(None, crate::rewrap::MAX_ROWS).await {
-                Ok(report) => {
-                    rewrapped += report.rewrapped;
-                    failed = failed.max(report.failed);
-                    retired.extend(report.retired);
-                    released.extend(report.released);
+            let mut report = RewrapReport::default();
+            let ran = self
+                .rewrap
+                .run_into(None, crate::rewrap::MAX_ROWS, &mut report)
+                .await;
+            // Counted whether or not the call ended in an error: its
+            // batches before that committed.
+            rewrapped += report.rewrapped;
+            failed = failed.max(report.failed);
+            retired.extend(report.retired);
+            released.extend(report.released);
+            match ran {
+                Ok(()) => {
                     if report.done && report.failed == 0 {
                         break Ok(());
                     }
