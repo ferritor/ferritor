@@ -224,7 +224,7 @@ docker build --target cli          -t ferritor-cli .
 
 Each release publishes the four on ghcr.io, for amd64 and arm64:
 `ghcr.io/ferritor/ferritor-server`, `ferritor-csi-provider`,
-`ferritor-agent` and `ferritor-cli`, tagged with the version (`1.0.1`)
+`ferritor-agent` and `ferritor-cli`, tagged with the version (`1.1.0`)
 and `latest` (see [Releases](#releases)).
 
 - One build stage compiles all four, statically linked against musl
@@ -451,7 +451,7 @@ come from git tags (`git_only`).
   docs download to the one about to be released: `version=` in the
   README's quick start, the quick start, production and the CLI reference,
   and the image tag `kubernetes.md` verifies. Every one is the current
-  version written out, so `grep -rnF 1.0.1 README.md docs/src/content/docs
+  version written out, so `grep -rnF 1.1.0 README.md docs/src/content/docs
   --exclude-dir=contributing` (with the current version) finds them all.
 - **The release pull request.** `release-pr` opens or updates it when
   started by hand: Actions, Release-plz, **Run workflow**, on `main`. It

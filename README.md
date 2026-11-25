@@ -68,7 +68,7 @@ Needs Linux (x86_64 or arm64), Docker or Podman with compose, and `curl`:
 a release's binaries and the databases' `compose.yaml`, nothing to build.
 
 ```sh
-version=1.0.1
+version=1.1.0
 dir=ferritor-$version-$(uname -m)-unknown-linux-musl
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$dir.tar.gz"
 curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/SHA256SUMS"
