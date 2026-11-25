@@ -41,7 +41,9 @@ use crate::seal::Seal;
 
 /// How often each server looks for a due task (plus up to [`JITTER`]).
 pub const TICK: Duration = Duration::from_secs(30);
-const JITTER: Duration = Duration::from_secs(10);
+/// At most this much more, at random each time, so servers started
+/// together don't all look at once.
+pub const JITTER: Duration = Duration::from_secs(10);
 /// How long a claim or an extension holds the task: far longer than one
 /// pass, so a live run never loses it.
 pub const LEASE: Duration = Duration::from_secs(300);
