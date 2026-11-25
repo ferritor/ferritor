@@ -526,7 +526,10 @@ come from git tags (`git_only`).
   create, move or delete them.
 - **Commit subjects** sort a commit into the changelog by their start:
   `feat` (Added), `changed`, `deprecated`, `removed`, `fix` (Fixed),
-  `perf` (Performance), `security`; anything else is Other. With
+  `perf` (Performance), `security`; anything else is Other, but for
+  merge commits, which are left out (`Merge pull request #N from …` and
+  `Merge branch '…'`, the subjects GitHub and git write): a pull request's
+  own commits are its entries. With
   [conventional commits](https://www.conventionalcommits.org/) the start
   also chooses the version: `fix` a patch, `feat` a minor (a patch while
   below 1.0), a breaking change (`feat!:`) a major (a minor below 1.0).

@@ -40,6 +40,11 @@ git_release_body = """
 # "fixture…" or "performance…".
 [changelog]
 commit_parsers = [
+    # A merge commit (GitHub's "Merge pull request #N from …") is never an
+    # entry: its pull request's own commits are. Most are left out anyway
+    # (merged up to date, the merge changes nothing of its own), but one
+    # merged behind main would be listed under Other as it is.
+    { message = "^Merge (pull request #[0-9]+ from |branch ')", skip = true },
     { message = "^feat[(:!]", group = "added" },
     { message = "^changed[(:!]", group = "changed" },
     { message = "^deprecated[(:!]", group = "deprecated" },
