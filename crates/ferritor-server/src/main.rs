@@ -1065,9 +1065,21 @@ async fn main() -> anyhow::Result<()> {
     // A scheduled run under way ends at its next pass (stopped when the
     // drain starts), recording its end and queuing its outcome before the
     // audit drain below: waited for with the calls, under the same limit.
-    // Bounded on its own: a listener that fails sends no drain signal, so
-    // the deadline below never starts.
+    // Bounded on its own (a listener that fails sends no drain signal, so
+    // the deadline below never starts), from when it's told to stop, never
+    // before: it runs for as long as the server serves.
+    let scheduler_stopped = stop_scheduler.clone();
     let scheduler_ended = async {
+        let mut scheduler_ended = scheduler_ended;
+        tokio::select! {
+            ended = &mut scheduler_ended => {
+                if let Err(e) = ended {
+                    tracing::error!(error = %e, "the scheduler stopped abnormally");
+                }
+                return;
+            }
+            () = scheduler_stopped.cancelled() => {}
+        }
         match tokio::time::timeout(DRAIN_LIMIT, scheduler_ended).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => tracing::error!(error = %e, "the scheduler stopped abnormally"),
