@@ -54,7 +54,7 @@ rebinding from a browser on the same machine.
 | `keys_database_max_connections`, `data_database_max_connections` | 10 each | The most connections each pool opens (at least 1). A put holds a data-database connection for its whole transaction, so the data pool caps the writes in flight; past it, requests wait for a connection, up to `database_timeout_ms`, then `UNAVAILABLE`. Every server opens its own pools: keep the sum over all servers below Postgres's `max_connections` (100 by default). |
 | `database_timeout_ms` | 5000 | Upper bound on any one database call (client side), the pool's acquire timeout and Postgres's `statement_timeout`. |
 | `lock_timeout_ms` | 2000 | How long to wait for a lock another transaction holds (a put to the same path, an unconfirmed rekey commit, a KEK floor raise). Must be above 0 and below `database_timeout_ms`. |
-| `purge_deleted_after_days` | 30 | How long a deleted version can still be restored before `ferritor purge` may remove it. 0 warns at startup. |
+| `purge_deleted_after_days` | 30 | How long a deleted version can still be restored before purge may remove it. Past it, the next purge removes it: the servers run one every `purge_interval_minutes`, unless every one is sealed, the purge is paused, or its runs fail. 0 warns at startup. |
 | `max_versions` | 10 | Live versions kept per path; each put marks older ones deleted. 0 keeps all. |
 | `keyring_refresh_secs` | 60 | How often an unsealed server reloads its KEKs, to follow rotations by other servers. 0 turns the periodic refresh off. |
 | `policy_refresh_secs` | 5 | How often an unsealed server checks whether the stored policies changed (one tiny read), reloading them if so: the longest a change through another server takes to reach this one. 0 turns the poll off. (Separately, every server re-reads and re-verifies the whole set once a minute, on its own schedule.) |
@@ -63,6 +63,8 @@ rebinding from a browser on the same machine.
 | `kek_max_age_days` | 365 | How many days a namespace's active KEK may live before a rotation is due. 1 to 3650. |
 | `root_key_max_age_days` | 365 | How many days the root key may go without a rekey (which needs the share holders). 1 to 3650. |
 | `rotation_warn_days` | 14 | How many days before its maximum something counts as due soon: 1 to 3650, and below the shortest of the three maximums. |
+| `purge_interval_minutes` | 1440 | Scheduled tasks ([operations](/operations/running#scheduled-tasks)): how often purge runs, removing deleted versions past `purge_deleted_after_days`. 1 to 43200. Every server shares one schedule, through the data database: a task runs once per interval, on whichever server claims it, which sets the next due time from its own setting, so keep it alike on every server. |
+| `rewrap_interval_minutes` | 60 | How often rewrap runs, moving DEKs to each namespace's active KEK and retiring the KEK versions no row uses any more. 1 to 43200. |
 | `audit_signing_key` | (secured: required) | Ed25519 private key, PKCS#8 PEM, signing the audit log's checkpoints. Startup warns if group or others can read it. |
 | `audit_file` | (secured: it or `[audit_otlp]`; dev: stdout) | The file the audit log is appended to, created `0600` (startup warns if an existing one is readable by group or others). Reopened on SIGHUP, for rotation ([audit log](/operations/audit#the-file)). The server won't start if it can't open it, and refuses requests while it can't write to it. |
 | `audit_file_max_bytes` | (unset: no rotation by size) | Rotate `audit_file` once it holds this many bytes (at least 1 MiB): renamed `<audit_file>.1`, older ones moving up, a new file started, each holding whole chains. For where nothing else rotates it (a pod). |
@@ -214,7 +216,7 @@ crl = "/etc/ferritor/client-ca.crl"     # optional
 [[policy]]
 name = "ops-admin"
 identity = "ops/alice"
-actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity"]   # init, namespace and policy: a fresh deployment needs them
+actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity", "schedule"]   # init, namespace and policy: a fresh deployment needs them
 ```
 
 The applications' grants then go into stored policies (`ferritor policy
@@ -248,6 +250,8 @@ The CLI over TLS: `--addr https://…` with `--ca`, `--cert` and `--key` (or
 - the rotation reminders' ages (`rotation_max_age_days`, `kek_max_age_days`,
   `root_key_max_age_days`, `rotation_warn_days`), for every due date from
   then on;
+- the scheduled tasks' intervals (`purge_interval_minutes`,
+  `rewrap_interval_minutes`), from the next run this server claims;
 - the rate limits but `server_max_in_flight` (a change to it warns, and
   waits for a restart). Counters carry over: a reload doesn't refill
   anyone's burst;

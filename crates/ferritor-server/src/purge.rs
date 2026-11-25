@@ -39,6 +39,10 @@ pub const MAX_ROWS: u32 = 100_000;
 pub enum PurgeError {
     #[error("{}", SEALED)]
     Sealed,
+    /// Paused for every server (`ferritor schedule pause purge`): by hand
+    /// as on the schedule.
+    #[error("purge is paused for every server: `ferritor schedule resume purge` first")]
+    Paused,
     #[error("the data database did not respond in time")]
     DataTimeout,
     #[error("data store failure")]
@@ -49,6 +53,7 @@ impl From<DatastoreError> for PurgeError {
     fn from(e: DatastoreError) -> Self {
         match e {
             DatastoreError::Timeout => Self::DataTimeout,
+            DatastoreError::TaskPaused(_) => Self::Paused,
             other => Self::Store(other),
         }
     }
@@ -92,6 +97,10 @@ impl Purge {
         let epoch = self.seal.unsealed_epoch().map_err(|_| PurgeError::Sealed)?;
         let mut report = PurgeReport::default();
         while budget > 0 {
+            // A pause stops every purge, a manual one too: each batch reads
+            // it in its own transaction (`purge_deleted`), so once a pause
+            // returns, nothing more is deleted. In an incident, deleted
+            // versions are the only way back.
             self.seal
                 .ensure_unsealed_since(epoch)
                 .map_err(|_| PurgeError::Sealed)?;

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE scheduled_tasks SET paused = $2 WHERE task = $1\n                   RETURNING old.paused AS \"was_paused!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "was_paused!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "paused"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a113a9abdd3a2413406cf9b66ed5810e895d23f2c00cc71ad04c139abdb192f4"
+}

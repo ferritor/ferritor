@@ -74,6 +74,9 @@ pub enum Action {
     /// Create, rotate and inspect the workload-identity issuing CA (see
     /// `identity`).
     Identity,
+    /// Pause and resume the scheduled tasks (see `schedule`), for every
+    /// server.
+    Schedule,
 }
 
 impl Action {
@@ -97,6 +100,7 @@ impl Action {
             Self::Namespace => "namespace",
             Self::Policy => "policy",
             Self::Identity => "identity",
+            Self::Schedule => "schedule",
         }
     }
 
@@ -125,7 +129,7 @@ impl Action {
 }
 
 /// Every action.
-pub const ALL_ACTIONS: [Action; 17] = [
+pub const ALL_ACTIONS: [Action; 18] = [
     Action::Read,
     Action::Write,
     Action::Delete,
@@ -143,6 +147,7 @@ pub const ALL_ACTIONS: [Action; 17] = [
     Action::Namespace,
     Action::Policy,
     Action::Identity,
+    Action::Schedule,
 ];
 
 impl From<SecretAction> for Action {
@@ -177,6 +182,7 @@ impl fmt::Display for Action {
             Self::Namespace => "manage the namespaces of",
             Self::Policy => "manage the policies of",
             Self::Identity => "manage the workload-identity CA of",
+            Self::Schedule => "pause the scheduled tasks of",
         })
     }
 }

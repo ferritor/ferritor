@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 
 use crate::cli::{
     Audit, Cli, Command, IdentityCommand, Metadata, NamespaceCommand, PolicyCommand, Rekey,
+    ScheduleCommand,
 };
 use crate::input::{self, hex, unhex};
 
@@ -414,6 +415,9 @@ pub async fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Identity(command) => {
             identity_command(system_client(&addr().await?).await?, command, out).await
         }
+        Command::Schedule(command) => {
+            schedule_command(system_client(&addr().await?).await?, command, out).await
+        }
         Command::Rekey(rekey) => {
             rekey_command(system_client(&addr().await?).await?, rekey, out).await
         }
@@ -523,6 +527,7 @@ async fn status(mut client: SystemClient, out: &mut impl Write) -> anyhow::Resul
                 )?;
             }
         }
+        print_schedule(out, &reply.scheduled_tasks)?;
         // Last, as it always was: scripts read the count from the end.
         writeln!(out, "namespaces: {}", reply.namespaces)?;
         if reply.namespaces == 0 {
@@ -801,6 +806,79 @@ fn print_issuing_key(out: &mut impl Write, key: &pb::IssuingKey) -> io::Result<(
         utc(key.not_after_unix),
         key.fingerprint
     )
+}
+
+/// The scheduled tasks, one line each: when it's next due, how its last run
+/// ended, and whether it's paused or running now.
+fn print_schedule(out: &mut impl Write, tasks: &[pb::ScheduledTask]) -> io::Result<()> {
+    if tasks.is_empty() {
+        return Ok(());
+    }
+    writeln!(out, "scheduled tasks:")?;
+    for task in tasks {
+        let last = match (task.last_result.as_str(), task.last_finished_unix) {
+            ("", _) | (_, None) => "never run".to_owned(),
+            (result, Some(finished)) => format!("last run {result} at {}", utc(finished)),
+        };
+        let success = match (task.last_result.as_str(), task.last_success_unix) {
+            ("ok", _) | (_, None) => String::new(),
+            (_, Some(at)) => format!(", last success {}", utc(at)),
+        };
+        // Both, while a paused task's run hasn't reached its next batch.
+        let now = match (task.paused, task.running) {
+            (true, true) => "\tPAUSED\trunning",
+            (true, false) => "\tPAUSED",
+            (false, true) => "\trunning",
+            (false, false) => "",
+        };
+        writeln!(
+            out,
+            "  {}\tdue {}\t{last}{success}{now}",
+            task.task,
+            utc(task.next_due_unix)
+        )?;
+    }
+    Ok(())
+}
+
+async fn schedule_command(
+    mut client: SystemClient,
+    command: &ScheduleCommand,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    let (task, paused) = match command {
+        ScheduleCommand::Pause { task } => (task, true),
+        ScheduleCommand::Resume { task } => (task, false),
+    };
+    let reply = answer(
+        client
+            .set_task_paused(pb::SetTaskPausedRequest {
+                task: task.clone(),
+                paused,
+            })
+            .await,
+    )?;
+    let state = if paused { "paused" } else { "resumed" };
+    let already = match (paused, reply.was_paused) {
+        (true, true) => " (it already was)",
+        (false, false) => " (it wasn't paused)",
+        _ => "",
+    };
+    writeln!(out, "{task}: {state} on every server{already}")?;
+    if paused {
+        if task == "purge" {
+            eprintln!(
+                "Nothing purges any more, by hand or on the schedule, until `ferritor schedule \
+                 resume purge`: the pause waited for any batch in flight, so restoring is safe now."
+            );
+        } else {
+            eprintln!(
+                "No server runs it until `ferritor schedule resume {task}`; a run under way ends \
+                 at its next batch."
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn identity_command(
@@ -1654,6 +1732,11 @@ pub fn hint(command: &Command, error: &anyhow::Error) -> Option<&'static str> {
             "only a retired KEK version can be destroyed: run `ferritor rewrap` until it retires \
              it (for the active version, `ferritor rotate --namespace <name>` first; `ferritor \
              namespace get <name>` shows each version's state).",
+        ),
+        _ if reason == Some(reason::TASK_PAUSED) => Some(
+            "it's paused for every server (`ferritor schedule pause`), by hand as on the \
+             schedule: `ferritor schedule resume <task>` first, once what it was paused for \
+             allows (`ferritor status` shows the schedule).",
         ),
         _ if reason == Some(reason::KEK_IN_USE) => Some(
             "nothing was destroyed: run `ferritor rewrap` until it's done (it moves those rows), \

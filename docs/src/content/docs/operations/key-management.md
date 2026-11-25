@@ -421,13 +421,24 @@ that (see [high availability](/operations/high-availability)).
 
 ## Rewrap and retire
 
+The servers rewrap every namespace on their own, hourly by default
+(`rewrap_interval_minutes`, [scheduled tasks](/operations/running#scheduled-tasks)):
+a schedule, not a deadline. After a rotation the old KEK's rows move at the
+next run, unless rewrap is paused, every server is sealed, or its runs
+fail; a row whose DEK doesn't unwrap stays where it is, and its run counts
+as failed. The server running it refreshes its keyring first, so it moves
+onto the new KEK even if it missed the rotation; rows a stale server writes
+with the old KEK afterwards wait for a later run. To move them now (before
+a `destroy-kek`, say):
+
 ```sh
 ferritor rewrap                       # every namespace
 ferritor rewrap --namespace billing   # just one
 ```
 
-Moves DEKs still wrapped by older KEK versions of their namespace to its
-active one, deleted rows included, then **retires** each decrypt-only version no row uses any
+Refreshes the answering server's keyring first (so a server that missed a
+rotation moves rows onto the new KEK), then moves DEKs still wrapped by
+older KEK versions of their namespace to its active one, deleted rows included, then **retires** each decrypt-only version no row uses any
 more. Bounded per call; the CLI repeats it until done. Safe to repeat,
 interrupt or run concurrently (rows move compare-and-set). A row whose DEK
 doesn't unwrap (corruption, tampering) is left as it is, logged, counted, and

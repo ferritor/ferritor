@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT paused FROM scheduled_tasks WHERE task = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "paused",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "paused"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3c9a90b072d3077a131f070ed1effbcb093d5445a57a8f28ac1228909dac8ad9"
+}

@@ -541,6 +541,125 @@ async fn purge_is_authorized_and_audited() {
     env.destroy().await.unwrap();
 }
 
+/// Pausing a scheduled task asks for `schedule` on the server, records
+/// what it did, and shows in every status; a task the server doesn't know
+/// is refused after the check.
+#[tokio::test]
+async fn pausing_a_task_is_authorized_and_audited() {
+    let mut env = Env::unsealed().await.unwrap();
+    let pause = |task: &str, paused| pb::SetTaskPausedRequest {
+        task: task.to_owned(),
+        paused,
+    };
+    let reply = env
+        .client
+        .set_task_paused(pause("purge", true))
+        .await
+        .unwrap();
+    assert!(!reply.into_inner().was_paused);
+    assert_eq!(
+        env.authz.asked(),
+        [(Action::Schedule, "the server".to_owned())]
+    );
+    let outcomes = entries(&env.audit, "outcome", 6).await.unwrap();
+    let last = outcomes.last().unwrap();
+    assert_eq!(
+        (&last["operation"], &last["result"], &last["details"]),
+        (
+            &json!("pause_task"),
+            &json!("succeeded"),
+            &json!({"task": "purge", "paused": true, "was_paused": false})
+        )
+    );
+    let status = env
+        .client
+        .status(pb::StatusRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    let tasks: Vec<_> = status
+        .scheduled_tasks
+        .iter()
+        .map(|t| (t.task.as_str(), t.paused, t.running, t.last_result.as_str()))
+        .collect();
+    assert_eq!(
+        tasks,
+        [("purge", true, false, ""), ("rewrap", false, false, "")]
+    );
+
+    let again = env
+        .client
+        .set_task_paused(pause("purge", true))
+        .await
+        .unwrap();
+    assert!(again.into_inner().was_paused);
+    let resumed = env
+        .client
+        .set_task_paused(pause("purge", false))
+        .await
+        .unwrap();
+    assert!(resumed.into_inner().was_paused);
+
+    // A pause stops a purge or rewrap by hand too, with a reason saying so.
+    for task in ["purge", "rewrap"] {
+        env.client.set_task_paused(pause(task, true)).await.unwrap();
+    }
+    let purge = env
+        .client
+        .purge(pb::PurgeRequest { max_rows: 0 })
+        .await
+        .unwrap_err();
+    assert_eq!(purge.code(), Code::FailedPrecondition);
+    assert_eq!(
+        ferritor_server::grpc::reason_of(&purge).as_deref(),
+        Some("TASK_PAUSED")
+    );
+    let rewrap = env
+        .client
+        .rewrap(pb::RewrapRequest::default())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        ferritor_server::grpc::reason_of(&rewrap).as_deref(),
+        Some("TASK_PAUSED")
+    );
+    for task in ["purge", "rewrap"] {
+        env.client
+            .set_task_paused(pause(task, false))
+            .await
+            .unwrap();
+    }
+    let reply = env.client.purge(pb::PurgeRequest { max_rows: 0 }).await;
+    assert!(reply.is_ok(), "{reply:?}");
+
+    let unknown = env.client.set_task_paused(pause("vacuum", true)).await;
+    assert_eq!(unknown.unwrap_err().code(), Code::InvalidArgument);
+    // Allowed, so recorded as failed (queued: waited for).
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let refused = loop {
+        let last = entries(&env.audit, "outcome", 0)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        if last["result"] == "failed" || Instant::now() > deadline {
+            break last;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(
+        (&refused["operation"], &refused["result"]),
+        (&json!("pause_task"), &json!("failed"))
+    );
+    env.authz.deny(&[Action::Schedule]);
+    let refused = env.client.set_task_paused(pause("purge", true)).await;
+    assert_eq!(
+        denied(refused).map(|(code, _)| code),
+        Some(Code::PermissionDenied)
+    );
+    env.destroy().await.unwrap();
+}
+
 /// DestroyKek asks for its own action on the server, and records what it
 /// did, a refusal included: here the active KEK, which isn't retired
 /// (FAILED_PRECONDITION with reason NOT_RETIRED and the state).

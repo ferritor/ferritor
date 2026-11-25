@@ -155,6 +155,7 @@ attaches a `google.rpc.ErrorInfo` with domain `ferritor` and a reason from
 | `LIVE_VERSION` | a restore without a version while one is live |
 | `NOT_RETIRED` | destroying a KEK version that isn't retired |
 | `KEK_IN_USE` | destroying a KEK version rows still use |
+| `TASK_PAUSED` | a purge or rewrap, by hand, while the task is paused for every server (`ferritor schedule pause`): resume it first |
 | `KEYS_DATABASE_MISMATCH` | a rotate, init or namespace creation refused: the keys database doesn't match the data database |
 | `NO_NAMESPACE` | the path's first segment isn't a namespace (or a rotate named none): create it first. HTTP 409 `no_namespace` |
 | `NAMESPACE_NOT_EMPTY` | deleting a namespace that still has rows, deleted ones included: purge them first |

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE scheduled_tasks\n                       SET run_id = NULL, lease_until = NULL,\n                           failures = LEAST(failures, 1000000) + 1,\n                           last_finished = now(), last_result = $3,\n                           next_due = LEAST(next_due, now() + make_interval(secs => $4))\n                       WHERE task = $1 AND run_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e680dd7fa04a0080784fa226001b68178fd60d810cad8aed53aa184b7dc4092"
+}

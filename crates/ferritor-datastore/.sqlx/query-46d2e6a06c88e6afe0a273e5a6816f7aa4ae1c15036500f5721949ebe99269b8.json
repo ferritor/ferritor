@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT task, next_due, paused,\n                          COALESCE(lease_until >= now(), false) AS \"running!\",\n                          last_started, last_finished, last_result, last_success,\n                          now() AS \"now!\"\n                   FROM scheduled_tasks",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "task",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "task"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "next_due",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "next_due"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "paused",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "paused"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "running!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "last_started",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "last_started"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "last_finished",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "last_finished"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "last_result",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "last_result"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "last_success",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "last_success"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "now!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "46d2e6a06c88e6afe0a273e5a6816f7aa4ae1c15036500f5721949ebe99269b8"
+}

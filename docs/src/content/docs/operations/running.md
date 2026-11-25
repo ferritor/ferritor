@@ -129,18 +129,68 @@ certificate) starts being refused by a limit, and another once it has been
 quiet for 10 s, with the number refused in between; a refused request has
 no entry of its own (see [audit](/operations/audit)).
 
+## Scheduled tasks
+
+The servers run two tasks on their own, so nothing needs scheduling outside
+ferritor (no cron, no timer):
+
+| Task | Default interval | What it does |
+|---|---|---|
+| purge | daily (`purge_interval_minutes = 1440`) | removes deleted versions past `purge_deleted_after_days`, and the labels of paths left with nothing stored |
+| rewrap | hourly (`rewrap_interval_minutes = 60`) | moves DEKs to each namespace's active KEK and retires the KEK versions no row uses any more |
+
+**One schedule for every server.** It's kept in the data database: each
+server looks every 30 s or so, and the first to find a task due claims it,
+in one statement that moves it an interval on, so it runs once per interval
+however many servers there are. A run holds a lease (5 minutes, extended
+while it works), so no other server starts the same task beside it; a
+server that dies mid-run leaves a lease that runs out, and the task is due
+again as its claim set it. Every time is the database's clock. Both tasks
+are safe to run twice or concurrently anyway (as `ferritor purge` and
+`ferritor rewrap` always were), so nothing depends on the claim but the
+work it saves.
+
+- **A missed run is caught up once**: with every server down for a week, the
+  first to come back runs each task once, not once per missed interval.
+  Tasks due together (after an outage) drift apart by a random part of up
+  to a tenth of their interval (at most 10 minutes).
+- **Only unsealed servers run them**: a sealed server claims nothing, and a
+  seal ends a run at its next batch, so sealing stops deleting too. A sealed
+  deployment purges nothing until it's unsealed, then catches up.
+- **A failed or cut-short run** (an error, a seal, a pause, a shutdown) is
+  due again after a minute, doubling with each one in a row, up to the
+  interval.
+- **Pausing**, for every server at once: `ferritor schedule pause purge`
+  (the `schedule` action) stops every purge, scheduled or by hand: none is
+  claimed, `ferritor purge` is refused (`TASK_PAUSED`), and one under way
+  ends at its next batch. The same for rewrap. `ferritor schedule resume
+  purge` lets them run again. For an incident: deleted versions are the
+  only way to restore, so stop the purge first. Pausing purge returns only
+  once no purge batch is in flight (each one reads the pause in its own
+  transaction), so from then on nothing deletes, by hand or on the
+  schedule, a stalled server included: restoring is safe as soon as it
+  returns. The schedule (next due, last run, how it ended, paused,
+  running) is in `ferritor status`.
+- **Audited** like a request, as `ferritor:scheduler` where a caller would
+  be (no identity can be that name): a run's `scheduled` entry is written
+  before its first batch, or it doesn't run (and is retried); its outcome
+  when it ends ([audit](/operations/audit)).
+- **Watch** `ferritor.schedule.last_success` ([monitoring](/operations/monitoring#the-server)):
+  every server reports the same time, from the database.
+
 ## Routine tasks
 
 ```sh
-ferritor purge                 # remove deleted versions past their retention (and labels of paths left empty); cron or a timer
 ferritor rotate --namespace <ns>                # a new KEK version for one namespace
-ferritor rewrap                                 # move DEKs to it, retire old versions (after every server has refreshed)
+ferritor rewrap                                 # move DEKs to it now (the servers do it hourly)
 ferritor destroy-kek --namespace <ns> <version> # once `ferritor namespace get <ns>` shows it retired
 ferritor identity rotate                        # a new workload-identity issuing key (yearly, say; the CA lives 5 years)
+ferritor purge                                  # purge now (the servers do it daily)
 ```
 
-- `purge` and `rewrap` are bounded passes: the CLI repeats them until done,
-  and they're safe to rerun, interrupt or run concurrently.
+- `purge` and `rewrap` by hand are bounded passes: the CLI repeats them
+  until done, and they're safe to rerun, interrupt or run beside the
+  scheduled ones.
 - `rotate` is a single call, and **not** idempotent: each run adds another
   KEK version. If its outcome is unclear, check `ferritor namespace get <ns>`
   before running it again.
@@ -153,8 +203,11 @@ ferritor identity rotate                        # a new workload-identity issuin
   identity](/guides/workload-identity#revoking)).
 - Other servers pick up a rotation at their next keyring refresh (within
   `keyring_refresh_secs`, default 60); until then they keep wrapping new
-  DEKs with the old KEK. A rewrap run before that misses their rows, so
-  run it again later (or wait a refresh interval first).
+  DEKs with the old KEK. A rewrap, scheduled or by hand, refreshes its own
+  server's keyring first; rows other servers write with the old KEK until they
+  refresh wait for a later run (not while rewrap is paused or every server
+  is sealed; and a row whose DEK doesn't unwrap stays where it is, its run
+  failing).
 
 All of them need the server unsealed. A seal stops purge and rewrap between
 batches; a rotation already under way is still stored, and the next unseal

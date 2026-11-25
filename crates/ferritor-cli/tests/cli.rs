@@ -812,6 +812,65 @@ async fn purge_removes_deleted_versions() {
     server.stop().await.unwrap();
 }
 
+/// `ferritor schedule pause` and `resume` stop and restart a task on every
+/// server, saying when it already was; `status` shows the schedule before
+/// the namespace count, which stays last.
+#[tokio::test]
+async fn schedule_pauses_and_resumes_a_task() {
+    let server = Server::start().await.unwrap();
+    let init = server
+        .ferritor(&["init", "--shares", "3", "--threshold", "2"], &[])
+        .await
+        .unwrap();
+    for share in &shares(&init)[..2] {
+        server.ferritor(&["unseal"], &line(share)).await.unwrap();
+    }
+    let pause = server
+        .ferritor(&["schedule", "pause", "purge"], &[])
+        .await
+        .unwrap();
+    assert!(pause.success, "{}", pause.stderr);
+    assert_eq!(pause.out(), "purge: paused on every server\n");
+    assert!(
+        pause.stderr.contains("schedule resume purge"),
+        "{}",
+        pause.stderr
+    );
+    let again = server
+        .ferritor(&["schedule", "pause", "purge"], &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        again.out(),
+        "purge: paused on every server (it already was)\n"
+    );
+
+    let status = server.ferritor(&["status"], &[]).await.unwrap();
+    let out = status.out();
+    let lines: Vec<&str> = out.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| *line == "scheduled tasks:")
+        .unwrap();
+    assert!(lines[at + 1].starts_with("  purge\tdue "), "{out}");
+    assert!(lines[at + 1].ends_with("never run\tPAUSED"), "{out}");
+    assert!(lines[at + 2].starts_with("  rewrap\tdue "), "{out}");
+    assert!(lines[at + 2].ends_with("never run"), "{out}");
+    assert!(lines.last().unwrap().starts_with("namespaces: "), "{out}");
+
+    let resume = server
+        .ferritor(&["schedule", "resume", "purge"], &[])
+        .await
+        .unwrap();
+    assert_eq!(resume.out(), "purge: resumed on every server\n");
+    let unknown = server
+        .ferritor(&["schedule", "pause", "vacuum"], &[])
+        .await
+        .unwrap();
+    assert!(!unknown.success);
+    server.stop().await.unwrap();
+}
+
 /// `ferritor versions` shows the history, newest first, live and deleted,
 /// with times; never a value.
 #[tokio::test]

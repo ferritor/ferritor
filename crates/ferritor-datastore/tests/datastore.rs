@@ -6,7 +6,8 @@ use std::time::Duration;
 use ferritor_core::labels::Labels;
 use ferritor_core::path::{Namespace, SecretPath};
 use ferritor_datastore::{
-    Change, ChangeMark, Changes, Datastore, DatastoreError, MIGRATOR, Reclaimed, Rewrapped, RowKey,
+    Change, ChangeMark, Changes, Claim, Datastore, DatastoreError, Lease, MIGRATOR, Reclaimed,
+    Rewrapped, RowKey, RunEnd, Task,
 };
 use ferritor_testkit::data::insert_version;
 use ferritor_testkit::{TestDatabase, TestResult};
@@ -2130,5 +2131,317 @@ async fn a_version_per_kek_covers_every_kek_in_use() {
             ("other".to_owned(), 1)
         ]
     );
+    db.destroy().await.unwrap();
+}
+
+/// Seconds from the database's now to `task`'s next due time.
+async fn due_in(db: &TestDb, task: &str) -> TestResult<f64> {
+    let (secs,): (f64,) = sqlx::query_as(
+        "SELECT EXTRACT(EPOCH FROM next_due - now())::float8 FROM scheduled_tasks WHERE task = $1",
+    )
+    .bind(task)
+    .fetch_one(db.db.pool())
+    .await?;
+    Ok(secs)
+}
+
+/// Makes `task` due, as if its interval had passed `ago` ago.
+async fn make_due(db: &TestDb, task: &str, ago: &str) -> TestResult<()> {
+    sqlx::query("UPDATE scheduled_tasks SET next_due = now() - $2::interval WHERE task = $1")
+        .bind(task)
+        .bind(ago)
+        .execute(db.db.pool())
+        .await?;
+    Ok(())
+}
+
+const DAY: Duration = Duration::from_secs(86_400);
+const LEASE: Duration = Duration::from_secs(300);
+
+/// A new deployment's tasks are due at once (seeded by the migration). Of
+/// many servers claiming together, one gets the run, and the task is then
+/// due an interval on (plus at most the spread), for every server.
+#[tokio::test]
+async fn a_due_task_is_claimed_by_one_server_of_many() {
+    let db = TestDb::new().await.unwrap();
+    let mut servers = tokio::task::JoinSet::new();
+    for _ in 0..10 {
+        let store = db.store.clone();
+        servers.spawn(async move {
+            store
+                .claim_run(Task::Purge, DAY, Duration::from_secs(600), LEASE)
+                .await
+        });
+    }
+    let mut won: Vec<Claim> = Vec::new();
+    while let Some(claim) = servers.join_next().await {
+        won.extend(claim.unwrap().unwrap());
+    }
+    assert_eq!(won.len(), 1);
+    assert_eq!(won[0].task(), Task::Purge);
+    assert_eq!(won[0].failures(), 0);
+    let due = due_in(&db, "purge").await.unwrap();
+    assert!((86_399.0..=87_001.0).contains(&due), "{due}");
+
+    // The other task is its own: due, and claimed independently.
+    let rewrap = db
+        .store
+        .claim_run(Task::Rewrap, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap();
+    assert!(rewrap.is_some());
+
+    // Done, it isn't due again before its interval.
+    let claim = won.into_iter().next().unwrap();
+    assert!(db.store.finish_run(&claim, RunEnd::Ok).await.unwrap());
+    assert!(
+        db.store
+            .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    db.destroy().await.unwrap();
+}
+
+/// Overdue by many intervals (every server down for a week), a task is
+/// claimed once and is then due an interval on: caught up once, never once
+/// per missed interval.
+#[tokio::test]
+async fn a_missed_week_is_caught_up_once() {
+    let db = TestDb::new().await.unwrap();
+    make_due(&db, "rewrap", "7 days").await.unwrap();
+    let hour = Duration::from_secs(3600);
+    let claim = db
+        .store
+        .claim_run(Task::Rewrap, hour, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(db.store.finish_run(&claim, RunEnd::Ok).await.unwrap());
+    assert!(
+        db.store
+            .claim_run(Task::Rewrap, hour, Duration::ZERO, LEASE)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let due = due_in(&db, "rewrap").await.unwrap();
+    assert!((3_599.0..=3_601.0).contains(&due), "{due}");
+    db.destroy().await.unwrap();
+}
+
+/// A run's lease keeps others out while it lasts, even once the task is
+/// due again; once it runs out (the server died), another server claims the
+/// task, and the first run's lease and finish are no longer its own.
+#[tokio::test]
+async fn a_lease_keeps_others_out_until_it_runs_out() {
+    let db = TestDb::new().await.unwrap();
+    let first = db
+        .store
+        .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    make_due(&db, "purge", "1 second").await.unwrap();
+    assert!(
+        db.store
+            .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        db.store.extend_lease(&first, LEASE).await.unwrap(),
+        Lease::Held
+    );
+
+    sqlx::query(
+        "UPDATE scheduled_tasks SET lease_until = now() - interval '1 second' WHERE task = 'purge'",
+    )
+    .execute(db.db.pool())
+    .await
+    .unwrap();
+    let (states, _) = db.store.scheduled_tasks().await.unwrap();
+    assert!(!states[0].running);
+    let second = db
+        .store
+        .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        db.store.extend_lease(&first, LEASE).await.unwrap(),
+        Lease::Lost
+    );
+    assert!(!db.store.finish_run(&first, RunEnd::Ok).await.unwrap());
+    let (states, _) = db.store.scheduled_tasks().await.unwrap();
+    assert!(states[0].running);
+    assert_eq!(states[0].last_result, None);
+    assert!(db.store.finish_run(&second, RunEnd::Ok).await.unwrap());
+    db.destroy().await.unwrap();
+}
+
+/// A run that fails, or is cut short, is due again after its retry, not a
+/// whole interval on, and counts towards the next delay; a success resets
+/// the count and records its time.
+#[tokio::test]
+async fn a_failed_run_is_retried_soon() {
+    let db = TestDb::new().await.unwrap();
+    let minute = Duration::from_secs(60);
+    let claim = db
+        .store
+        .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        db.store
+            .finish_run(&claim, RunEnd::Failed { retry: minute })
+            .await
+            .unwrap()
+    );
+    let due = due_in(&db, "purge").await.unwrap();
+    assert!((59.0..=61.0).contains(&due), "{due}");
+    let (states, _) = db.store.scheduled_tasks().await.unwrap();
+    assert_eq!(states[0].last_result.as_deref(), Some("failed"));
+    assert_eq!(states[0].last_success, None);
+
+    make_due(&db, "purge", "1 second").await.unwrap();
+    let claim = db
+        .store
+        .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.failures(), 1);
+    assert!(
+        db.store
+            .finish_run(&claim, RunEnd::Interrupted { retry: minute })
+            .await
+            .unwrap()
+    );
+    make_due(&db, "purge", "1 second").await.unwrap();
+    let claim = db
+        .store
+        .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.failures(), 2);
+    assert!(db.store.finish_run(&claim, RunEnd::Ok).await.unwrap());
+    let (states, _) = db.store.scheduled_tasks().await.unwrap();
+    assert_eq!(states[0].last_result.as_deref(), Some("ok"));
+    assert!(states[0].last_success.is_some());
+
+    // A retry never pushes a task further out than its interval set it.
+    make_due(&db, "purge", "1 second").await.unwrap();
+    let claim = db
+        .store
+        .claim_run(Task::Purge, minute, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.failures(), 0);
+    assert!(
+        db.store
+            .finish_run(&claim, RunEnd::Failed { retry: DAY })
+            .await
+            .unwrap()
+    );
+    let due = due_in(&db, "purge").await.unwrap();
+    assert!(due <= 61.0, "{due}");
+    db.destroy().await.unwrap();
+}
+
+/// A paused task isn't claimed, however overdue; a run under way learns of
+/// the pause when it extends its lease. Resuming makes it claimable again.
+#[tokio::test]
+async fn a_paused_task_is_never_claimed() {
+    let db = TestDb::new().await.unwrap();
+    let run = db
+        .store
+        .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!db.store.set_task_paused(Task::Purge, true).await.unwrap());
+    assert!(db.store.set_task_paused(Task::Purge, true).await.unwrap());
+    assert_eq!(
+        db.store.extend_lease(&run, LEASE).await.unwrap(),
+        Lease::Paused
+    );
+    assert!(
+        db.store
+            .finish_run(
+                &run,
+                RunEnd::Interrupted {
+                    retry: Duration::from_secs(60)
+                }
+            )
+            .await
+            .unwrap()
+    );
+
+    make_due(&db, "purge", "7 days").await.unwrap();
+    assert!(
+        db.store
+            .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let (states, _) = db.store.scheduled_tasks().await.unwrap();
+    assert_eq!(
+        states
+            .iter()
+            .map(|s| (s.task, s.paused))
+            .collect::<Vec<_>>(),
+        [(Task::Purge, true), (Task::Rewrap, false)]
+    );
+
+    assert!(db.store.set_task_paused(Task::Purge, false).await.unwrap());
+    assert!(
+        db.store
+            .claim_run(Task::Purge, DAY, Duration::ZERO, LEASE)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    db.destroy().await.unwrap();
+}
+
+/// A pause is the incident's stop for purge: once it returns, no batch
+/// deletes, a manual one or a stalled server's included. Each batch holds
+/// the row `FOR SHARE`, so the pause waits for the one in flight.
+#[tokio::test]
+async fn a_pause_waits_for_the_purge_batch_in_flight_and_stops_the_next() {
+    let db = TestDb::new().await.unwrap();
+    db.put("app/gone").await.unwrap();
+    db.delete("app/gone").await.unwrap();
+
+    // A batch in flight: its transaction holds the row as `purge_deleted`'s.
+    let mut batch = db.db.pool().begin().await.unwrap();
+    sqlx::query("SELECT paused FROM scheduled_tasks WHERE task = 'purge' FOR SHARE")
+        .execute(&mut *batch)
+        .await
+        .unwrap();
+    let store = db.store.clone();
+    let pausing = tokio::spawn(async move { store.set_task_paused(Task::Purge, true).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !pausing.is_finished(),
+        "the pause returned with a batch in flight"
+    );
+    batch.commit().await.unwrap();
+    assert!(!pausing.await.unwrap().unwrap());
+
+    assert!(matches!(
+        db.store.purge_deleted(Duration::ZERO, 10).await,
+        Err(DatastoreError::TaskPaused(Task::Purge))
+    ));
+    assert_eq!(rows(&db, "app/gone").await.unwrap(), 1);
+    db.store.set_task_paused(Task::Purge, false).await.unwrap();
+    assert_eq!(db.store.purge_deleted(Duration::ZERO, 10).await.unwrap(), 1);
     db.destroy().await.unwrap();
 }

@@ -106,6 +106,10 @@ to 10 s.
 | `ferritor.watch.feed.live` | `ferritor_watch_feed_live` | gauge | 1 while the change feed polls the data database, 0 while it can't |
 | `ferritor.watch.feed.held_back` | `ferritor_watch_feed_held_back_seconds` | gauge (s) | how long one open transaction has held the change feed back (below); 0 normally |
 | `ferritor.watch.resyncs` | `ferritor_watch_resyncs_total` | counter | `reason` (too_many, restarted: every stream told at once; lagged: one stream fell behind) |
+| `ferritor.schedule.runs` | `ferritor_schedule_runs_total` | counter | `task` (purge, rewrap), `result` (ok, failed, interrupted, lost): the [scheduled runs](/operations/running#scheduled-tasks) this server made |
+| `ferritor.schedule.run.duration` | `ferritor_schedule_run_duration_seconds` | histogram (s) | `task` |
+| `ferritor.schedule.last_success` | `ferritor_schedule_last_success_seconds` | gauge (unix s) | `task`: when a run, on any server, last finished everything; from the shared schedule, so every server reports the same; absent before the first |
+| `ferritor.schedule.paused` | `ferritor_schedule_paused` | gauge | `task`: 1 paused for every server (`ferritor schedule pause`), 0 not |
 | `ferritor.secrets.rotation_overdue` | `ferritor_secrets_rotation_overdue` | gauge | secrets with the rotation flag (`ferritor.rotation=true`) whose current version is older than `rotation_max_age_days` (below) |
 | `ferritor.secrets.rotation_due_soon` | `ferritor_secrets_rotation_due_soon` | gauge | the same, within `rotation_warn_days` of it |
 | `ferritor.keks.rotation_overdue` | `ferritor_keks_rotation_overdue` | gauge | namespaces whose active KEK is older than `kek_max_age_days` |
@@ -144,6 +148,18 @@ secret's due date.
   gauges as an earlier warning. Rotate a secret with a new version, a
   namespace's KEK with `ferritor rotate`, the root key with `ferritor rekey`
   ([key management](/operations/key-management)).
+- `time() - max by (task) (ferritor_schedule_last_success_seconds)` above
+  two intervals (two days for purge, two hours for rewrap, by default): a
+  [scheduled task](/operations/running#scheduled-tasks) hasn't finished in
+  that long (every server sealed, a failing run: `ferritor status` shows
+  the last result, the logs and the audit log why). Every server reports
+  the same time, so the alert works whichever is scraped. The gauge is
+  absent until a task's first success, so a deployment whose runs have
+  never succeeded needs its own alert: `absent(ferritor_schedule_last_success_seconds{task="purge"})`
+  (and `task="rewrap"`) for longer than an interval after the deployment
+  started, or any `ferritor_schedule_runs_total` with a `result` but `ok`
+  that keeps rising. And `max(ferritor_schedule_paused) > 0` held for
+  longer than an incident should take: a pause someone forgot.
 - `ferritor_audit_queue_depth` rising (the audit log's file stalling, before requests are
   refused), any `ferritor_audit_failures_total`, and
   `ferritor_reloads_total{kind="audit_log",result="failed"}` (a reopen that

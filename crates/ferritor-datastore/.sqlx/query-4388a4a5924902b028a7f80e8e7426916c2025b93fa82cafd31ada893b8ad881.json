@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE scheduled_tasks\n                   SET lease_until = now() + make_interval(secs => $3)\n                   WHERE task = $1 AND run_id = $2\n                   RETURNING paused",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "paused",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "paused"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4388a4a5924902b028a7f80e8e7426916c2025b93fa82cafd31ada893b8ad881"
+}

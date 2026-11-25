@@ -30,7 +30,7 @@ which the server checks, not from names.
 [[policy]]
 name = "ops-admin"         # optional: shown as config:ops-admin (unnamed: config:<n>)
 identity = "ops/alice"
-actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity"]
+actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity", "schedule"]
 
 [[policy]]
 identity = "ops/backup"    # a backup tool: mustn't depend on the database
@@ -215,6 +215,7 @@ Admin actions (on the server; config rules only):
 | `namespace` | creating, listing, inspecting, labelling and deleting namespaces (see [key management](/operations/key-management)) |
 | `policy` | managing and reading the stored policies, and checking access |
 | `identity` | creating, rotating and inspecting the workload-identity issuing CA (`ferritor identity`; see [workload identity](/guides/workload-identity)) |
+| `schedule` | pausing and resuming the scheduled tasks for every server (`ferritor schedule pause` and `resume`; see [scheduled tasks](/operations/running#scheduled-tasks)). Showing the schedule is `status`'s |
 
 Things worth knowing:
 

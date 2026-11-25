@@ -216,7 +216,7 @@ client_ca = "/etc/ferritor/ca.pem"
 [[policy]]
 name = "operators"
 identity = "ops/alice"
-actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity"]
+actions = ["status", "init", "unseal", "seal", "rekey", "rotate", "rewrap", "purge", "destroy_kek", "namespace", "policy", "identity", "schedule"]
 
 # Workload identity: the cluster's service account tokens.
 [identity]

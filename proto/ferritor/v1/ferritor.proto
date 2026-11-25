@@ -39,15 +39,26 @@ service SystemService {
   // Rewrap: move DEKs still wrapped by older KEK versions of their namespace
   // to its active one, then retire the versions no row uses any more. One
   // namespace, or every one. Bounded per call: repeat until `done`. Safe to
-  // repeat or run concurrently.
+  // repeat or run concurrently. FAILED_PRECONDITION with reason TASK_PAUSED
+  // while rewrap is paused (SetTaskPaused), at the start or at the next
+  // batch.
   rpc Rewrap(RewrapRequest) returns (RewrapResponse);
   // Remove deleted secret versions for good once they're past the server's
   // retention (its purge_deleted_after_days setting; not the caller's
   // choice). Until then a deleted version can be brought back
   // (RestoreSecret). Live versions are never touched, and version numbers
   // are never freed. Bounded per call: repeat until `done`. Safe to repeat or run
-  // concurrently.
+  // concurrently. FAILED_PRECONDITION with reason TASK_PAUSED while purge is
+  // paused (SetTaskPaused), at the start or at the next batch.
   rpc Purge(PurgeRequest) returns (PurgeResponse);
+  // Pause or resume a scheduled task (purge, rewrap: the servers run them on
+  // their own, on one schedule shared through the data database) for every
+  // server at once: no server claims a paused task, a Purge or Rewrap call
+  // is refused (TASK_PAUSED), and a run under way, scheduled or not, ends at
+  // its next batch. Needs the schedule permission. INVALID_ARGUMENT for a
+  // task this server doesn't know. Safe to repeat: was_paused says whether
+  // it already was. The schedule itself is in StatusResponse.
+  rpc SetTaskPaused(SetTaskPausedRequest) returns (SetTaskPausedResponse);
   // Destroy a retired KEK version of a namespace: erase its wrapped key for good, so
   // nothing it wrapped can be decrypted any more, from any copy of the data
   // database (crypto-shredding). Irreversible. Only a retired version
@@ -243,6 +254,27 @@ message StatusResponse {
   // only for callers with the namespace permission (names are behind it, as
   // for ListNamespaces); empty otherwise.
   repeated ActiveKekRotation active_keks = 10;
+  // The scheduled tasks, as the data database's shared schedule has them;
+  // empty if it couldn't be read.
+  repeated ScheduledTask scheduled_tasks = 11;
+}
+
+message ScheduledTask {
+  // "purge" or "rewrap".
+  string task = 1;
+  // When a server will next claim it (the database's clock), unless paused.
+  int64 next_due_unix = 2;
+  bool paused = 3;
+  // A run holds a lease that hasn't run out.
+  bool running = 4;
+  // Unset before the first run.
+  optional int64 last_started_unix = 5;
+  optional int64 last_finished_unix = 6;
+  // How the last run ended: "ok", "failed" or "interrupted"; empty before
+  // the first.
+  string last_result = 7;
+  // When a run last finished everything it had to do.
+  optional int64 last_success_unix = 8;
 }
 
 // When something was made (or last rotated), and when it's due for
@@ -583,6 +615,18 @@ message PurgeResponse {
   uint64 purged = 1;
   // Nothing past its retention is left.
   bool done = 2;
+}
+
+message SetTaskPausedRequest {
+  // "purge" or "rewrap".
+  string task = 1;
+  // True pauses, false resumes.
+  bool paused = 2;
+}
+
+message SetTaskPausedResponse {
+  // Whether it was paused before this call.
+  bool was_paused = 1;
 }
 
 message DestroyKekRequest {

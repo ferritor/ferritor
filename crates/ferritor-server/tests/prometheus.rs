@@ -81,6 +81,19 @@ async fn prometheus_scrapes_every_documented_metric_and_no_path() {
     rotation_counts.set_keks(counted);
     rotation_counts.set_root_key(counted);
     let _rotation_gauges = metrics::observe_rotation(rotation_counts);
+    // Read once, so both schedule gauges report (they're absent until).
+    let schedule = Arc::new(ferritor_server::schedule::ScheduleStates::default());
+    schedule.set(vec![ferritor_datastore::TaskState {
+        task: ferritor_datastore::Task::Purge,
+        next_due: time::OffsetDateTime::UNIX_EPOCH,
+        paused: false,
+        running: false,
+        last_started: None,
+        last_finished: None,
+        last_result: Some("ok".to_owned()),
+        last_success: Some(time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(1)),
+    }]);
+    let _schedule_gauges = metrics::observe_schedule(schedule);
     env.gate
         .reload_policy(PolicyReload::Skipped("dev mode: no policy"));
     env.secrets.put(&ANON, "app/db", b"x").await.unwrap();
@@ -102,6 +115,7 @@ async fn prometheus_scrapes_every_documented_metric_and_no_path() {
     recorded.exchange("k8s", "issued");
     recorded.watch_resync("lagged");
     recorded.auto_unseal("held");
+    recorded.scheduled_run("purge", "ok", Duration::from_millis(40));
 
     // Plaintext on loopback.
     let stop = CancellationToken::new();
@@ -119,7 +133,7 @@ async fn prometheus_scrapes_every_documented_metric_and_no_path() {
     // Exactly the documented families, under their Prometheus names.
     let documented = documented_families().unwrap();
     assert_eq!(families(&unsealed), documented);
-    assert_eq!(documented.len(), 35);
+    assert_eq!(documented.len(), 39);
     let line = |body: &str, prefix: &str| {
         body.lines()
             .find(|l| l.starts_with(prefix))

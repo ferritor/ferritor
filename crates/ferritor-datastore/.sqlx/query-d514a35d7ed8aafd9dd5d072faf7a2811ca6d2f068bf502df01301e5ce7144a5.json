@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE scheduled_tasks\n                   SET next_due = now() + make_interval(secs => $2 + random() * $3),\n                       run_id = uuidv7(),\n                       lease_until = now() + make_interval(secs => $4),\n                       last_started = now()\n                   WHERE task = $1 AND NOT paused AND next_due <= now()\n                     AND (lease_until IS NULL OR lease_until < now())\n                   RETURNING run_id AS \"run_id!\", failures",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "run_id!",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "failures",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "scheduled_tasks",
+            "name": "failures"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Float8",
+        "Float8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "d514a35d7ed8aafd9dd5d072faf7a2811ca6d2f068bf502df01301e5ce7144a5"
+}
