@@ -25,6 +25,9 @@ use sqlx::types::time::OffsetDateTime;
 use sqlx::types::{Json, Uuid};
 use sqlx::{PgPool, Postgres, Transaction};
 
+mod schedule;
+pub use schedule::{Claim, Lease, RunEnd, Task, TaskState};
+
 /// Migrations in `migrations/`, embedded at compile time.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 
