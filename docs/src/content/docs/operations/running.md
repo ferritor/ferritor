@@ -165,13 +165,12 @@ work it saves.
   claimed, `ferritor purge` is refused (`TASK_PAUSED`), and one under way
   ends at its next batch. The same for rewrap. `ferritor schedule resume
   purge` lets them run again. For an incident: deleted versions are the
-  only way to restore, so stop the purge first. The pause doesn't wait for
-  the batch in flight (up to 1,000 versions, which it may still remove):
-  before restoring anything, wait until `ferritor status` no longer shows
-  the task `running`. A purge by hand isn't shown there: it ends at its
-  next batch, refused with `TASK_PAUSED`, which whoever runs it sees; make
-  sure every one has before restoring. The schedule (next due, last
-  run, how it ended, paused, running) is in `ferritor status`.
+  only way to restore, so stop the purge first. Pausing purge returns only
+  once no purge batch is in flight (each one reads the pause in its own
+  transaction), so from then on nothing deletes, by hand or on the
+  schedule, a stalled server included: restoring is safe as soon as it
+  returns. The schedule (next due, last run, how it ended, paused,
+  running) is in `ferritor status`.
 - **Audited** like a request, as `ferritor:scheduler` where a caller would
   be (no identity can be that name): a run's `scheduled` entry is written
   before its first batch, or it doesn't run (and is retried); its outcome

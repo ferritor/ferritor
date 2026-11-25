@@ -74,6 +74,10 @@ pub enum DatastoreError {
     /// Only if a stored row bypassed the `paths.path` CHECK.
     #[error("stored secret path is not canonical")]
     InvalidStoredPath(#[source] PathError),
+    /// The task is paused for every server (`scheduled_tasks.paused`):
+    /// nothing was done.
+    #[error("{0} is paused for every server")]
+    TaskPaused(Task),
 }
 
 impl From<sqlx::Error> for DatastoreError {
@@ -819,6 +823,14 @@ impl Datastore {
     /// early), and a row being rewrapped or restored is left for the next
     /// pass. So "fewer than `limit`" means nothing is left that isn't
     /// already being handled.
+    ///
+    /// Paused ([`Datastore::set_task_paused`]), it deletes nothing:
+    /// [`DatastoreError::TaskPaused`]. The pause is read in the batch's own
+    /// transaction with the row locked `FOR SHARE`, so pausing (an UPDATE
+    /// of that row) waits for every batch in flight to commit, and every
+    /// batch after it sees the pause: once a pause returns, nothing is
+    /// purged, by hand or on the schedule, a stalled server's batch
+    /// included.
     pub async fn purge_deleted(&self, older_than: Duration, limit: u32) -> Result<u64> {
         bounded(self.timeout, async move {
             // `= ANY(ARRAY(...))`, not `IN (...)`: with a generic plan (the
@@ -831,6 +843,15 @@ impl Datastore {
             // scan, which is right there and doesn't stick: ANALYZE (by
             // autovacuum) invalidates it as the table grows.
             let mut tx = self.pool.begin().await?;
+            let paused = sqlx::query_scalar!(
+                "SELECT paused FROM scheduled_tasks WHERE task = $1 FOR SHARE",
+                Task::Purge.name(),
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            if paused == Some(true) {
+                return Err(DatastoreError::TaskPaused(Task::Purge));
+            }
             let mut path_ids = sqlx::query_scalar!(
                 "DELETE FROM secret_versions WHERE ctid = ANY (ARRAY(
                      SELECT ctid FROM secret_versions

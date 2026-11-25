@@ -2410,3 +2410,38 @@ async fn a_paused_task_is_never_claimed() {
     );
     db.destroy().await.unwrap();
 }
+
+/// A pause is the incident's stop for purge: once it returns, no batch
+/// deletes, a manual one or a stalled server's included. Each batch holds
+/// the row `FOR SHARE`, so the pause waits for the one in flight.
+#[tokio::test]
+async fn a_pause_waits_for_the_purge_batch_in_flight_and_stops_the_next() {
+    let db = TestDb::new().await.unwrap();
+    db.put("app/gone").await.unwrap();
+    db.delete("app/gone").await.unwrap();
+
+    // A batch in flight: its transaction holds the row as `purge_deleted`'s.
+    let mut batch = db.db.pool().begin().await.unwrap();
+    sqlx::query("SELECT paused FROM scheduled_tasks WHERE task = 'purge' FOR SHARE")
+        .execute(&mut *batch)
+        .await
+        .unwrap();
+    let store = db.store.clone();
+    let pausing = tokio::spawn(async move { store.set_task_paused(Task::Purge, true).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !pausing.is_finished(),
+        "the pause returned with a batch in flight"
+    );
+    batch.commit().await.unwrap();
+    assert!(!pausing.await.unwrap().unwrap());
+
+    assert!(matches!(
+        db.store.purge_deleted(Duration::ZERO, 10).await,
+        Err(DatastoreError::TaskPaused(Task::Purge))
+    ));
+    assert_eq!(rows(&db, "app/gone").await.unwrap(), 1);
+    db.store.set_task_paused(Task::Purge, false).await.unwrap();
+    assert_eq!(db.store.purge_deleted(Duration::ZERO, 10).await.unwrap(), 1);
+    db.destroy().await.unwrap();
+}

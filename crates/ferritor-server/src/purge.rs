@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ferritor_core::messages::SEALED;
-use ferritor_datastore::{Datastore, DatastoreError, Task};
+use ferritor_datastore::{Datastore, DatastoreError};
 
 use crate::seal::Seal;
 
@@ -53,6 +53,7 @@ impl From<DatastoreError> for PurgeError {
     fn from(e: DatastoreError) -> Self {
         match e {
             DatastoreError::Timeout => Self::DataTimeout,
+            DatastoreError::TaskPaused(_) => Self::Paused,
             other => Self::Store(other),
         }
     }
@@ -96,14 +97,10 @@ impl Purge {
         let epoch = self.seal.unsealed_epoch().map_err(|_| PurgeError::Sealed)?;
         let mut report = PurgeReport::default();
         while budget > 0 {
-            // A pause stops every purge, a manual one too, before its
-            // next batch: in an incident, deleted versions are the only way
-            // back.
-            if self.store.task_paused(Task::Purge).await? {
-                return Err(PurgeError::Paused);
-            }
-            // Right before the batch, after every await: a seal during the
-            // pause's lookup must still stop it.
+            // A pause stops every purge, a manual one too: each batch reads
+            // it in its own transaction (`purge_deleted`), so once a pause
+            // returns, nothing more is deleted. In an incident, deleted
+            // versions are the only way back.
             self.seal
                 .ensure_unsealed_since(epoch)
                 .map_err(|_| PurgeError::Sealed)?;

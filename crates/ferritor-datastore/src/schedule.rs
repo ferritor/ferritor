@@ -240,7 +240,9 @@ impl Datastore {
     }
 
     /// Pauses `task` (no server claims it, and a run under way ends at its
-    /// next batch) or resumes it. Whether it was paused before.
+    /// next batch) or resumes it. Whether it was paused before. For purge
+    /// it returns only once no batch is in flight: each one locks this row
+    /// ([`Datastore::purge_deleted`]).
     pub async fn set_task_paused(&self, task: Task, paused: bool) -> Result<bool> {
         bounded(self.timeout, async move {
             let row = sqlx::query!(
@@ -257,8 +259,9 @@ impl Datastore {
         .await
     }
 
-    /// Whether `task` is paused for every server: purge and rewrap ask
-    /// before every batch, by hand as on the schedule. One primary-key read.
+    /// Whether `task` is paused for every server: rewrap asks before every
+    /// batch, by hand as on the schedule (purge reads it inside each batch
+    /// instead). One primary-key read.
     pub async fn task_paused(&self, task: Task) -> Result<bool> {
         bounded(self.timeout, async move {
             let paused = sqlx::query_scalar!(

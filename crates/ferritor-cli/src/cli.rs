@@ -269,7 +269,8 @@ pub enum ScheduleCommand {
     /// Stop a task on every server, scheduled or by hand: none claims it,
     /// `ferritor purge` or `rewrap` is refused, and a run under way ends at
     /// its next batch. For an incident: purge deletes for good, and
-    /// deleted versions are the only way to restore.
+    /// deleted versions are the only way to restore. Pausing purge returns
+    /// once no batch is in flight: from then on nothing purges.
     Pause {
         #[arg(value_parser = ["purge", "rewrap"])]
         task: String,

@@ -866,11 +866,17 @@ async fn schedule_command(
     };
     writeln!(out, "{task}: {state} on every server{already}")?;
     if paused {
-        eprintln!(
-            "No server runs it until `ferritor schedule resume {task}`. A run under way ends at \
-             its next batch, and may still finish the one in flight: wait until `ferritor status` \
-             no longer shows it running before restoring anything it could remove."
-        );
+        if task == "purge" {
+            eprintln!(
+                "Nothing purges any more, by hand or on the schedule, until `ferritor schedule \
+                 resume purge`: the pause waited for any batch in flight, so restoring is safe now."
+            );
+        } else {
+            eprintln!(
+                "No server runs it until `ferritor schedule resume {task}`; a run under way ends \
+                 at its next batch."
+            );
+        }
     }
     Ok(())
 }
