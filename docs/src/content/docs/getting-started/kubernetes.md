@@ -83,7 +83,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: docker.io/library/postgres:18
+          image: docker.io/library/postgres:19
           env:
             - {name: POSTGRES_USER, value: ferritor_keys}
             - {name: POSTGRES_DB, value: ferritor_keys}
@@ -115,7 +115,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: docker.io/library/postgres:18
+          image: docker.io/library/postgres:19
           env:
             - {name: POSTGRES_USER, value: ferritor_data}
             - {name: POSTGRES_DB, value: ferritor_data}

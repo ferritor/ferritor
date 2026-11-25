@@ -12,10 +12,11 @@ certificates, a stored policy and the signed audit log on, as in production.
 ## Setup
 
 - One desktop machine with a local NVMe SSD.
-- Both databases: `postgres:18` from `compose.yaml`, in Podman on the same
+- Both databases: `postgres:19` from `compose.yaml`, in Podman on the same
   host, untuned (defaults: `synchronous_commit = on`, `shared_buffers =
   128MB`, `max_connections = 100`). The load generator (`oha`), the server
-  and Postgres share the machine.
+  and Postgres share the machine, which wasn't idle for these runs (a
+  virtual machine and desktop programs were running): see the reads, below.
 - Server defaults (`max_versions = 10`), but `data_database_max_connections
   = 32`. Values of 100 bytes, over the JSON API (HTTP/1.1, keep-alive).
 - 30 s per scenario, in `bench/scenarios.sh`'s order, on fresh databases.
@@ -31,26 +32,28 @@ Over the JSON API (`oha`, one HTTP/1.1 connection per client):
 
 | Scenario | 10 connections | 50 connections |
 |---|---|---|
-| `get_100`: reads | 61,500/s; mean 0.16 ms, p99 0.29 ms | 83,700/s; mean 0.60 ms, p99 0.93 ms |
-| `put_distinct`: puts to new paths | 5,310/s; mean 1.88 ms, p99 2.34 ms | 10,900/s; mean 4.56 ms, p99 14.1 ms |
-| `put_100`: puts to 100 paths | 5,020/s; mean 1.99 ms, p99 3.92 ms | 9,190/s; mean 5.44 ms, p99 14.3 ms |
-| `put_one`: puts to one path | 823/s; mean 12.1 ms | 778/s; mean 64.3 ms |
-| `list`: a page of 100 paths | 19,600/s; mean 0.51 ms, p99 0.83 ms | 25,300/s; mean 1.98 ms, p99 2.89 ms |
+| `get_100`: reads | 59,400/s; mean 0.17 ms, p99 0.32 ms | 73,000/s; mean 0.68 ms, p99 1.25 ms |
+| `put_distinct`: puts to new paths | 5,140/s; mean 1.94 ms, p99 2.78 ms | 10,500/s; mean 4.74 ms, p99 14.3 ms |
+| `put_100`: puts to 100 paths | 5,000/s; mean 1.99 ms, p99 4.02 ms | 11,200/s; mean 4.46 ms, p99 13.8 ms |
+| `put_one`: puts to one path | 737/s; mean 13.6 ms | 751/s; mean 66.6 ms |
+| `list`: a page of 100 paths | 20,400/s; mean 0.49 ms, p99 0.79 ms | 25,500/s; mean 1.96 ms, p99 2.97 ms |
 
 Over gRPC (`ghz`, all workers on one HTTP/2 connection, as an application's
 one channel):
 
 | Scenario | 10 workers | 50 workers |
 |---|---|---|
-| `grpc_get_100`: reads | 32,200/s; mean 0.25 ms, p99 0.66 ms | 50,400/s; mean 0.86 ms, p99 2.03 ms |
-| `grpc_put_distinct`: puts to new paths | 5,240/s; mean 1.84 ms, p99 2.82 ms | 10,400/s; mean 4.69 ms, p99 14.5 ms |
+| `grpc_get_100`: reads | 30,700/s; mean 0.25 ms, p99 0.59 ms | 35,900/s; mean 1.24 ms, p99 2.71 ms |
+| `grpc_put_distinct`: puts to new paths | 5,280/s; mean 1.81 ms, p99 2.79 ms | 10,300/s; mean 4.72 ms, p99 14.3 ms |
 
 The 50-connection puts vary from run to run by more than the gap between
-`put_100` and `put_distinct` (`put_100` measured 9,200/s to 11,800/s on
-this code). Every request
+`put_100` and `put_distinct`. The 50-connection reads are bound by the CPU,
+which the machine's other programs shared in these runs: repeated,
+`get_100` measured 61,600/s to 74,300/s and `grpc_get_100` 35,900/s to
+44,600/s. Every request
 succeeded, except a few gRPC calls still in flight when `ghz` stopped: it
 closes its connection at the deadline, and reports them as `Unavailable` or
-`Canceled` ("use of closed network connection"; at most 43 of 311,000). The
+`Canceled` ("use of closed network connection"; at most 49 of 308,000). The
 server still finished them (see "The audit log isn't the limit", below).
 gRPC puts match the JSON API's; gRPC reads measured lower, and spreading
 them over 10 connections didn't change that (50 workers: 47,500/s on one
@@ -66,14 +69,14 @@ the same connection:
 
 | `pgbench` script | 1 connection | 10 connections |
 |---|---|---|
-| one round trip (`SELECT 1`) | 0.014 ms | 0.027 ms |
-| one durable commit | 0.98 ms | 1.78 ms (5,620/s) |
-| a put's 8 statements, as ferritor sends them | 1.14 ms | 1.88 ms (5,320/s) |
+| one round trip (`SELECT 1`) | 0.015 ms | 0.027 ms |
+| one durable commit | 0.93 ms | 1.84 ms (5,420/s) |
+| a put's 8 statements, as ferritor sends them | 1.23 ms | 1.89 ms (5,290/s) |
 
-A ferritor put at 10 connections (1.88 ms) costs no more than Postgres alone
-does: the TLS, the request, the crypto, the policy check and the audit
-entry hide inside the commit's wait for the WAL flush. Round trips are cheap (14 µs,
-port forwarding included), so the put's 8 statements add 0.1 to 0.2 ms over
+A ferritor put at 10 connections (1.94 ms) costs about what Postgres alone
+does (1.89 ms): the TLS, the request, the crypto, the policy check and the audit
+entry hide inside the commit's wait for the WAL flush. Round trips are cheap (15 µs,
+port forwarding included), so the put's 8 statements add 0.05 to 0.3 ms over
 a bare commit. So, for writes:
 
 - **Concurrency is what scales them.** Postgres flushes many waiting
@@ -88,8 +91,8 @@ a bare commit. So, for writes:
   acknowledged put could then be lost, which ferritor's version numbers and
   KEK floors rule out (see [high availability](/operations/high-availability)).
 - **Puts to one path are serialized** by its lock: one commit after
-  another (about 1.2 ms each here, 840/s, however many clients wait). Spread
-  hot writes over paths.
+  another (about 1.35 ms each here, 740/s to 750/s, however many clients
+  wait). Spread hot writes over paths.
 
 **Reads don't touch the disk**: one query on a cached index, the decryption
 in memory, the audit entry. At 50 connections they're bound by the CPU the
@@ -98,12 +101,11 @@ server, Postgres and the load generator share.
 **The audit log isn't the limit.** Each allowed request waits until its
 entry is written to the log's file: one `write` of the line by the writer
 thread, no `fsync` ("written" means the kernel has it, as with any log
-file). That costs microseconds, far below a commit, and reads at 83,700/s
-include it. Every write is audited under load too: the 50-connection run
-above allowed 938,972 writes, recorded as many put outcomes, and stored as
-many rows,
-including the calls `ghz` cut off at its deadlines (every request runs to
-its end in a task of its own, whether its client waits or not).
+file). That costs microseconds, far below a commit, and reads at 73,000/s
+include it. Every write is audited under load too: a 50-connection run
+allowed 938,972 writes, recorded as many put outcomes, and stored as many
+rows, including the calls `ghz` cut off at its deadlines (every request
+runs to its end in a task of its own, whether its client waits or not).
 
 ## Deleted versions
 

@@ -111,6 +111,16 @@ docker compose exec -T keys-db psql -U ferritor -d postgres -c 'DROP DATABASE fe
 docker compose exec -T data-db psql -U ferritor -d postgres -c 'DROP DATABASE ferritor_data WITH (FORCE)' -c 'CREATE DATABASE ferritor_data'
 ```
 
+**A new major Postgres version in `compose.yaml`** (18 to 19, say) doesn't
+start on the volumes the old one wrote: Postgres opens only its own major
+version's data, and the image's entrypoint exits, reporting the old data,
+so the containers stop at once and `docker compose exec` (the SQL above)
+can't reach them. Either start both volumes over with `docker compose down
+-v && docker compose up -d` (it deletes every local secret and the seal,
+as above), or, to keep the data, upgrade it first with `pg_upgrade`, which
+needs the old and the new version's binaries side by side (the image's
+message points to the ways of doing that in a container).
+
 ## Tests
 
 Store and server tests are integration tests (`tests/`) against the real
