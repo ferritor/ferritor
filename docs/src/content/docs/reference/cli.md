@@ -24,7 +24,7 @@ from each say how they fit together.
 On macOS:
 
 ```sh
-version=1.0.1
+version=1.1.0
 f=ferritor-cli-$version-aarch64-apple-darwin.tar.gz   # Intel Macs: x86_64-apple-darwin
 for a in "$f" "$f.sigstore.json" SHA256SUMS; do
   curl -fsSLO "https://github.com/ferritor/ferritor/releases/download/v$version/$a"
@@ -43,7 +43,7 @@ installs under Program Files; without one, use a folder of your own, such
 as `$env:LOCALAPPDATA\Programs\ferritor`, in its place:
 
 ```powershell
-$version = "1.0.1"
+$version = "1.1.0"
 $f = "ferritor-cli-$version-x86_64-pc-windows-gnu.zip"
 foreach ($a in $f, "$f.sigstore.json", "SHA256SUMS") {
   Invoke-WebRequest "https://github.com/ferritor/ferritor/releases/download/v$version/$a" -OutFile $a
