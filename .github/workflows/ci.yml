@@ -119,7 +119,7 @@ jobs:
     # As compose.yaml: two separate servers, on the ports .env.example uses.
     services:
       keys-db:
-        image: postgres:18
+        image: postgres:19
         env:
           POSTGRES_USER: ferritor
           POSTGRES_PASSWORD: ferritor
@@ -129,7 +129,7 @@ jobs:
           --health-cmd "pg_isready -U ferritor" --health-interval 2s
           --health-timeout 5s --health-retries 30
       data-db:
-        image: postgres:18
+        image: postgres:19
         env:
           POSTGRES_USER: ferritor
           POSTGRES_PASSWORD: ferritor

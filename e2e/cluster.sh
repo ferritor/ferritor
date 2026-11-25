@@ -23,7 +23,7 @@ keep=${KEEP:-0}
 api_port=${API_PORT:-27070}
 exchange_port=${EXCHANGE_PORT:-27071}
 # Pinned by digest (the tag only says what it was: a tag can move, and
-# postgres:18 does with every minor release), so a new image changes
+# postgres:19 does with every minor release), so a new image changes
 # nothing here unasked; the driver's chart by version. To update one, take
 # the tag's current digest (the registry's Docker-Content-Digest for the
 # tag's index) and run this again. Pulled anonymously from Docker Hub, whose
@@ -32,7 +32,7 @@ exchange_port=${EXCHANGE_PORT:-27071}
 k3s_image=docker.io/rancher/k3s:v1.32.5-k3s1@sha256:b75eac801bbc91b4584769c840f346683c7740d72f83e630088370f8e1eb2c8a
 driver_chart=1.6.1
 busybox=docker.io/library/busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
-postgres=docker.io/library/postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+postgres=docker.io/library/postgres:19@sha256:aaa10f7ba7328b4a221a6c3184d83eef885bd16bf1f6de864757863156b0a4d1
 server_image=localhost/ferritor-server:e2e
 provider_image=localhost/ferritor-csi-provider:e2e
 

@@ -55,10 +55,10 @@ google-cloud-auth = { version = "1.19.0", default-features = false }
 # A request body wiped when dropped (`Bytes::from_owner`).
 bytes = "1.12.2"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "http2", "rustls-no-provider"] }
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 axum = "0.8.9"
 base64 = "0.23.1"
-clap = { version = "4.6.9", features = ["derive", "env"] }
+clap = { version = "4.6.10", features = ["derive", "env"] }
 config = "0.15.27"
 dotenvy = "0.15.7"
 # PKCS#8 PEM keys (`pem`) for the audit log's signing key and the verifier's
@@ -68,7 +68,7 @@ getrandom = { version = "0.4.3", features = ["sys_rng"] }
 # HMAC-SHA256 for stored policies' integrity (the same sha2 as everywhere).
 hmac = "0.13.0"
 http-body-util = "0.1.5"
-hyper = { version = "1.12.0", features = ["client", "http1", "http2"] }
+hyper = { version = "1.13.0", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 # The public CA roots for fetching a token issuer's keys (identity), unless a
 # private CA is configured; the same crate the metrics exporter uses.
@@ -109,7 +109,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = ["logg
 tokio-stream = { version = "0.1.19", features = ["net"] }
 # TaskTracker, for the requests tls::serve detaches from their connections.
 tokio-util = { version = "0.7.20", features = ["rt"] }
-toml = "1.2.2"
+toml = "1.2.3"
 tonic = { version = "0.14.9", features = ["tls-ring"] }
 tonic-health = "0.14.9"
 tonic-prost = "0.14.9"
