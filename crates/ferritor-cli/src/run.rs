@@ -1288,14 +1288,17 @@ async fn generate(
             .await,
     )?;
     let profile = profile.unwrap_or("default");
+    // Stored: report it, but a stdout that fails now doesn't make the
+    // generate a failure (a script would retry, making another value).
     match reply.metadata {
         Some(m) => writeln!(
             out,
             "{} version {} generated (profile {profile})",
             m.path, m.version
-        )?,
-        None => writeln!(out, "{path} generated (profile {profile})")?,
-    }
+        )
+        .ok(),
+        None => writeln!(out, "{path} generated (profile {profile})").ok(),
+    };
     Ok(())
 }
 
