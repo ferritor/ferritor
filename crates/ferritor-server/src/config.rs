@@ -119,6 +119,12 @@ pub struct Settings {
     pub purge_interval_minutes: u32,
     /// How often rewrap runs, in minutes. Default 60.
     pub rewrap_interval_minutes: u32,
+    /// Generated secrets' profiles (see `generate`): how `ferritor
+    /// generate` makes a value. Each a name, a
+    /// length and character sets with minimums, checked whole at load; a
+    /// built-in `default` unless one has that name. Reloaded on SIGHUP.
+    #[serde(default)]
+    pub generate_profile: Vec<crate::generate::ProfileSettings>,
     /// The Ed25519 private key (PKCS#8 PEM, e.g. `openssl genpkey
     /// -algorithm ed25519`) that signs the audit log's checkpoints (see
     /// `audit`), so edits to the log can be detected with the public key
@@ -531,6 +537,9 @@ impl Settings {
         settings.limits().map_err(config::ConfigError::Message)?;
         settings.rotation().map_err(config::ConfigError::Message)?;
         settings.schedule().map_err(config::ConfigError::Message)?;
+        settings
+            .generate_profiles()
+            .map_err(config::ConfigError::Message)?;
         settings.identity().map_err(config::ConfigError::Message)?;
         settings.metrics().map_err(config::ConfigError::Message)?;
         if let Some(otlp) = &settings.audit_otlp {
@@ -647,6 +656,14 @@ impl Settings {
     /// The scheduled tasks' intervals, checked (see [`crate::schedule`]).
     pub fn schedule(&self) -> Result<crate::schedule::Intervals, String> {
         crate::schedule::Intervals::new(self.purge_interval_minutes, self.rewrap_interval_minutes)
+    }
+
+    /// The generated secrets' profiles, checked, `default` included (see
+    /// [`crate::generate`]).
+    pub fn generate_profiles(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, crate::generate::Profile>, String> {
+        crate::generate::profiles(&self.generate_profile)
     }
 }
 
@@ -1002,6 +1019,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "rotation_warn_days",
     "purge_interval_minutes",
     "rewrap_interval_minutes",
+    "generate_profile",
     "audit_signing_key",
     "audit_file",
     "audit_file_max_bytes",
@@ -1781,6 +1799,7 @@ mod tests {
             ![
                 "tls",
                 "policy",
+                "generate_profile",
                 "rate_limit",
                 "identity",
                 "seal",
@@ -1799,6 +1818,8 @@ mod tests {
         assert!(EXAMPLE.contains("#[audit_otlp]"));
         assert!(secured.audit_otlp.is_some());
         assert!(EXAMPLE.contains("#[seal.awskms]") && EXAMPLE.contains("#[seal.gcpkms]"));
+        // An array of tables, commented out as a whole.
+        assert!(EXAMPLE.contains("#[[generate_profile]]"));
         assert_eq!(dev.metrics().unwrap(), Metrics::OtlpIfConfigured);
         assert_eq!(
             secured.metrics().unwrap(),
@@ -1829,7 +1850,8 @@ mod tests {
              [[rate_limit.identity]]\nidentity = \"apps/a\"\nmax_in_flight = 4\nrequests_per_second = 5\nburst = 6\n\
              {IDENTITY}\n\
              [seal]\nprovider = \"shamir\"\n\
-             [metrics]\nexporter = \"prometheus\"\nlisten_addr = \"0.0.0.0:9464\"\ntls = true\nclient_ca = \"ca.pem\"\n"
+             [metrics]\nexporter = \"prometheus\"\nlisten_addr = \"0.0.0.0:9464\"\ntls = true\nclient_ca = \"ca.pem\"\n\
+             [[generate_profile]]\nname = \"pin\"\nlength = 30\ncharsets = [{{ chars = \"0123456789\", min = 0 }}]\n"
         );
         let all = parse(&all).unwrap();
         assert_eq!(all.rate_limit.identity.len(), 1);
@@ -1839,8 +1861,14 @@ mod tests {
         assert_eq!(parse("").unwrap().policy_refresh_secs, 5);
         assert_eq!(all.shutdown_delay_secs, 5);
         assert_eq!(parse("").unwrap().shutdown_delay_secs, 0);
-        assert_eq!(KNOWN_KEYS.len(), 29);
+        assert_eq!(KNOWN_KEYS.len(), 30);
         assert_eq!(all.schedule(), crate::schedule::Intervals::new(720, 30));
+        let profiles = all.generate_profiles().unwrap();
+        assert_eq!(
+            profiles.keys().collect::<Vec<_>>(),
+            ["default", "pin"],
+            "the config's profiles and the built-in default"
+        );
         assert_eq!(parse("").unwrap().schedule(), Ok(crate::schedule::DEFAULT));
         assert_eq!(
             all.rotation(),
@@ -1857,6 +1885,10 @@ mod tests {
             (
                 "rewrap_interval_minutes = 50000",
                 "rewrap_interval_minutes (50000)",
+            ),
+            (
+                "[[generate_profile]]\nname = \"short\"\nlength = 8\ncharsets = [{ chars = \"0123456789\" }]",
+                "27 bits",
             ),
         ] {
             let error = parse(bad).unwrap_err();

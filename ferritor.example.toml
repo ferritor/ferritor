@@ -244,6 +244,26 @@ data_database_url = "postgres://ferritor:ferritor@localhost:5434/ferritor_data"
 #identity = "k8s-prod/billing/api"
 #not_before = "2026-10-24T12:00:00Z"
 
+# How `ferritor generate` makes a value: a profile is a length (up to 100)
+# and character sets, each with the fewest of its characters a value must
+# hold. Characters are printable ASCII but space; a character in two sets is
+# no likelier, and counts toward both. Refused at load: minimums past the
+# length, under 80 bits (length x log2 of the distinct characters), or
+# minimums met by fewer than one value in a hundred. Each server has its
+# own: keep them alike on every server. Without one named "default", a
+# built-in one: 32 characters of all 94, at least one lowercase, uppercase,
+# digit and symbol. Use literal strings ('...' or '''...''') for sets
+# holding " or \. Reloaded on SIGHUP.
+#[[generate_profile]]
+#name = "example"
+#length = 20
+#charsets = [
+#{ chars = "abcdefghijklmnopqrstuvwxyz", min = 1 },
+#{ chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", min = 1 },
+#{ chars = "0123456789", min = 1 },
+#{ chars = '!@#$%^&*', min = 2 },
+#]
+
 # How the root key is opened at start (https://ferritor.dev/operations/key-management).
 # Without this section (or with provider = "shamir"), the operators' shares
 # unseal every server after every start. With "awskms" or "gcpkms" a server
