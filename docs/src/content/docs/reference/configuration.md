@@ -188,12 +188,53 @@ within 5 seconds, its own retry (after 200 ms) included.
 | `tls` | `false` on loopback, `true` elsewhere | Prometheus only: TLS with the server's certificate, which needs secured mode. `false` off loopback serves plaintext there (a startup warning says so): only on a network you trust with what metrics show. |
 | `client_ca` | (none) | Prometheus over TLS only: the CA (PEM) whose client certificates scrapers present. Without it, anyone who reaches the port reads the metrics. |
 
+<a id="generated-secrets"></a>`[[generate_profile]]`: how `ferritor generate`
+makes a value ([generated secrets](/guides/secrets#generated-secrets)). Any
+number; reloaded on SIGHUP. Without one named `default`, a built-in
+`default`: 32 characters of all 94 printable ASCII characters, at least one
+lowercase, uppercase, digit and symbol.
+
+| Key | | |
+|---|---|---|
+| `name` | required | Lowercase letters, digits, `-` and `_`, 1 to 63 characters; each name once. What `--profile` names. |
+| `length` | required | The value's characters, 1 to 100. |
+| `charsets` | required | 1 to 16 sets, each `{ chars = "…", min = N }`: its characters (printable ASCII 33 to 126, no space, each once in its set) and the fewest of them a value holds (default 0). A character in two sets is no likelier for it, and counts toward both minimums. |
+
+```toml
+[[generate_profile]]
+name = "token"
+length = 40
+charsets = [
+  { chars = "abcdefghijklmnopqrstuvwxyz0123456789" },
+]
+
+[[generate_profile]]
+name = "password"
+length = 20
+charsets = [
+  { chars = "abcdefghijklmnopqrstuvwxyz", min = 1 },
+  { chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", min = 1 },
+  { chars = "0123456789", min = 1 },
+  { chars = '!"#$%&*+-=?@^_', min = 2 },     # a literal string: " and \ need no escape
+]
+```
+
+Refused at load, so a bad profile stops the server starting (or its
+reload), never a generate later: minimums adding up past the length; fewer
+than 80 bits (`length × log2` of the distinct characters: 20 of 70 is about
+122, 16 letters and digits about 95, 8 digits about 27, refused); and
+minimums so rare that fewer than one value in a hundred meets them (a test
+batch, the same at every load), since a value missing one is drawn again
+whole. Sets holding `"` or `\` are easiest as literal strings, `'…'` or
+`'''…'''`. Each server has its own profiles, and refuses a name it doesn't
+have rather than use another: keep them alike on every server.
+
 `[[policy]]`: the config rules, for the operators (see [policy](/guides/policy);
 the applications' grants are stored policies, managed over the API). Each
 may have a `name`, shown as `config:<name>`.
 
 A misspelled key in `ferritor.toml` refuses to start (unknown top-level keys,
-and unknown keys inside `[tls]`, `[rate_limit]`, `[identity]`, `[seal]`, `[metrics]` and `[[policy]]`). Environment variables get
+and unknown keys inside `[tls]`, `[rate_limit]`, `[identity]`, `[seal]`, `[metrics]`, `[[policy]]` and `[[generate_profile]]`). Environment variables get
 no such check: the CLI's `FERRITOR_ADDR`, `FERRITOR_CA`, `FERRITOR_CERT`,
 `FERRITOR_KEY`, `FERRITOR_TOKEN_FILE` and `FERRITOR_EXCHANGE` share the prefix and may be set in the same shell, so a
 misspelled `FERRITOR_…` variable is silently ignored.
@@ -252,6 +293,8 @@ The CLI over TLS: `--addr https://…` with `--ca`, `--cert` and `--key` (or
   then on;
 - the scheduled tasks' intervals (`purge_interval_minutes`,
   `rewrap_interval_minutes`), from the next run this server claims;
+- the generate profiles (`[[generate_profile]]`), for every generate from
+  then on;
 - the rate limits but `server_max_in_flight` (a change to it warns, and
   waits for a restart). Counters carry over: a reload doesn't refill
   anyone's burst;

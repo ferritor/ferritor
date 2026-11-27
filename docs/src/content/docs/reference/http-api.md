@@ -186,6 +186,7 @@ may be added; treat an unknown one by its HTTP status.
 | 409 | `version_mismatch` | a check-and-set found another version (or revision) | read again, then decide |
 | 409 | `live_version` | a restore without a version while one is live | name the version |
 | 409 | `no_namespace` | the path's namespace doesn't exist | an operator creates it |
+| 409 | `unknown_profile` | a generate naming a profile the server's config doesn't have | another profile, or an operator adds it to every server |
 | 409 | `busy` | too many concurrent writes to one path | retry as is |
 | 409 | `aborted` | a conflict that a retry resolves | retry |
 | 413 | `invalid_argument` | the body is over the limit | |
@@ -263,6 +264,20 @@ Deletes every version (restorable until purged). `204`, no body.
 Brings a deleted version back: `{}` undoes a delete (the newest deleted
 version, only while none is live; `409 live_version` otherwise), `{"version":
 N}` restores that one. Answers like a put.
+
+### `POST /v1/generate/{path}` (`write`; `label` too with `labels`)
+
+Stores a new version whose value the server makes up from a generate
+profile ([generated secrets](/guides/secrets#generated-secrets)): a put's
+body without the value.
+
+```json
+{"profile": "token", "expected_version": 0, "labels": {"ferritor.rotation": "true"}}
+```
+
+All optional (`{}`: the `default` profile). Answers like a put, never with
+the value: read it. `409 unknown_profile` if the server has no such
+profile.
 
 ### `GET /v1/secrets?prefix=…&label=key=value&overdue=true&older_than_days=…&page_size=…&page_token=…` (`list`)
 

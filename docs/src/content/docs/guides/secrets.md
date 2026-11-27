@@ -147,6 +147,41 @@ stored (never written, or every version purged) is `NOT_FOUND`.
   ferritor list billing --label ferritor.rotation=true      # what's on a schedule
   ```
 
+## Generated secrets
+
+ferritor can make up a value itself and store it as an ordinary secret,
+from a **profile** in the server's config: how long, and from which
+characters ([`[[generate_profile]]`](/reference/configuration#generated-secrets);
+`default`, built in, is 32 characters of all 94 printable ASCII
+characters, at least one lowercase, uppercase, digit and symbol). No one
+types it, pastes it or sees it on the way in.
+
+```sh
+ferritor generate billing/cookie-key                        # from `default`
+ferritor generate billing/api-token --profile token --expected-version 0   # only if new
+ferritor generate billing/db --label ferritor.rotation=true # remind me to rotate it
+ferritor get billing/api-token                              # the value: generate never prints it
+```
+
+- The value is drawn uniformly among those the profile allows, from the
+  operating system's random number generator, and stored as the path's
+  next version exactly as a put would store it: its own data key, the
+  version limit, check-and-set (`--expected-version`, 0 for create only)
+  and labels. It needs `write` on the path (and `label` with labels).
+- It's never returned or logged: `get` reads it, as any secret. The audit
+  log records the generate (`"generate"`) with the profile, never the
+  value.
+- Nothing of the profile is kept with the path: it's an ordinary secret
+  from then on. Generating again stores a new value, from whichever
+  profile is named then; a `put` is fine too.
+- Profiles are each server's config: one the server reached doesn't have is
+  refused (`UNKNOWN_PROFILE`), never swapped for another. Keep them alike
+  on every server.
+- Nothing rotates it on its own. To be reminded, give it the rotation flag
+  (`--label ferritor.rotation=true`): the [rotation
+  reminders](#listing-by-age) then count it, and `ferritor generate` again
+  is the rotation.
+
 ## Listing by age
 
 For rotation reminders ([configuration](/reference/configuration)), a
@@ -198,7 +233,7 @@ script is more likely an accident. `ferritor list` fetches every page.
 `SecretsService` in `proto/ferritor/v1/ferritor.proto`: `GetSecret`, `PutSecret`
 (with `expected_version` and `labels`), `DeleteSecret`, `RestoreSecret`,
 `ListSecrets` (with a `labels` filter), `ListVersions`, `GetMetadata`,
-`UpdateLabels`. Listings are paginated: page size 0 means 100, anything
+`UpdateLabels`, `GenerateSecret`. Listings are paginated: page size 0 means 100, anything
 above 1000 is capped, and an empty `next_page_token` is the last page. A
 page token is opaque, and can never widen a listing beyond the prefix it
 came from.
@@ -244,8 +279,8 @@ only while its stream is up.
 
 On the same port as gRPC, sharing TLS, identity, the policy, the audit log
 and the seal rules: `GET`/`PUT`/`DELETE /v1/secrets/{path}`, `POST
-/v1/restore/{path}`, `GET /v1/secrets` (listing), `GET /v1/versions/{path}`
-and `GET`/`PATCH /v1/metadata/{path}`. Values are base64, unknown fields and
+/v1/restore/{path}`, `POST /v1/generate/{path}`, `GET /v1/secrets`
+(listing), `GET /v1/versions/{path}` and `GET`/`PATCH /v1/metadata/{path}`. Values are base64, unknown fields and
 query parameters are refused, and errors carry a `code` to match on.
 
 The full reference, with authentication (mutual TLS) and examples in curl,
