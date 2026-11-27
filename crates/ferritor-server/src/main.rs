@@ -16,6 +16,7 @@ use ferritor_server::config::{
 };
 use ferritor_server::crl::StaleWatch;
 use ferritor_server::destroy::Destroy;
+use ferritor_server::generate::Profiles;
 use ferritor_server::health::Readiness;
 use ferritor_server::identity::exchange::{self, Exchange};
 use ferritor_server::metrics::{Chosen, Exporting};
@@ -207,6 +208,14 @@ fn warn_if_shared(path: &std::path::Path) {
 /// How long a second signal waits for the audit log before exiting.
 const SECOND_SIGNAL_FLUSH: Duration = Duration::from_secs(1);
 
+/// What a SIGHUP reloads into besides the policies, the limits and the
+/// certificates: each swapped whole when its settings check out.
+struct Reloaded {
+    rotation: Arc<Rotation>,
+    schedule: Arc<Schedule>,
+    profiles: Arc<Profiles>,
+}
+
 /// On every SIGHUP, reopens the audit log's file (logrotate), re-reads the
 /// settings and reloads what can change while serving: the `[[policy]]` (swapped into the gate) and, in secured
 /// mode, the server certificate and key (new handshakes present them), so
@@ -220,9 +229,13 @@ async fn reload_on_hangup(
     seal: Arc<Seal>,
     gate: Arc<Gate>,
     exchange: Option<Arc<Exchange>>,
-    rotation: Arc<Rotation>,
-    schedule: Arc<Schedule>,
+    reloaded: Reloaded,
 ) {
+    let Reloaded {
+        rotation,
+        schedule,
+        profiles,
+    } = reloaded;
     while hangup.recv().await.is_some() {
         // First, so everything this reload records lands in the new file.
         gate.reopen_audit_log();
@@ -291,6 +304,21 @@ async fn reload_on_hangup(
                 tracing::error!(
                     %error,
                     "SCHEDULE NOT RELOADED: still running the previous intervals"
+                );
+            }
+        }
+        match settings.generate_profiles() {
+            Ok(loaded) => {
+                tracing::info!(
+                    profiles = ?loaded.keys().collect::<Vec<_>>(),
+                    "reloaded the generate profiles"
+                );
+                profiles.reload(loaded);
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "GENERATE PROFILES NOT RELOADED: still running the previous ones"
                 );
             }
         }
@@ -757,6 +785,13 @@ async fn main() -> anyhow::Result<()> {
         "scheduled tasks (reloaded on SIGHUP; one schedule shared by every server)"
     );
     let schedule = Arc::new(Schedule::new(intervals));
+    // The generate profiles, swapped on SIGHUP.
+    let loaded = settings.generate_profiles().map_err(anyhow::Error::msg)?;
+    tracing::info!(
+        profiles = ?loaded.keys().collect::<Vec<_>>(),
+        "generate profiles (reloaded on SIGHUP)"
+    );
+    let profiles = Arc::new(Profiles::new(loaded));
     tracing::info!(
         server_max_in_flight = limits.server_max_in_flight.get(),
         "rate limits in force (reloaded on SIGHUP; the server-wide cap at restart)"
@@ -855,8 +890,11 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&seal),
         Arc::clone(&gate),
         exchange.as_ref().map(|(_, exchange)| Arc::clone(exchange)),
-        Arc::clone(&rotation),
-        Arc::clone(&schedule),
+        Reloaded {
+            rotation: Arc::clone(&rotation),
+            schedule: Arc::clone(&schedule),
+            profiles: Arc::clone(&profiles),
+        },
     ));
     if settings.keyring_refresh_secs > 0 {
         tokio::spawn(refresh_keyring_periodically(
@@ -919,7 +957,8 @@ async fn main() -> anyhow::Result<()> {
     let secrets = Arc::new(
         Secrets::new(Arc::clone(&seal), datastore.clone(), Arc::clone(&gate))
             .with_watch(Arc::clone(&watch))
-            .with_rotation(Arc::clone(&rotation)),
+            .with_rotation(Arc::clone(&rotation))
+            .with_profiles(profiles),
     );
     // The stored policies decide what the config rules don't (secret
     // actions only), once unsealed and verified.

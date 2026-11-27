@@ -163,6 +163,7 @@ attaches a `google.rpc.ErrorInfo` with domain `ferritor` and a reason from
 | `ROOT_UNCOMMITTED` | an unseal refused: no root commitment in the data database matches the root key the shares rebuild (a data database restored from before a rekey, a failover that lost the write, or a substituted keys database). `ferritor unseal --recommit` decides which ([key management](/operations/key-management#the-root-commitment)) |
 | `ROOT_BELOW_FLOOR` | an unseal refused: the keys database's root key is a generation below the data database's floor (restored, or failed over, past a rekey); `ErrorInfo` metadata `generation` and `floor` |
 | `WATCH_FULL` | a watch stream refused: the identity has as many open as it may (`max_watch_streams`; `ErrorInfo` metadata `limit: identity`), or the server serves as many as it can (4,096, `limit: server`). Not a rate limit: no retry time. Close a stream, watch through another server, or poll meanwhile |
+| `UNKNOWN_PROFILE` | a generate refused: the server reached has no `[[generate_profile]]` of that name (profiles are each server's config, `default` built in); `ErrorInfo` metadata `profile`. Keep the profiles alike on every server |
 | `POLICY_UNVERIFIED` | the stored policies don't verify (changed in the keys database, rolled back, their key cleared): a request only they would allow, a policy put or delete, or a rekey is refused; re-apply them with `ferritor policy apply --prune`. HTTP 503 `policy_unverified` |
 
 Programs match on the reason, never the message. The JSON API's error

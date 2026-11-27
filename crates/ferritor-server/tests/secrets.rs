@@ -2140,3 +2140,103 @@ async fn no_namespace_is_only_told_to_an_authorized_caller() {
     env.secrets.put(&app_only, "app/db", b"x").await.unwrap();
     env.destroy().await.unwrap();
 }
+
+/// A generated secret: a value from its profile (the built-in `default`, or
+/// the config's), stored as a version like a put, with a put's
+/// check-and-set and labels; the value never in the audit log. Nothing of
+/// the profile stays with the path.
+#[tokio::test]
+async fn a_generated_secret_follows_its_profile() {
+    let env = Env::unsealed().await.unwrap();
+    let pin = ferritor_server::generate::ProfileSettings {
+        name: "pin".to_owned(),
+        length: 30,
+        charsets: vec![ferritor_server::generate::CharsetSettings {
+            chars: "0123456789".to_owned(),
+            min: 0,
+        }],
+    };
+    let profiles = ferritor_server::generate::profiles(&[pin]).unwrap();
+    let secrets = Secrets::new(
+        Arc::clone(&env.seal),
+        Datastore::new(env.data.pool().clone()),
+        Arc::clone(&env.gate),
+    )
+    .with_profiles(Arc::new(ferritor_server::generate::Profiles::new(profiles)));
+    let none = Labels::new();
+
+    let first = secrets
+        .generate(&ANON, "app/key", None, Some(0), &none)
+        .await
+        .unwrap();
+    let value = secrets.get(&ANON, "app/key", None).await.unwrap().value;
+    assert_eq!(value.len(), 32);
+    assert!(value.iter().all(|c| (33..=126).contains(c)));
+    // Create-only: an existing value is never replaced.
+    assert!(matches!(
+        secrets
+            .generate(&ANON, "app/key", None, Some(0), &none)
+            .await,
+        Err(SecretsError::VersionMismatch { .. })
+    ));
+
+    let flag = labels(&[("ferritor.rotation", "true")]);
+    let second = secrets
+        .generate(&ANON, "app/key", Some("pin"), None, &flag)
+        .await
+        .unwrap();
+    assert_eq!(second.version, first.version + 1);
+    let pin = secrets.get(&ANON, "app/key", None).await.unwrap().value;
+    assert_eq!(pin.len(), 30);
+    assert!(pin.iter().all(u8::is_ascii_digit));
+    let metadata = secrets.metadata(&ANON, "app/key").await.unwrap();
+    assert_eq!(metadata.labels, flag);
+    assert!(
+        secrets.rotation_due(&metadata).is_some(),
+        "reminded, as flagged"
+    );
+
+    let raw = String::from_utf8_lossy(&env.audit.raw()).into_owned();
+    for value in [&value, &pin] {
+        assert!(!raw.contains(&*String::from_utf8_lossy(value)));
+    }
+    let outcomes: Vec<serde_json::Value> = env
+        .audit
+        .lines()
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|entry: &serde_json::Value| {
+            entry["event"] == "outcome"
+                && entry["operation"] == "generate"
+                && entry["result"] == "succeeded"
+        })
+        .map(|entry| entry["details"].clone())
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            json!({"version": 1, "trimmed": 0, "profile": "default", "expected_version": 0}),
+            json!({"version": 2, "trimmed": 0, "profile": "pin",
+                   "labels_set": ["ferritor.rotation"]}),
+        ]
+    );
+    env.destroy().await.unwrap();
+}
+
+/// A profile this server lacks is refused, nothing stored, never another
+/// profile in its place.
+#[tokio::test]
+async fn a_generate_with_an_unknown_profile_stores_nothing() {
+    let env = Env::unsealed().await.unwrap();
+    assert!(matches!(
+        env.secrets
+            .generate(&ANON, "app/x", Some("gone"), None, &Labels::new())
+            .await,
+        Err(SecretsError::UnknownProfile(name)) if name == "gone"
+    ));
+    assert!(matches!(
+        env.secrets.metadata(&ANON, "app/x").await,
+        Err(SecretsError::NotFound { .. })
+    ));
+    env.destroy().await.unwrap();
+}

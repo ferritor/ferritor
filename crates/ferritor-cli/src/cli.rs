@@ -203,6 +203,26 @@ pub enum Command {
         #[arg(long = "label", value_name = "KEY=VALUE", value_parser = parse_label)]
         labels: Vec<(String, String)>,
     },
+    /// Make up a secret's value on the server, from a generate profile (the
+    /// server's config; `default`: 32 characters of every printable ASCII
+    /// character), and store it as the next version, as `put` would. Prints
+    /// the version, never the value: `ferritor get` reads it. Running it
+    /// again stores a new value. Needs the write permission.
+    Generate {
+        path: String,
+        /// The generate profile; default `default`. The server reached must
+        /// have it.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
+        /// Check-and-set, as `put`'s: 0 generates only if the secret
+        /// doesn't exist yet, so an existing value is never replaced.
+        #[arg(long, value_name = "VERSION")]
+        expected_version: Option<u32>,
+        /// Set a label on the secret with it (repeatable), as `put`'s:
+        /// `--label ferritor.rotation=true` to be reminded to rotate it.
+        #[arg(long = "label", value_name = "KEY=VALUE", value_parser = parse_label)]
+        labels: Vec<(String, String)>,
+    },
     /// Delete every version of a secret.
     Delete { path: String },
     /// Bring a deleted version back (undo a delete, or a trim under the

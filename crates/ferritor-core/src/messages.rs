@@ -108,6 +108,10 @@ pub mod reason {
     /// restored, or failed over, past a rekey). The `ErrorInfo` metadata
     /// carries `generation` and `floor`.
     pub const ROOT_BELOW_FLOOR: &str = "ROOT_BELOW_FLOOR";
+    /// A generate refused (`FAILED_PRECONDITION`): the server reached has
+    /// no generate profile of that name (profiles are each server's
+    /// config). The `ErrorInfo` metadata carries `profile`.
+    pub const UNKNOWN_PROFILE: &str = "UNKNOWN_PROFILE";
 }
 
 /// The message for [`reason::SEALED`].

@@ -213,6 +213,14 @@ service SecretsService {
   // and prefixes together; RESOURCE_EXHAUSTED when the server has as many
   // streams open as it serves.
   rpc WatchSecrets(WatchSecretsRequest) returns (stream WatchSecretsResponse);
+  // Makes up a value on the server from a generate profile (the server's
+  // config, `[[generate_profile]]`; `default` built in) and stores it as the
+  // path's next version, exactly as PutSecret would store it. Never returns
+  // the value: GetSecret reads it. Nothing of the profile is kept with the
+  // path; generating again is a new value. Needs the write permission on
+  // the path (and label with labels). FAILED_PRECONDITION with reason
+  // UNKNOWN_PROFILE if the server has no such profile.
+  rpc GenerateSecret(GenerateSecretRequest) returns (GenerateSecretResponse);
 }
 
 message InitRequest {
@@ -670,6 +678,22 @@ message PutSecretRequest {
 }
 
 message PutSecretResponse {
+  SecretMetadata metadata = 1;
+}
+
+message GenerateSecretRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  // The generate profile's name; empty: `default`.
+  string profile = 2;
+  // Check-and-set, as PutSecret's: 0 generates only if the path has no
+  // live version (create, never overwrite).
+  optional uint32 expected_version = 3;
+  // Labels to set with it, as PutSecret's (the label permission too).
+  map<string, string> labels = 4;
+}
+
+message GenerateSecretResponse {
   SecretMetadata metadata = 1;
 }
 

@@ -142,6 +142,15 @@ pub enum SecretsError {
         expected: u32,
         latest: Option<u32>,
     },
+    /// A generate naming a profile this server's config doesn't have (the
+    /// built-in `default` aside): never another in its place.
+    #[error(
+        "this server has no generate profile `{0}`: profiles are the config's \
+         ([[generate_profile]]); keep them alike on every server"
+    )]
+    UnknownProfile(String),
+    #[error("couldn't generate a value")]
+    Generate(#[source] crate::generate::GenerateError),
     /// A watch of nothing, or of more than `watch::MAX_ITEMS`.
     #[error(
         "a watch takes 1 to {} paths and prefixes together, not {count}",
@@ -199,6 +208,7 @@ impl SecretsError {
             | Self::InvalidLabels(_)
             | Self::TooManyLabels { .. }
             | Self::WatchSize { .. } => "invalid_argument",
+            Self::UnknownProfile(_) => "unknown_profile",
             Self::Watch(_) => "unavailable",
             Self::Denied(_) => "denied",
             Self::Unaudited(_) => "unaudited",
@@ -216,7 +226,7 @@ impl SecretsError {
             Self::StaleKeyring(_) => "stale_keyring",
             Self::VersionMismatch { .. } => "version_mismatch",
             Self::LiveVersion { .. } => "live_version",
-            Self::Store(_) | Self::Crypto(_) => "internal",
+            Self::Store(_) | Self::Crypto(_) | Self::Generate(_) => "internal",
         }
     }
 }
@@ -242,6 +252,14 @@ impl Watched {
 struct Failure {
     error: SecretsError,
     at_commit: bool,
+}
+
+/// What a write does besides storing a value ([`Secrets::write_authorized`]).
+struct Write<'a> {
+    /// Check-and-set: only if the latest live version is this (0: none).
+    expected: Option<u32>,
+    /// Labels set on the path in the same transaction.
+    labels: &'a Labels,
 }
 
 impl Failure {
@@ -344,6 +362,8 @@ pub struct Secrets {
     refreshed_at: Mutex<Option<Instant>>,
     /// The rotation reminders' ages (see `rotation`), for due dates.
     rotation: Arc<crate::rotation::Rotation>,
+    /// The generate profiles in force (see `generate`).
+    profiles: Arc<crate::generate::Profiles>,
 }
 
 impl Secrets {
@@ -355,7 +375,16 @@ impl Secrets {
             watch: None,
             refreshed_at: Mutex::new(None),
             rotation: Arc::default(),
+            profiles: Arc::default(),
         }
+    }
+
+    /// Generates values from `profiles` (the config's, reloaded on
+    /// SIGHUP); without it, the built-in `default` alone.
+    #[must_use]
+    pub fn with_profiles(mut self, profiles: Arc<crate::generate::Profiles>) -> Self {
+        self.profiles = profiles;
+        self
     }
 
     /// Reports due dates by `rotation`'s ages (the config's, reloaded on
@@ -698,47 +727,10 @@ impl Secrets {
             self.authorize(caller, Action::Label, Target::Path(&path))
                 .await?;
         }
-        // Only now, after authorization, does the namespace matter: telling
-        // `NO_NAMESPACE` apart from `PERMISSION_DENIED` to any caller would
-        // let anyone enumerate namespace names. A namespace this server
-        // hasn't loaded (created on another server): one refresh first.
-        let namespace = path.namespace();
-        if self.seal.active_kek_version(&namespace).is_none() {
-            self.refresh_on_demand("unknown_namespace", None).await;
-        }
-        let mut result = self.store_version(&path, value, expected, labels).await;
-        if let Err(Failure {
-            error: SecretsError::StaleKeyring(used),
-            ..
-        }) = &result
-        {
-            // The KEK this keyring wraps with is being destroyed (the data
-            // database refused it, and nothing was stored): another server
-            // rotated and retired it. Refresh (unless another call just
-            // did), then once more, but only with a newer active KEK: the
-            // same one would be refused again.
-            let used = *used;
-            if self.seal.active_kek_version(&namespace) == Some(used) {
-                self.refresh_on_demand("kek_floor", None).await;
-            }
-            match self.seal.active_kek_version(&namespace) {
-                Some(active) if active != used => {
-                    result = self.store_version(&path, value, expected, labels).await;
-                }
-                // The namespace was deleted elsewhere (its floor raised past
-                // every KEK it had), and the refresh dropped it.
-                None if self.seal.keyring().is_ok() => {
-                    result = Err(Failure {
-                        error: SecretsError::NoNamespace(namespace.clone()),
-                        at_commit: false,
-                    });
-                }
-                _ => {}
-            }
-        }
+        let write = Write { expected, labels };
+        let result = self.write_authorized(&path, value, &write).await;
         let outcome = match &result {
             Ok((stored, trimmed)) => {
-                metrics().trimmed(*trimmed);
                 let mut details = json!({"version": stored.version, "trimmed": trimmed});
                 if let Some(expected) = expected {
                     details["expected_version"] = json!(expected);
@@ -756,20 +748,150 @@ impl Secrets {
         result.map(|(stored, _)| stored).map_err(|f| f.error)
     }
 
+    /// Generates a value for `path` from `profile` (`default` if `None`,
+    /// one of this server's config otherwise: [`SecretsError::UnknownProfile`])
+    /// and stores it as its next version, as [`Secrets::put_labeled`]
+    /// would store it (`expected` and `labels` alike). The value isn't
+    /// returned (a read gets it) nor kept anywhere else, and nothing of the
+    /// profile is stored with the path. The `write` action on the path (and
+    /// `label` with labels); audited as `"generate"`, with the profile,
+    /// never the value.
+    pub async fn generate(
+        &self,
+        caller: &Caller,
+        path: &str,
+        profile: Option<&str>,
+        expected: Option<u32>,
+        labels: &Labels,
+    ) -> Result<SecretMetadata> {
+        observed(
+            "generate",
+            self.generate_unobserved(caller, path, profile, expected, labels),
+        )
+        .await
+    }
+
+    async fn generate_unobserved(
+        &self,
+        caller: &Caller,
+        path: &str,
+        profile: Option<&str>,
+        expected: Option<u32>,
+        labels: &Labels,
+    ) -> Result<SecretMetadata> {
+        let path = Self::path(path)?;
+        labels::check(labels).map_err(SecretsError::InvalidLabels)?;
+        let profile_name = profile.unwrap_or(crate::generate::DEFAULT_PROFILE);
+        self.authorize(caller, Action::Write, Target::Path(&path))
+            .await?;
+        if !labels.is_empty() {
+            self.authorize(caller, Action::Label, Target::Path(&path))
+                .await?;
+        }
+        let write = Write { expected, labels };
+        let result = match self.profiles.get(profile_name) {
+            None => Err(Failure::from(SecretsError::UnknownProfile(
+                profile_name.to_owned(),
+            ))),
+            Some(profile) => match profile.generate() {
+                Err(e) => Err(Failure::from(SecretsError::Generate(e))),
+                Ok(value) => self.write_authorized(&path, &value, &write).await,
+            },
+        };
+        let outcome = match &result {
+            Ok((stored, trimmed)) => {
+                let mut details = json!({
+                    "version": stored.version,
+                    "trimmed": trimmed,
+                    "profile": profile_name,
+                });
+                if let Some(expected) = expected {
+                    details["expected_version"] = json!(expected);
+                }
+                if !labels.is_empty() {
+                    details["labels_set"] = json!(labels.keys().collect::<Vec<_>>());
+                }
+                Outcome::Succeeded(details)
+            }
+            Err(failure) => failure.outcome(),
+        };
+        self.gate.outcome(
+            caller,
+            Action::Write,
+            Target::Path(&path),
+            "generate",
+            outcome,
+        );
+        result.map(|(stored, _)| stored).map_err(|f| f.error)
+    }
+
+    /// A write once authorized (a put, a generate): the stored
+    /// version and how many older ones it trimmed. Refreshes for a
+    /// namespace this server hasn't loaded, and retries once past a KEK
+    /// another server is destroying.
+    async fn write_authorized(
+        &self,
+        path: &SecretPath,
+        value: &[u8],
+        write: &Write<'_>,
+    ) -> Result<(SecretMetadata, u64), Failure> {
+        // Only now, after authorization, does the namespace matter: telling
+        // `NO_NAMESPACE` apart from `PERMISSION_DENIED` to any caller would
+        // let anyone enumerate namespace names. A namespace this server
+        // hasn't loaded (created on another server): one refresh first.
+        let namespace = path.namespace();
+        if self.seal.active_kek_version(&namespace).is_none() {
+            self.refresh_on_demand("unknown_namespace", None).await;
+        }
+        let mut result = self.store_version(path, value, write).await;
+        if let Err(Failure {
+            error: SecretsError::StaleKeyring(used),
+            ..
+        }) = &result
+        {
+            // The KEK this keyring wraps with is being destroyed (the data
+            // database refused it, and nothing was stored): another server
+            // rotated and retired it. Refresh (unless another call just
+            // did), then once more, but only with a newer active KEK: the
+            // same one would be refused again.
+            let used = *used;
+            if self.seal.active_kek_version(&namespace) == Some(used) {
+                self.refresh_on_demand("kek_floor", None).await;
+            }
+            match self.seal.active_kek_version(&namespace) {
+                Some(active) if active != used => {
+                    result = self.store_version(path, value, write).await;
+                }
+                // The namespace was deleted elsewhere (its floor raised past
+                // every KEK it had), and the refresh dropped it.
+                None if self.seal.keyring().is_ok() => {
+                    result = Err(Failure {
+                        error: SecretsError::NoNamespace(namespace.clone()),
+                        at_commit: false,
+                    });
+                }
+                _ => {}
+            }
+        }
+        if let Ok((_, trimmed)) = &result {
+            metrics().trimmed(*trimmed);
+        }
+        result
+    }
+
     /// The put itself, once authorized: the stored version and how many
     /// older ones it trimmed (`max_versions`).
     async fn store_version(
         &self,
         path: &SecretPath,
         value: &[u8],
-        expected: Option<u32>,
-        labels: &Labels,
+        write: &Write<'_>,
     ) -> Result<(SecretMetadata, u64), Failure> {
         let epoch = self.unsealed_epoch()?;
         // Holds the path's write lock; dropped (rolled back) on any error
         // below.
         let pending = self.store.begin_put(path).await?;
-        if let Some(expected) = expected {
+        if let Some(expected) = write.expected {
             // After the lock wait, a seal wins over anything else.
             self.unsealed_since(epoch)?;
             let latest = pending.latest();
@@ -798,8 +920,8 @@ impl Secrets {
         let mut staged = pending
             .insert(&ciphertext, &wrapped_dek, kek_version)
             .await?;
-        if !labels.is_empty() {
-            staged.set_labels(labels).await?;
+        if !write.labels.is_empty() {
+            staged.set_labels(write.labels).await?;
         }
         // The insert can stall too: last check before committing.
         self.unsealed_since(epoch)?;
