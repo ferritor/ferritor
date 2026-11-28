@@ -808,6 +808,56 @@ impl Datastore {
         .await
     }
 
+    /// Marks one live version of `path` deleted, uncommitted (see
+    /// [`PendingDelete`]; its count is 0 if `version` isn't live: deleted,
+    /// purged or never stored). Under the path's write lock, like a whole
+    /// delete. If it was the current version, the newest live one left
+    /// becomes current (none if none is), in the same transaction, after
+    /// the version row (the lock order `begin_restore` keeps), so listings
+    /// and the change feed follow. Restorable within the retention, then
+    /// purged, like any deleted version.
+    pub async fn begin_delete_version(
+        &self,
+        path: &SecretPath,
+        version: u32,
+    ) -> Result<PendingDelete> {
+        bounded(self.timeout, async move {
+            let mut tx = self.lock_path(path).await?;
+            let version = to_db("version", version)?;
+            let deleted = sqlx::query!(
+                "UPDATE secret_versions SET deleted_at = now()
+                 WHERE path_id = (SELECT id FROM paths WHERE path = $1)
+                   AND version = $2 AND deleted_at IS NULL",
+                path.as_str(),
+                version,
+            )
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if deleted > 0 {
+                // This statement sees the row just marked: the newest live
+                // one left, by `secret_versions_live`.
+                sqlx::query!(
+                    "UPDATE paths SET current_version = (
+                         SELECT MAX(version) FROM secret_versions
+                         WHERE path_id = paths.id AND deleted_at IS NULL
+                     )
+                     WHERE path = $1 AND current_version = $2",
+                    path.as_str(),
+                    version,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            Ok(PendingDelete {
+                tx,
+                count: deleted,
+                timeout: self.timeout,
+            })
+        })
+        .await
+    }
+
     /// Removes for good up to `limit` versions deleted more than
     /// `older_than` ago, oldest deletions first; returns how many. Repeat
     /// until it returns less than `limit`. Their version numbers stay used

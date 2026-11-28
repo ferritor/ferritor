@@ -2048,6 +2048,23 @@ impl SecretsService for Secrets {
         Ok(Response::new(pb::DeleteSecretResponse {}))
     }
 
+    async fn delete_version(
+        &self,
+        request: Request<pb::DeleteVersionRequest>,
+    ) -> Result<Response<pb::DeleteVersionResponse>, Status> {
+        let caller = caller(self.secrets.gate(), &request, Action::Delete)?;
+        let req = request.into_inner();
+        if req.version == 0 {
+            return Err(Status::invalid_argument(
+                "versions start at 1; DeleteSecret deletes every version",
+            ));
+        }
+        self.secrets
+            .delete_version(&caller, &req.path, req.version)
+            .await?;
+        Ok(Response::new(pb::DeleteVersionResponse {}))
+    }
+
     async fn list_secrets(
         &self,
         request: Request<pb::ListSecretsRequest>,

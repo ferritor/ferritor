@@ -123,7 +123,7 @@ pub fn router(secrets: Arc<Secrets>, readiness: Arc<Readiness>, policies: Arc<Po
         .route("/v1/secrets/{*path}", get(read).put(write).delete(remove))
         .route("/v1/restore/{*path}", post(restore))
         .route("/v1/generate/{*path}", post(generate))
-        .route("/v1/versions/{*path}", get(versions))
+        .route("/v1/versions/{*path}", get(versions).delete(remove_version))
         .route(
             "/v1/metadata/{*path}",
             get(get_metadata).patch(update_labels),
@@ -179,6 +179,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         read,
         write,
         remove,
+        remove_version,
         restore,
         generate,
         versions,
@@ -350,6 +351,15 @@ struct ReadQuery {
     /// A specific version (from 1); leave it out for the latest.
     #[param(minimum = 1)]
     version: Option<u32>,
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+struct DeleteQuery {
+    /// The version to delete, from 1.
+    #[param(minimum = 1)]
+    version: u32,
 }
 
 /// A new version of a secret.
@@ -673,6 +683,39 @@ async fn remove(
     let caller = caller(&secrets, &extensions, Action::Delete)?;
     let Path(path) = path.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
     secrets.delete(&caller, &path).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete one version (`delete`).
+///
+/// The others stay as they are; deleting the latest makes the newest live
+/// one left the latest. 404 unless that version is live. Restorable until
+/// purged. A route of its own, not a parameter of `DELETE
+/// /v1/secrets/{path}`: a server without it answers 405 rather than
+/// deleting every version.
+#[utoipa::path(
+    delete,
+    path = "/v1/versions/{path}",
+    operation_id = "deleteVersion",
+    tag = "secrets",
+    params(("path" = String, Path, description = "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace."), DeleteQuery),
+    responses((status = 204, description = "Deleted."), (status = "default", description = "An error: see `error.code`.", body = ErrorBody))
+)]
+async fn remove_version(
+    State(secrets): State<Arc<Secrets>>,
+    extensions: Extensions,
+    path: Result<Path<String>, PathRejection>,
+    query: Result<Query<DeleteQuery>, QueryRejection>,
+) -> Result<StatusCode, ApiError> {
+    let caller = caller(&secrets, &extensions, Action::Delete)?;
+    let Path(path) = path.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
+    let Query(query) = query.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
+    if query.version == 0 {
+        return Err(ApiError::invalid("versions start at 1"));
+    }
+    secrets
+        .delete_version(&caller, &path, query.version)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

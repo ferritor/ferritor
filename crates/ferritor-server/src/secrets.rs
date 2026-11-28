@@ -1023,6 +1023,58 @@ impl Secrets {
         result.map(drop).map_err(|f| f.error)
     }
 
+    /// Deletes one live version of `path`, the others staying as they are:
+    /// a soft delete like [`Secrets::delete`]'s (restorable within the
+    /// retention, then purged; still in any backup until then). Deleting
+    /// the latest makes the newest live one left the latest. The `delete`
+    /// action on the path; audited as `"delete"` with the version.
+    /// [`SecretsError::VersionNotFound`] if that version isn't live.
+    pub async fn delete_version(&self, caller: &Caller, path: &str, version: u32) -> Result<()> {
+        observed(
+            "delete",
+            self.delete_version_unobserved(caller, path, version),
+        )
+        .await
+    }
+
+    async fn delete_version_unobserved(
+        &self,
+        caller: &Caller,
+        path: &str,
+        version: u32,
+    ) -> Result<()> {
+        let path = Self::path(path)?;
+        self.authorize(caller, Action::Delete, Target::Path(&path))
+            .await?;
+        let result = async {
+            let epoch = self.unsealed_epoch()?;
+            let pending = self.store.begin_delete_version(&path, version).await?;
+            // Before "not found", as a whole delete: a seal wins.
+            self.unsealed_since(epoch)?;
+            if pending.count() == 0 {
+                return Err(SecretsError::VersionNotFound {
+                    path: path.clone(),
+                    version,
+                }
+                .into());
+            }
+            pending.commit().await.map_err(Failure::at_commit)
+        }
+        .await;
+        let outcome = match &result {
+            Ok(()) => Outcome::Succeeded(json!({"deleted": 1, "version": version})),
+            Err(failure) => failure.outcome(),
+        };
+        self.gate.outcome(
+            caller,
+            Action::Delete,
+            Target::Path(&path),
+            "delete",
+            outcome,
+        );
+        result.map_err(|f: Failure| f.error)
+    }
+
     /// The delete itself, once authorized: how many versions it marked.
     async fn delete_versions(&self, path: &SecretPath) -> Result<u64, Failure> {
         let epoch = self.unsealed_epoch()?;

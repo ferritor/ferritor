@@ -859,6 +859,51 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Delete one version (`delete`).",
+        "description": "The others stay as they are; deleting the latest makes the newest live\none left the latest. 404 unless that version is live. Restorable until\npurged. A route of its own, not a parameter of `DELETE\n/v1/secrets/{path}`: a server without it answers 405 rather than\ndeleting every version.",
+        "operationId": "deleteVersion",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "The version to delete, from 1.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },

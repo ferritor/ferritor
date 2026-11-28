@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE paths SET current_version = (\n                         SELECT MAX(version) FROM secret_versions\n                         WHERE path_id = paths.id AND deleted_at IS NULL\n                     )\n                     WHERE path = $1 AND current_version = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "97e8629c81058ade3a794102e3c0cb73031887af6a302641e9c08c3737b86698"
+}
