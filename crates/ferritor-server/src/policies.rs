@@ -97,6 +97,17 @@ pub enum PoliciesError {
     Keys(#[source] KeystoreError),
     #[error("crypto failure")]
     Crypto(#[source] CryptoError),
+    /// A later page of an access review, when the stored policies or the
+    /// config rules changed since its first: start it again.
+    #[error(
+        "the policies changed since this access review's first page (a write, or a reload); \
+         start it again"
+    )]
+    ReviewChanged,
+    /// The config rules that loaded didn't serialize for their
+    /// fingerprint: they did once, at load, so it can't happen.
+    #[error("couldn't fingerprint the config rules")]
+    Fingerprint(#[source] crate::policy::PolicyError),
     #[error(transparent)]
     Seal(SealError),
 }
@@ -143,7 +154,7 @@ impl From<Refused> for PoliciesError {
 type Result<T, E = PoliciesError> = std::result::Result<T, E>;
 
 /// Where a rule comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Source {
     /// `[[policy]]` in `ferritor.toml`: read-only here.
     Config,
@@ -234,6 +245,90 @@ pub struct Checked {
     pub enforced: bool,
     /// Why the stored policies couldn't answer, if they couldn't.
     pub undecided: Option<Undecided>,
+}
+
+/// One grant, as an access review lists it: an identity may do an action
+/// on a scope, by one rule. A rule granting several actions or prefixes is
+/// several of these.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AccessGrant {
+    pub identity: String,
+    pub action: String,
+    pub scope: GrantScope,
+    /// The rule: a stored policy's name, or a config rule's `config:…`.
+    pub granted_by: String,
+    pub source: Source,
+    /// With a path asked about: whether the grant is on it (or an
+    /// enclosing prefix, or every path), or on something below it.
+    pub relation: Option<Relation>,
+}
+
+/// Where a grant applies.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum GrantScope {
+    /// An admin action: the server itself.
+    Server,
+    /// Every secret path.
+    AllPaths,
+    /// At or under this prefix (whole segments).
+    Prefix(String),
+}
+
+/// How a grant stands to the path a review asked about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Relation {
+    /// It applies to the whole path.
+    On,
+    /// It applies to part of it: a prefix below it.
+    Below,
+}
+
+/// A review's grants at a time, by default and at most: each a short row,
+/// so a page stays well within a client's message limit.
+pub const DEFAULT_REVIEW_PAGE: u32 = 1000;
+pub const MAX_REVIEW_PAGE: u32 = 5000;
+
+/// What an access review keeps ([`Policies::review`]); neither: every
+/// grant.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ReviewFilter<'a> {
+    pub identity: Option<&'a str>,
+    pub path: Option<&'a str>,
+}
+
+/// What a review was computed from, held in its page tokens.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ReviewState {
+    /// The stored set's revision; `None` while not in force.
+    revision: Option<u64>,
+    /// The config rules' fingerprint.
+    config: String,
+}
+
+/// Where a review's next page starts: the rule, and its first grant not
+/// yet sent.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ReviewToken {
+    state: ReviewState,
+    name: String,
+    next: usize,
+}
+
+/// One page of an access review ([`Policies::review`]), and what it was
+/// computed from, so it can be told apart from another server's (whose
+/// config rules may differ) or another time's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Review {
+    pub grants: Vec<AccessGrant>,
+    /// Empty on the last page.
+    pub next_page_token: String,
+    /// `false` in dev mode: nothing is enforced there.
+    pub enforced: bool,
+    /// The config rules' fingerprint (as `policy_loaded` records it); empty
+    /// in dev mode.
+    pub config_fingerprint: String,
+    /// Whether the stored policies are in it: only when in force.
+    pub stored: StoredState,
 }
 
 /// Why the stored policies couldn't answer a check.
@@ -865,26 +960,216 @@ impl Policies {
         })
     }
 
-    fn config_entries(&self) -> Vec<Entry> {
-        let config = self.gate.config_policy();
-        let Some(policy) = config.as_policy() else {
-            return Vec::new();
+    /// Who may do what, from the config rules and (when in force) the stored
+    /// policies together: every grant, one per identity, action, scope and
+    /// rule, in rule-name order (then action, then scope). `identity` keeps
+    /// that identity's; `path` keeps the grants on it (or an enclosing
+    /// prefix, or every path) and on prefixes below it, each marked (admin
+    /// grants are about the server, not a path, so they're left out then).
+    /// The inverse of [`Policies::check`], for an access review's evidence.
+    /// The `policy` action.
+    ///
+    /// Paged, `page_size` grants at a time (0: [`DEFAULT_REVIEW_PAGE`], at
+    /// most [`MAX_REVIEW_PAGE`]); a page's token holds the stored revision
+    /// and the config rules' fingerprint it was computed from, and a later
+    /// page under any other is refused ([`PoliciesError::ReviewChanged`]):
+    /// a review is of one state, never two spliced together.
+    pub async fn review(
+        &self,
+        caller: &Caller,
+        filter: ReviewFilter<'_>,
+        page_size: u32,
+        page_token: &str,
+    ) -> Result<Review> {
+        self.authorize(caller).await?;
+        let identity = filter
+            .identity
+            .filter(|i| !i.is_empty())
+            .map(SecretPath::parse)
+            .transpose()
+            .map_err(|e| PoliciesError::Request(format!("identity: {e}")))?;
+        let path = filter
+            .path
+            .filter(|p| !p.is_empty())
+            .map(SecretPath::parse)
+            .transpose()
+            .map_err(|e| PoliciesError::Request(format!("path: {e}")))?;
+        let after = match page_token {
+            "" => None,
+            token => Some(
+                decode_token(token)
+                    .and_then(|json| serde_json::from_str::<ReviewToken>(&json).ok())
+                    .ok_or_else(|| PoliciesError::Request("invalid page token".to_owned()))?,
+            ),
         };
-        policy
-            .rules()
-            .map(|(name, rule)| Entry {
-                name: name.to_owned(),
-                source: Source::Config,
-                identity: rule.identity.clone(),
-                actions: rule.actions.iter().map(|a| a.name().to_owned()).collect(),
-                paths: rule.paths.clone(),
-                all_paths: rule.all_paths,
-                description: String::new(),
-                version: None,
-                created_at: None,
-                updated_at: None,
-            })
-            .collect()
+        let size = match page_size {
+            0 => DEFAULT_REVIEW_PAGE,
+            n => n.min(MAX_REVIEW_PAGE),
+        };
+        let size = usize::try_from(size).unwrap_or(usize::MAX);
+        let config = self.gate.config_policy();
+        let config_policy = config.as_policy();
+        let config_fingerprint = match config_policy.map(crate::policy::Policy::info) {
+            Some(info) => info.map_err(PoliciesError::Fingerprint)?.fingerprint,
+            None => String::new(),
+        };
+        let mut entries = config_entries_of(config_policy);
+        let stored = match self.seal.policy_view() {
+            PolicyView::Loaded(set) => {
+                entries.extend(set.policies.iter().map(stored_entry));
+                StoredState::Loaded {
+                    revision: set.revision,
+                }
+            }
+            PolicyView::Sealed => StoredState::Sealed,
+            PolicyView::Unverified(_) => StoredState::Unverified,
+        };
+        let state = ReviewState {
+            revision: match stored {
+                StoredState::Loaded { revision } => Some(revision),
+                StoredState::Sealed | StoredState::Unverified => None,
+            },
+            config: config_fingerprint.clone(),
+        };
+        if let Some(after) = &after
+            && after.state != state
+        {
+            return Err(PoliciesError::ReviewChanged);
+        }
+        entries.retain(|entry| {
+            identity
+                .as_ref()
+                .is_none_or(|wanted| entry.identity == wanted.as_str())
+        });
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut grants = Vec::new();
+        let mut next_page_token = String::new();
+        'entries: for entry in entries
+            .iter()
+            .filter(|entry| after.as_ref().is_none_or(|after| entry.name >= after.name))
+        {
+            let skip = match &after {
+                Some(after) if after.name == entry.name => after.next,
+                _ => 0,
+            };
+            for (index, grant) in entry_grants(entry, path.as_ref())
+                .into_iter()
+                .enumerate()
+                .skip(skip)
+            {
+                if grants.len() == size {
+                    let token = ReviewToken {
+                        state: state.clone(),
+                        name: entry.name.clone(),
+                        next: index,
+                    };
+                    next_page_token = serde_json::to_string(&token)
+                        .map(|json| encode_token(&json))
+                        .unwrap_or_default();
+                    break 'entries;
+                }
+                grants.push(grant);
+            }
+        }
+        Ok(Review {
+            grants,
+            next_page_token,
+            enforced: config_policy.is_some(),
+            config_fingerprint,
+            stored,
+        })
+    }
+
+    fn config_entries(&self) -> Vec<Entry> {
+        config_entries_of(self.gate.config_policy().as_policy())
+    }
+}
+
+/// `policy`'s rules as entries (none in dev mode): from one copy of the
+/// config rules, so a reload can't slip in between reading them and their
+/// fingerprint.
+fn config_entries_of(policy: Option<&crate::policy::Policy>) -> Vec<Entry> {
+    let Some(policy) = policy else {
+        return Vec::new();
+    };
+    policy
+        .rules()
+        .map(|(name, rule)| Entry {
+            name: name.to_owned(),
+            source: Source::Config,
+            identity: rule.identity.clone(),
+            actions: rule.actions.iter().map(|a| a.name().to_owned()).collect(),
+            paths: rule.paths.clone(),
+            all_paths: rule.all_paths,
+            description: String::new(),
+            version: None,
+            created_at: None,
+            updated_at: None,
+        })
+        .collect()
+}
+
+/// `entry`'s grants, by action (as the rule lists them), then scope; with
+/// `path`, only those on it or below it.
+fn entry_grants(entry: &Entry, path: Option<&SecretPath>) -> Vec<AccessGrant> {
+    let mut grants = Vec::new();
+    // A config rule may name an action or a path twice (authorization
+    // doesn't mind); a review lists the grant once.
+    let mut seen = std::collections::HashSet::new();
+    for action in &entry.actions {
+        let admin = Action::parse(action).is_some_and(Action::is_admin);
+        let scopes: Vec<GrantScope> = if admin {
+            vec![GrantScope::Server]
+        } else if entry.all_paths {
+            vec![GrantScope::AllPaths]
+        } else {
+            entry
+                .paths
+                .iter()
+                .cloned()
+                .map(GrantScope::Prefix)
+                .collect()
+        };
+        for scope in scopes {
+            let relation = match path {
+                None => None,
+                Some(path) => match relation(&scope, path) {
+                    Some(relation) => Some(relation),
+                    None => continue,
+                },
+            };
+            if !seen.insert((action.as_str(), scope.clone())) {
+                continue;
+            }
+            grants.push(AccessGrant {
+                identity: entry.identity.clone(),
+                action: action.clone(),
+                scope,
+                granted_by: entry.name.clone(),
+                source: entry.source,
+                relation,
+            });
+        }
+    }
+    grants
+}
+
+/// How `scope` stands to `path`: on it (it, an enclosing prefix, every
+/// path), below it, or neither (`None`; the server's, never a path's).
+fn relation(scope: &GrantScope, path: &SecretPath) -> Option<Relation> {
+    match scope {
+        GrantScope::Server => None,
+        GrantScope::AllPaths => Some(Relation::On),
+        GrantScope::Prefix(prefix) => {
+            let prefix = SecretPath::parse(prefix).ok()?;
+            if *path == prefix || path.is_under(&prefix) {
+                Some(Relation::On)
+            } else if prefix.is_under(path) {
+                Some(Relation::Below)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -947,4 +1232,44 @@ fn decode_token(token: &str) -> Option<String> {
         })
         .collect::<Option<Vec<u8>>>()?;
     String::from_utf8(bytes).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config rule naming an action or a path twice is one grant each, in
+    /// the rule's order; an admin action is the server's, whatever paths.
+    #[test]
+    fn a_rule_repeating_itself_is_one_grant_each() {
+        let entry = Entry {
+            name: "config:twice".to_owned(),
+            source: Source::Config,
+            identity: "ops/a".to_owned(),
+            actions: ["read", "list", "read", "status", "status"]
+                .map(str::to_owned)
+                .to_vec(),
+            paths: ["billing", "app", "billing"].map(str::to_owned).to_vec(),
+            all_paths: false,
+            description: String::new(),
+            version: None,
+            created_at: None,
+            updated_at: None,
+        };
+        let grants: Vec<(String, GrantScope)> = entry_grants(&entry, None)
+            .into_iter()
+            .map(|g| (g.action, g.scope))
+            .collect();
+        let prefix = |p: &str| GrantScope::Prefix(p.to_owned());
+        assert_eq!(
+            grants,
+            [
+                ("read".to_owned(), prefix("billing")),
+                ("read".to_owned(), prefix("app")),
+                ("list".to_owned(), prefix("billing")),
+                ("list".to_owned(), prefix("app")),
+                ("status".to_owned(), GrantScope::Server),
+            ]
+        );
+    }
 }

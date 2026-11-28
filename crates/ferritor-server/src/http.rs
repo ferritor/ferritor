@@ -116,6 +116,7 @@ pub fn router(secrets: Arc<Secrets>, readiness: Arc<Readiness>, policies: Arc<Po
         )
         .route("/v1/policy-apply", post(apply_policies))
         .route("/v1/policy-check", get(check_access))
+        .route("/v1/access-review", get(review_access))
         .layer(DefaultBodyLimit::max(POLICY_BODY_LIMIT))
         .with_state(policies);
     Router::new()
@@ -191,6 +192,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         delete_policy,
         apply_policies,
         check_access,
+        review_access,
     ),
     modifiers(&MutualTls),
     security(("client_certificate" = [])),
@@ -1582,6 +1584,152 @@ async fn check_access(
             policies::Undecided::Sealed => Undecided::Sealed,
             policies::Undecided::Unverified => Undecided::Unverified,
         }),
+    }))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+struct ReviewQuery {
+    /// Only this identity's grants (the `<name>` of `ferritor://<name>`).
+    identity: Option<String>,
+    /// Only the grants on this secret or prefix, or below it.
+    path: Option<String>,
+    /// 0 or absent: 1000; capped at 5000.
+    #[serde(default)]
+    page_size: u32,
+    /// The previous page's `next_page_token`.
+    #[serde(default)]
+    page_token: String,
+}
+
+/// Where a grant applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum AccessScope {
+    /// An admin action: the server itself.
+    Server,
+    /// Every secret path.
+    AllPaths,
+    /// At or under `prefix`, by whole segments.
+    Prefix,
+}
+
+/// How a grant stands to the path asked about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum AccessRelation {
+    /// On the whole path: it, an enclosing prefix, or every path.
+    On,
+    /// On part of it: a prefix below it.
+    Below,
+}
+
+/// One grant: `identity` may do `action` on the scope, by `granted_by`.
+#[derive(Serialize, ToSchema)]
+struct AccessGrantBody {
+    identity: String,
+    action: String,
+    scope: AccessScope,
+    /// With `scope` `prefix`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    prefix: Option<String>,
+    /// The rule: a stored policy's name, or a config rule's `config:…`.
+    granted_by: String,
+    source: PolicySource,
+    /// With `path` asked about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    relation: Option<AccessRelation>,
+}
+
+#[derive(Serialize, ToSchema)]
+struct ReviewBody {
+    /// In rule-name order, then action, then scope.
+    grants: Vec<AccessGrantBody>,
+    /// Empty when there's no next page.
+    next_page_token: String,
+    /// False in dev mode: everyone may do everything there, whatever the
+    /// rules say.
+    enforced: bool,
+    /// SHA-256 over this server's config rules, as its audit log's
+    /// `policy_loaded` records it; empty in dev mode.
+    config_fingerprint: String,
+    /// Whether the stored policies are in it: only when `loaded`.
+    stored: StoredState,
+    /// The stored set's revision, when loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    revision: Option<u64>,
+}
+
+/// Who may do what: an access review (`policy`).
+///
+/// Every grant of the config rules and (when in force) the stored policies,
+/// one per identity, action, scope and rule: the inverse of
+/// `/v1/policy-check`. Paged; a later page after the policies changed is 409
+/// `aborted`: start again.
+#[utoipa::path(
+    get,
+    path = "/v1/access-review",
+    operation_id = "reviewAccess",
+    tag = "policies",
+    params(ReviewQuery),
+    responses((status = 200, description = "One page.", body = ReviewBody), (status = "default", description = "An error: see `error.code`.", body = ErrorBody))
+)]
+async fn review_access(
+    State(policies): State<Arc<Policies>>,
+    extensions: Extensions,
+    query: Result<Query<ReviewQuery>, QueryRejection>,
+) -> Result<Json<ReviewBody>, ApiError> {
+    let caller = caller_via(policies.gate(), &extensions, Action::Policy)?;
+    let Query(query) = query.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
+    let filter = policies::ReviewFilter {
+        identity: query.identity.as_deref(),
+        path: query.path.as_deref(),
+    };
+    let review = policies
+        .review(&caller, filter, query.page_size, &query.page_token)
+        .await?;
+    let (stored, revision) = match review.stored {
+        policies::StoredState::Loaded { revision } => (StoredState::Loaded, Some(revision)),
+        policies::StoredState::Sealed => (StoredState::Sealed, None),
+        policies::StoredState::Unverified => (StoredState::Unverified, None),
+    };
+    let grants = review
+        .grants
+        .into_iter()
+        .map(|grant| {
+            let (scope, prefix) = match grant.scope {
+                policies::GrantScope::Server => (AccessScope::Server, None),
+                policies::GrantScope::AllPaths => (AccessScope::AllPaths, None),
+                policies::GrantScope::Prefix(prefix) => (AccessScope::Prefix, Some(prefix)),
+            };
+            AccessGrantBody {
+                identity: grant.identity,
+                action: grant.action,
+                scope,
+                prefix,
+                granted_by: grant.granted_by,
+                source: match grant.source {
+                    policies::Source::Config => PolicySource::Config,
+                    policies::Source::Stored => PolicySource::Stored,
+                },
+                relation: grant.relation.map(|relation| match relation {
+                    policies::Relation::On => AccessRelation::On,
+                    policies::Relation::Below => AccessRelation::Below,
+                }),
+            }
+        })
+        .collect();
+    Ok(Json(ReviewBody {
+        grants,
+        next_page_token: review.next_page_token,
+        enforced: review.enforced,
+        config_fingerprint: review.config_fingerprint,
+        stored,
+        revision,
     }))
 }
 

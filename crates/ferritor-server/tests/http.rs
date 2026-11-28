@@ -1911,7 +1911,7 @@ async fn the_largest_apply_fits_through_both_apis() {
 /// keep in step with both (the test below holds the description to this
 /// list, and this list to the running server; nothing catches a route the
 /// router serves but neither names).
-const ROUTES: [(&str, &str); 17] = [
+const ROUTES: [(&str, &str); 18] = [
     ("GET", "/v1/health"),
     ("GET", "/v1/secrets"),
     ("GET", "/v1/secrets/{path}"),
@@ -1929,6 +1929,7 @@ const ROUTES: [(&str, &str); 17] = [
     ("DELETE", "/v1/policies/{name}"),
     ("POST", "/v1/policy-apply"),
     ("GET", "/v1/policy-check"),
+    ("GET", "/v1/access-review"),
 ];
 
 /// The OpenAPI description (`http::openapi`, the source of
@@ -2614,5 +2615,42 @@ async fn one_version_deleted_over_the_json_api() {
         .await
         .unwrap();
     assert_eq!(status, StatusCode::NOT_FOUND);
+    env.destroy().await.unwrap();
+}
+
+/// `GET /v1/access-review`: a page of grants and what it was computed
+/// from; a bad token is 400; unknown parameters are refused.
+#[tokio::test]
+async fn an_access_review_over_the_json_api() {
+    let env = Env::plaintext().await.unwrap();
+    let c = Client::Plain;
+    let addr = env.addr;
+    let (status, _, review) = c
+        .send(addr, Method::GET, "/v1/access-review?path=app/db", None)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "{review}");
+    assert_eq!(
+        (
+            &review["enforced"],
+            &review["stored"],
+            &review["next_page_token"]
+        ),
+        (&json!(false), &json!("loaded"), &json!(""))
+    );
+    assert!(review["grants"].is_array());
+    let bad = c
+        .send(addr, Method::GET, "/v1/access-review?page_token=zz", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        error(&bad),
+        (StatusCode::BAD_REQUEST, "invalid_argument".to_owned())
+    );
+    let typo = c
+        .send(addr, Method::GET, "/v1/access-review?identty=x", None)
+        .await
+        .unwrap();
+    assert_eq!(typo.0, StatusCode::BAD_REQUEST);
     env.destroy().await.unwrap();
 }

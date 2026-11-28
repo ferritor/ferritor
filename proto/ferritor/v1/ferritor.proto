@@ -164,6 +164,14 @@ service PolicyService {
   // Whether an identity may do an action (on a path, for a secret action),
   // and which rules grant it.
   rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+  // Who may do what, from the config rules and (when in force) the stored
+  // policies together: every grant, one per identity, action, scope and
+  // rule, for an access review. The inverse of CheckAccess. With an
+  // identity, only its grants; with a path, only the grants on it (or an
+  // enclosing prefix, or every path) and on prefixes below it, marked by
+  // relation (admin grants, being the server's, are left out then). Says
+  // what it was computed from: the config rules are each server's own.
+  rpc ReviewAccess(ReviewAccessRequest) returns (ReviewAccessResponse);
 }
 
 service SecretsService {
@@ -1008,6 +1016,71 @@ message CheckAccessResponse {
   // Why the stored policies couldn't answer: "sealed", "unverified"; empty
   // when they did.
   string undecided = 4;
+}
+
+message ReviewAccessRequest {
+  // Only this identity's grants; empty: everyone's.
+  string identity = 1;
+  // Only the grants on this secret or prefix, or below it; empty: every
+  // grant.
+  string path = 2;
+  // Grants per page: 0 means 1000, anything above 5000 is capped.
+  uint32 page_size = 3;
+  // The previous page's next_page_token; empty for the first. A token is
+  // bound to the state its first page was computed from: if the stored
+  // policies or the config rules changed since, ABORTED, and the review
+  // starts again.
+  string page_token = 4;
+}
+
+enum AccessScope {
+  ACCESS_SCOPE_UNSPECIFIED = 0;
+  // An admin action: the server itself.
+  ACCESS_SCOPE_SERVER = 1;
+  // Every secret path.
+  ACCESS_SCOPE_ALL_PATHS = 2;
+  // At or under `prefix`, by whole segments.
+  ACCESS_SCOPE_PREFIX = 3;
+}
+
+enum AccessRelation {
+  // No path was asked about.
+  ACCESS_RELATION_UNSPECIFIED = 0;
+  // On the whole path: it, an enclosing prefix, or every path.
+  ACCESS_RELATION_ON = 1;
+  // On part of it: a prefix below it.
+  ACCESS_RELATION_BELOW = 2;
+}
+
+// One grant: `identity` may do `action` on the scope, by `granted_by`.
+message AccessGrant {
+  string identity = 1;
+  string action = 2;
+  AccessScope scope = 3;
+  // With ACCESS_SCOPE_PREFIX.
+  string prefix = 4;
+  // The rule: a stored policy's name, or a config rule's `config:…`.
+  string granted_by = 5;
+  PolicySource source = 6;
+  AccessRelation relation = 7;
+}
+
+message ReviewAccessResponse {
+  // In rule-name order (as ListPolicies), then action, then scope.
+  repeated AccessGrant grants = 1;
+  // False in dev mode: everyone may do everything there, whatever the rules
+  // say.
+  bool enforced = 2;
+  // SHA-256 over this server's config rules, as its audit log's
+  // policy_loaded records it; empty in dev mode.
+  string config_fingerprint = 3;
+  // Whether the stored policies are in it: only when LOADED. Otherwise the
+  // review holds the config rules alone, and isn't the whole picture.
+  StoredPolicyState stored = 4;
+  // The stored set's revision, when loaded.
+  uint64 revision = 5;
+  // Empty when there's no next page.
+  string next_page_token = 6;
 }
 
 enum IssuingKeyState {

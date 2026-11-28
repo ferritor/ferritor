@@ -2201,6 +2201,8 @@ impl From<policies::PoliciesError> for Status {
         match e {
             E::Invalid { .. } | E::Request(_) => Status::invalid_argument(error_chain(&e)),
             E::NotFound(_) => Status::not_found(error_chain(&e)),
+            // Start the review again: nothing is wrong with the request.
+            E::ReviewChanged => Status::aborted(error_chain(&e)),
             E::VersionMismatch {
                 expected, current, ..
             } => {
@@ -2249,7 +2251,7 @@ impl From<policies::PoliciesError> for Status {
                 )
             }
             E::Seal(inner) => inner.into(),
-            E::Keys(_) | E::Crypto(_) => {
+            E::Keys(_) | E::Crypto(_) | E::Fingerprint(_) => {
                 tracing::error!(error = %error_chain(&e), "internal error");
                 Status::internal("internal error")
             }
@@ -2286,14 +2288,47 @@ fn policy_spec(spec: pb::PolicySpec) -> Result<ferritor_core::policy::PolicySpec
     })
 }
 
+fn policy_source(source: policies::Source) -> pb::PolicySource {
+    match source {
+        policies::Source::Config => pb::PolicySource::Config,
+        policies::Source::Stored => pb::PolicySource::Stored,
+    }
+}
+
+fn stored_state(stored: policies::StoredState) -> (pb::StoredPolicyState, u64) {
+    match stored {
+        policies::StoredState::Loaded { revision } => (pb::StoredPolicyState::Loaded, revision),
+        policies::StoredState::Sealed => (pb::StoredPolicyState::Sealed, 0),
+        policies::StoredState::Unverified => (pb::StoredPolicyState::Unverified, 0),
+    }
+}
+
+fn access_grant(grant: policies::AccessGrant) -> pb::AccessGrant {
+    let (scope, prefix) = match grant.scope {
+        policies::GrantScope::Server => (pb::AccessScope::Server, String::new()),
+        policies::GrantScope::AllPaths => (pb::AccessScope::AllPaths, String::new()),
+        policies::GrantScope::Prefix(prefix) => (pb::AccessScope::Prefix, prefix),
+    };
+    let relation = match grant.relation {
+        None => pb::AccessRelation::Unspecified,
+        Some(policies::Relation::On) => pb::AccessRelation::On,
+        Some(policies::Relation::Below) => pb::AccessRelation::Below,
+    };
+    pb::AccessGrant {
+        identity: grant.identity,
+        action: grant.action,
+        scope: scope.into(),
+        prefix,
+        granted_by: grant.granted_by,
+        source: policy_source(grant.source).into(),
+        relation: relation.into(),
+    }
+}
+
 fn policy_entry(entry: policies::Entry) -> pb::PolicyEntry {
     pb::PolicyEntry {
         name: entry.name,
-        source: match entry.source {
-            policies::Source::Config => pb::PolicySource::Config,
-            policies::Source::Stored => pb::PolicySource::Stored,
-        }
-        .into(),
+        source: policy_source(entry.source).into(),
         identity: entry.identity,
         actions: entry.actions,
         paths: entry.paths,
@@ -2366,11 +2401,7 @@ impl PolicyService for Policies {
             .policies
             .list(&caller, identity, req.page_size, &req.page_token)
             .await?;
-        let (stored, revision) = match page.stored {
-            policies::StoredState::Loaded { revision } => (pb::StoredPolicyState::Loaded, revision),
-            policies::StoredState::Sealed => (pb::StoredPolicyState::Sealed, 0),
-            policies::StoredState::Unverified => (pb::StoredPolicyState::Unverified, 0),
-        };
+        let (stored, revision) = stored_state(page.stored);
         Ok(Response::new(pb::ListPoliciesResponse {
             policies: page.entries.into_iter().map(policy_entry).collect(),
             next_page_token: page.next_page_token,
@@ -2430,6 +2461,31 @@ impl PolicyService for Policies {
                 .undecided
                 .map(|why| why.name().to_owned())
                 .unwrap_or_default(),
+        }))
+    }
+
+    async fn review_access(
+        &self,
+        request: Request<pb::ReviewAccessRequest>,
+    ) -> Result<Response<pb::ReviewAccessResponse>, Status> {
+        let caller = caller(self.policies.gate(), &request, Action::Policy)?;
+        let req = request.into_inner();
+        let filter = policies::ReviewFilter {
+            identity: Some(&req.identity),
+            path: Some(&req.path),
+        };
+        let review = self
+            .policies
+            .review(&caller, filter, req.page_size, &req.page_token)
+            .await?;
+        let (stored, revision) = stored_state(review.stored);
+        Ok(Response::new(pb::ReviewAccessResponse {
+            grants: review.grants.into_iter().map(access_grant).collect(),
+            enforced: review.enforced,
+            config_fingerprint: review.config_fingerprint,
+            stored: stored.into(),
+            revision,
+            next_page_token: review.next_page_token,
         }))
     }
 }

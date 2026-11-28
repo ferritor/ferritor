@@ -446,6 +446,30 @@ pub enum PolicyCommand {
         #[arg(long, value_name = "REVISION")]
         expected_revision: Option<u64>,
     },
+    /// Who may do what: every grant of the config rules and the stored
+    /// policies together, one per identity, action, scope and rule, for an
+    /// access review (the inverse of `check`). Refused unless complete:
+    /// unsealed with the stored policies in force, and secured mode; see
+    /// --partial. The config rules are this server's: review each server
+    /// whose config may differ (the config fingerprint tells them apart).
+    Review {
+        /// Only this identity's grants.
+        #[arg(long)]
+        identity: Option<String>,
+        /// Only the grants on this secret or prefix (or an enclosing one, or
+        /// every path), and on prefixes below it, each marked `on` or
+        /// `below`. Admin grants are left out.
+        #[arg(long)]
+        path: Option<String>,
+        /// table (tab-separated, for reading), csv (a header row, for a
+        /// spreadsheet) or json (with what it was computed from).
+        #[arg(long, value_enum, default_value_t = ReviewFormat::Table)]
+        format: ReviewFormat,
+        /// Output an incomplete review too (sealed, the stored policies not
+        /// verifying, or dev mode), warning on stderr.
+        #[arg(long)]
+        partial: bool,
+    },
     /// Whether an identity may do an action, and which rules grant it. Exit
     /// status 0 if allowed, 1 if not.
     Check {
@@ -458,6 +482,14 @@ pub enum PolicyCommand {
         #[arg(long)]
         path: Option<String>,
     },
+}
+
+/// `ferritor policy review`'s output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ReviewFormat {
+    Table,
+    Csv,
+    Json,
 }
 
 fn parse_secret_action(

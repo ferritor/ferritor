@@ -94,7 +94,7 @@ deletes. One invalid policy refuses the whole call.
 ### Over the API
 
 gRPC: `PolicyService` (`PutPolicy`, `DeletePolicy`, `GetPolicy`,
-`ListPolicies`, `ApplyPolicies`, `CheckAccess`; actions are an enum of the
+`ListPolicies`, `ApplyPolicies`, `CheckAccess`, `ReviewAccess`; actions are an enum of the
 secret actions, so an admin action can't even be sent). JSON, on the same
 port as everything else:
 
@@ -106,6 +106,7 @@ port as everything else:
 | `DELETE /v1/policies/{name}?expected_version=N` | delete |
 | `POST /v1/policy-apply` | apply; body `{"policies": [...], "expected_revision"?, "prune"?, "dry_run"?}` |
 | `GET /v1/policy-check?identity=…&action=…&path=…` | check |
+| `GET /v1/access-review?identity=…&path=…&page_size=…&page_token=…` | [access review](#access-review) |
 
 ```sh
 curl --cacert ca.pem --cert ci.pem --key ci-key.pem -X POST \
@@ -147,6 +148,44 @@ verified (see "Integrity"). So:
 - **Changes reach every server** within `policy_refresh_secs` (default 5 s,
   one tiny read per poll), at once on the server that made them, on SIGHUP
   and at unseal. A revocation that can't wait: seal.
+
+## Access review
+
+Who may do what, the config rules and the stored policies together: the
+inverse of `policy check`, and the evidence a recurring access review (SOX,
+say) asks for.
+
+```sh
+ferritor policy review                              # every grant
+ferritor policy review --identity apps/billing      # what one identity may do
+ferritor policy review --path billing/db            # who may do what to one secret
+ferritor policy review --format csv > access.csv    # for a spreadsheet
+ferritor policy review --format json > access.json  # with what it was computed from
+```
+
+- One row per identity, action, scope and the rule granting it, in
+  rule-name order: a rule granting two actions on three prefixes is six
+  rows. The scope is `server` for an admin action, `*` for every path, or
+  the prefix.
+- `--path` keeps the grants that apply to it (on it, an enclosing prefix,
+  or every path: `on`) and those on a prefix below it (`below`: part of
+  it). Admin actions, being the server's, are left out.
+- It says what it was computed from: the config rules' fingerprint (the one
+  the audit log's `policy_loaded` and `policy_reload` record), the stored
+  policies' revision, and when. The config rules are each server's own:
+  review each server whose `ferritor.toml` may differ, or check the
+  fingerprints agree. JSON carries it all; with a table or CSV it's on
+  stderr.
+- It's refused unless complete: secured mode (in dev mode everyone may do
+  everything, whatever the rules say), unsealed, and the stored policies in
+  force (verified). `--partial` outputs what there is anyway, with a
+  warning.
+- It's one state of the policies: it's paged, and if they change between
+  its pages (a write, a reload), the review starts again rather than
+  splicing two states together.
+- It needs the `policy` action, like the rest of the policy commands, and
+  is audited as a decision like them. Over the APIs: `ReviewAccess`, and
+  `GET /v1/access-review?identity=…&path=…&page_size=…&page_token=…`.
 
 ## Integrity
 

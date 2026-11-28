@@ -180,6 +180,7 @@ labels.
 | `ferritor policy delete` | `NAME`, `--expected-version` | delete one |
 | `ferritor policy apply` | `-f`/`--file` (TOML or JSON, `-` for stdin), `--prune`, `--dry-run`, `--expected-revision` | make the stored policies match a file in one call, checked here first ([apply](/guides/policy#apply-the-declarative-path)) |
 | `ferritor policy check` | `--identity`, `--action`, `--path` | whether an identity may do it, and which rules grant it: exit status 0 if allowed, 1 if not |
+| `ferritor policy review` | `--identity`, `--path`, `--format table\|csv\|json`, `--partial` | every grant, one per identity, action, scope and rule ([access review](/guides/policy#access-review)); refused unless complete (secured mode, unsealed, the stored policies in force) without `--partial` |
 
 ### Workload identity
 

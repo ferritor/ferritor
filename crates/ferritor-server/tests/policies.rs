@@ -1061,3 +1061,264 @@ async fn get_and_check_name_the_rules() {
     assert_eq!(listed.entries.len(), 2);
     env.destroy().await.unwrap();
 }
+
+/// One row of a review, for comparing: identity, action, scope, rule,
+/// relation.
+fn rows(
+    review: &ferritor_server::policies::Review,
+) -> Vec<(String, String, String, String, &'static str)> {
+    use ferritor_server::policies::{GrantScope, Relation};
+    review
+        .grants
+        .iter()
+        .map(|g| {
+            let scope = match &g.scope {
+                GrantScope::Server => "server".to_owned(),
+                GrantScope::AllPaths => "*".to_owned(),
+                GrantScope::Prefix(p) => p.clone(),
+            };
+            let relation = match g.relation {
+                None => "",
+                Some(Relation::On) => "on",
+                Some(Relation::Below) => "below",
+            };
+            (
+                g.identity.clone(),
+                g.action.clone(),
+                scope,
+                g.granted_by.clone(),
+                relation,
+            )
+        })
+        .collect()
+}
+
+fn row(
+    identity: &str,
+    action: &str,
+    scope: &str,
+    rule: &str,
+    relation: &'static str,
+) -> (String, String, String, String, &'static str) {
+    (
+        identity.to_owned(),
+        action.to_owned(),
+        scope.to_owned(),
+        rule.to_owned(),
+        relation,
+    )
+}
+
+/// An access review: every grant of the config rules and the stored
+/// policies, one per identity, action, scope and rule, in rule-name order;
+/// by identity; by path (on it, or below it; no admin grants); with what it
+/// was computed from.
+#[tokio::test]
+async fn an_access_review_lists_every_grant() {
+    use ferritor_server::policies::ReviewFilter;
+    let env = Env::new().await.unwrap();
+    let p = &env.server.policies;
+    p.put(&env.admin, &billing_read(), None).await.unwrap();
+    p.put(
+        &env.admin,
+        &spec(
+            "apps/billing-db-writer",
+            "apps/migrate",
+            &[SecretAction::Write],
+            &["billing/db", "other"],
+        ),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let all = p
+        .review(&env.admin, ReviewFilter::default(), 0, "")
+        .await
+        .unwrap();
+    assert!(all.enforced && all.next_page_token.is_empty());
+    assert_eq!(all.stored, StoredState::Loaded { revision: 2 });
+    assert_eq!(all.config_fingerprint.len(), 64);
+    let all_rows = rows(&all);
+    // 11 for ops/admin (7 admin, 4 secret), 1 for ops/monitor, 2 for
+    // apps/billing, 2 for apps/migrate.
+    assert_eq!(all_rows.len(), 16);
+    assert_eq!(
+        all_rows[..4],
+        [
+            row(
+                "apps/migrate",
+                "write",
+                "billing/db",
+                "apps/billing-db-writer",
+                ""
+            ),
+            row(
+                "apps/migrate",
+                "write",
+                "other",
+                "apps/billing-db-writer",
+                ""
+            ),
+            row("apps/billing", "read", "billing", "apps/billing-read", ""),
+            row("apps/billing", "list", "billing", "apps/billing-read", ""),
+        ]
+    );
+    // Not granted, so not listed.
+    assert!(!all_rows.contains(&row(
+        "ops/admin",
+        "rotate",
+        "server",
+        "config:ops-admin",
+        ""
+    )));
+    assert!(all_rows.contains(&row(
+        "ops/admin",
+        "policy",
+        "server",
+        "config:ops-admin",
+        ""
+    )));
+    assert!(all_rows.contains(&row("ops/admin", "read", "*", "config:ops-admin", "")));
+    assert!(all_rows.contains(&row("ops/monitor", "status", "server", "config:2", "")));
+
+    let migrate = p
+        .review(
+            &env.admin,
+            ReviewFilter {
+                identity: Some("apps/migrate"),
+                path: None,
+            },
+            0,
+            "",
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows(&migrate).len(), 2);
+
+    let billing = p
+        .review(
+            &env.admin,
+            ReviewFilter {
+                identity: None,
+                path: Some("billing"),
+            },
+            0,
+            "",
+        )
+        .await
+        .unwrap();
+    let billing_rows = rows(&billing);
+    assert!(billing_rows.contains(&row(
+        "apps/migrate",
+        "write",
+        "billing/db",
+        "apps/billing-db-writer",
+        "below"
+    )));
+    assert!(billing_rows.contains(&row(
+        "apps/billing",
+        "read",
+        "billing",
+        "apps/billing-read",
+        "on"
+    )));
+    assert!(billing_rows.contains(&row("ops/admin", "read", "*", "config:ops-admin", "on")));
+    assert!(
+        billing_rows
+            .iter()
+            .all(|r| r.2 != "server" && r.2 != "other"),
+        "no admin grants, nothing elsewhere: {billing_rows:?}"
+    );
+    let db = p
+        .review(
+            &env.admin,
+            ReviewFilter {
+                identity: None,
+                path: Some("billing/db"),
+            },
+            0,
+            "",
+        )
+        .await
+        .unwrap();
+    assert!(rows(&db).iter().all(|r| r.4 == "on"), "{:?}", rows(&db));
+
+    // Refused: a path or identity that isn't one.
+    assert!(matches!(
+        p.review(
+            &env.admin,
+            ReviewFilter {
+                identity: Some("not//valid"),
+                path: None
+            },
+            0,
+            ""
+        )
+        .await,
+        Err(PoliciesError::Request(_))
+    ));
+
+    // Sealed: the config rules alone, and it says so.
+    env.server.seal.seal().await;
+    let sealed = p
+        .review(&env.admin, ReviewFilter::default(), 0, "")
+        .await
+        .unwrap();
+    assert_eq!(sealed.stored, StoredState::Sealed);
+    assert!(rows(&sealed).iter().all(|r| r.3.starts_with("config:")));
+    env.destroy().await.unwrap();
+}
+
+/// A review's pages, followed to the end, are the whole review; a page
+/// after the stored policies changed is refused, never spliced.
+#[tokio::test]
+async fn an_access_review_pages_one_state() {
+    use ferritor_server::policies::ReviewFilter;
+    let env = Env::new().await.unwrap();
+    let p = &env.server.policies;
+    p.put(&env.admin, &billing_read(), None).await.unwrap();
+    let whole = rows(
+        &p.review(&env.admin, ReviewFilter::default(), 0, "")
+            .await
+            .unwrap(),
+    );
+    let mut paged = Vec::new();
+    let mut token = String::new();
+    loop {
+        let page = p
+            .review(&env.admin, ReviewFilter::default(), 3, &token)
+            .await
+            .unwrap();
+        assert!(page.grants.len() <= 3);
+        paged.extend(rows(&page));
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        token = page.next_page_token;
+    }
+    assert_eq!(paged, whole);
+
+    let first = p
+        .review(&env.admin, ReviewFilter::default(), 3, "")
+        .await
+        .unwrap();
+    p.delete(&env.admin, "apps/billing-read", None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        p.review(
+            &env.admin,
+            ReviewFilter::default(),
+            3,
+            &first.next_page_token
+        )
+        .await,
+        Err(PoliciesError::ReviewChanged)
+    ));
+    assert!(matches!(
+        p.review(&env.admin, ReviewFilter::default(), 3, "zz").await,
+        Err(PoliciesError::Request(_))
+    ));
+    env.destroy().await.unwrap();
+}
