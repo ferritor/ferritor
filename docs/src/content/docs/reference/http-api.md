@@ -419,3 +419,23 @@ action, empty: every secret), and which rules grant it:
 `enforced` is `false` in dev mode (everyone may do everything there);
 `undecided` (`sealed`, `unverified`) appears when the stored policies
 couldn't answer.
+
+### `GET /v1/access-review?identity=…&path=…&page_size=…&page_token=…`
+
+Who may do what: every grant of the config rules and (when in force) the
+stored policies, one per identity, action, scope and rule, in rule-name
+order ([access review](/guides/policy#access-review)). Both filters
+optional; `page_size` 0 means 1000, capped at 2000.
+
+```json
+{"grants": [{"identity": "apps/billing", "action": "read", "scope": "prefix",
+             "prefix": "billing", "granted_by": "apps/billing-read",
+             "source": "stored", "relation": "on"}],
+ "next_page_token": "", "enforced": true, "config_fingerprint": "9f2c…",
+ "stored": "loaded", "revision": 7}
+```
+
+`scope` is `server` (an admin action), `all_paths` or `prefix`; `relation`
+(with `path`) is `on` or `below`. It's complete only with `enforced` and
+`stored` `loaded`. A page after the policies changed is `409 aborted`:
+start again from the first.

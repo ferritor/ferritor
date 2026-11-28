@@ -87,7 +87,10 @@ pub enum PolicyError {
         #[source]
         source: PathError,
     },
-    #[error("policy rule {index}: name `{name}` is used by another rule")]
+    #[error(
+        "policy rule {index}: name `{name}` is used by another rule (an unnamed rule is named by \
+         its position from 1)"
+    )]
     DuplicateName { index: usize, name: String },
     #[error("policy rule {index}: `all_paths = true` and `paths` together; choose one")]
     AllAndPaths { index: usize },
@@ -219,11 +222,32 @@ impl Policy {
                     scope,
                 })
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<Vec<Grant>, _>>()?;
+        // A name can also be an unnamed rule's number (`name = "2"` beside
+        // an unnamed second rule): two rules would be one `config:2`, which
+        // get, list and an access review's paging must tell apart.
+        let mut qualified = HashSet::new();
+        for (index, grant) in grants.iter().enumerate() {
+            if !qualified.insert(grant.name.as_str()) {
+                return Err(PolicyError::DuplicateName {
+                    index,
+                    name: grant
+                        .name
+                        .strip_prefix(CONFIG_PREFIX)
+                        .unwrap_or(&grant.name)
+                        .to_owned(),
+                });
+            }
+        }
         Ok(Self {
             grants,
             rules: rules.to_vec(),
         })
+    }
+
+    /// The rules' count and fingerprint, as `policy_loaded` records them.
+    pub fn info(&self) -> Result<PolicyInfo, PolicyError> {
+        PolicyInfo::of(&self.rules)
     }
 
     /// Every rule with its qualified name (`config:…`), in order.
@@ -488,5 +512,35 @@ mod tests {
         let bad_identity =
             policy("[[policy]]\nidentity = \"ferritor://ops/a\"\nactions = [\"read\"]");
         assert!(bad_identity.unwrap_err().contains("not a valid name"));
+    }
+
+    /// Two rules can't share a name, an unnamed rule's number included:
+    /// `config:1` must be one rule.
+    #[test]
+    fn a_name_can_be_no_other_rules() {
+        let twice = policy(
+            "[[policy]]\nname = \"a\"\nidentity = \"ops/a\"\nactions = [\"read\"]\n\
+             [[policy]]\nname = \"a\"\nidentity = \"ops/b\"\nactions = [\"read\"]",
+        )
+        .unwrap_err();
+        assert!(
+            twice.contains("name `a` is used by another rule"),
+            "{twice}"
+        );
+        let numbered = policy(
+            "[[policy]]\nidentity = \"ops/a\"\nactions = [\"read\"]\n\
+             [[policy]]\nname = \"1\"\nidentity = \"ops/b\"\nactions = [\"read\"]",
+        )
+        .unwrap_err();
+        assert!(
+            numbered.contains("name `1` is used by another rule"),
+            "{numbered}"
+        );
+        // A number no unnamed rule has is fine.
+        policy(
+            "[[policy]]\nidentity = \"ops/a\"\nactions = [\"read\"]\n\
+             [[policy]]\nname = \"7\"\nidentity = \"ops/b\"\nactions = [\"read\"]",
+        )
+        .unwrap();
     }
 }

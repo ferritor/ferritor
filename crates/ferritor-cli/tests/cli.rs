@@ -2059,6 +2059,65 @@ description = "billing app, read only"
         (denied.code, denied.out()),
         (Some(1), "not allowed\n".to_owned())
     );
+
+    // An access review: refused as incomplete in dev mode (nothing is
+    // enforced), output with --partial, a warning on stderr.
+    let refused = server.ferritor(&["policy", "review"], &[]).await.unwrap();
+    assert!(!refused.success && refused.out().is_empty());
+    assert!(
+        refused.stderr.contains("would be incomplete") && refused.stderr.contains("--partial"),
+        "{}",
+        refused.stderr
+    );
+    let csv = server
+        .ferritor(&["policy", "review", "--partial", "--format", "csv"], &[])
+        .await
+        .unwrap();
+    assert!(csv.success, "{}", csv.stderr);
+    let lines: Vec<String> = csv.out().lines().map(str::to_owned).collect();
+    assert_eq!(lines[0], "identity,action,scope,granted_by,source");
+    assert!(
+        lines.contains(&"apps/billing,read,billing,apps/billing-read,stored".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        csv.stderr.contains("INCOMPLETE: the server is in dev mode"),
+        "{}",
+        csv.stderr
+    );
+    let json = server
+        .ferritor(
+            &[
+                "policy",
+                "review",
+                "--partial",
+                "--format",
+                "json",
+                "--path",
+                "billing/db",
+            ],
+            &[],
+        )
+        .await
+        .unwrap();
+    let review: serde_json::Value = serde_json::from_str(&json.out()).unwrap();
+    assert_eq!(
+        (&review["complete"], &review["enforced"], &review["stored"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(false),
+            &serde_json::json!("loaded")
+        )
+    );
+    assert_eq!(review["filter"]["path"], "billing/db");
+    assert!(
+        review["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["granted_by"] == "apps/billing-read" && g["relation"] == "on"),
+        "{review}"
+    );
     server.stop().await.unwrap();
 }
 

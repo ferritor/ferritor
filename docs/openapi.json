@@ -20,6 +20,78 @@
     }
   ],
   "paths": {
+    "/v1/access-review": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Who may do what: an access review (`policy`).",
+        "description": "Every grant of the config rules and (when in force) the stored policies,\none per identity, action, scope and rule: the inverse of\n`/v1/policy-check`. Paged; a later page after the policies changed is 409\n`aborted`: start again.",
+        "operationId": "reviewAccess",
+        "parameters": [
+          {
+            "name": "identity",
+            "in": "query",
+            "description": "Only this identity's grants (the `<name>` of `ferritor://<name>`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "description": "Only the grants on this secret or prefix, or below it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "0 or absent: 1000; capped at 2000.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "description": "The previous page's `next_page_token`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/generate/{path}": {
       "post": {
         "tags": [
@@ -909,6 +981,60 @@
   },
   "components": {
     "schemas": {
+      "AccessGrantBody": {
+        "type": "object",
+        "description": "One grant: `identity` may do `action` on the scope, by `granted_by`.",
+        "required": [
+          "identity",
+          "action",
+          "scope",
+          "granted_by",
+          "source"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "granted_by": {
+            "type": "string",
+            "description": "The rule: a stored policy's name, or a config rule's `config:…`."
+          },
+          "identity": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "With `scope` `prefix`."
+          },
+          "relation": {
+            "$ref": "#/components/schemas/AccessRelation",
+            "description": "With `path` asked about."
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AccessScope"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PolicySource"
+          }
+        }
+      },
+      "AccessRelation": {
+        "type": "string",
+        "description": "How a grant stands to the path asked about.",
+        "enum": [
+          "on",
+          "below"
+        ]
+      },
+      "AccessScope": {
+        "type": "string",
+        "description": "Where a grant applies.",
+        "enum": [
+          "server",
+          "all_paths",
+          "prefix"
+        ]
+      },
       "AppliedBody": {
         "type": "object",
         "required": [
@@ -1518,6 +1644,47 @@
           }
         },
         "additionalProperties": false
+      },
+      "ReviewBody": {
+        "type": "object",
+        "required": [
+          "grants",
+          "next_page_token",
+          "enforced",
+          "config_fingerprint",
+          "stored"
+        ],
+        "properties": {
+          "config_fingerprint": {
+            "type": "string",
+            "description": "SHA-256 over this server's config rules, as its audit log's\n`policy_loaded` records it; empty in dev mode."
+          },
+          "enforced": {
+            "type": "boolean",
+            "description": "False in dev mode: everyone may do everything there, whatever the\nrules say."
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessGrantBody"
+            },
+            "description": "In rule-name order, then action, then scope."
+          },
+          "next_page_token": {
+            "type": "string",
+            "description": "Empty when there's no next page."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The stored set's revision, when loaded.",
+            "minimum": 0
+          },
+          "stored": {
+            "$ref": "#/components/schemas/StoredState",
+            "description": "Whether the stored policies are in it: only when `loaded`."
+          }
+        }
       },
       "SecretActionName": {
         "type": "string",

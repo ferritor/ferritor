@@ -289,6 +289,31 @@ pub async fn policy_command(
                 );
             }
         }
+        PolicyCommand::Review {
+            identity,
+            path,
+            format,
+            partial,
+        } => {
+            let review = review_all(&mut client, identity.as_deref(), path.as_deref()).await?;
+            if let Some(gap) = review.incomplete() {
+                if !partial {
+                    anyhow::bail!(
+                        "the review would be incomplete: {gap}. Fix that, or pass --partial \
+                         to output it anyway"
+                    );
+                }
+                eprintln!("INCOMPLETE: {gap}.");
+            }
+            match format {
+                crate::cli::ReviewFormat::Table => review.table(out, path.is_some())?,
+                crate::cli::ReviewFormat::Csv => review.csv(out, path.is_some())?,
+                crate::cli::ReviewFormat::Json => review.json(out, identity, path)?,
+            }
+            if *format != crate::cli::ReviewFormat::Json {
+                eprintln!("{}", review.provenance());
+            }
+        }
         PolicyCommand::Check {
             identity,
             action,
@@ -327,4 +352,233 @@ pub async fn policy_command(
         }
     }
     Ok(())
+}
+
+/// An access review, every page of it, and what it was computed from.
+struct Review {
+    grants: Vec<pb::AccessGrant>,
+    enforced: bool,
+    config_fingerprint: String,
+    stored: pb::StoredPolicyState,
+    revision: u64,
+}
+
+/// How often a review starts again when the policies change between its
+/// pages, before giving up.
+const REVIEW_ATTEMPTS: u32 = 3;
+
+/// Every page of `ReviewAccess`, from one state of the policies: when they
+/// change between pages (ABORTED), it starts again.
+async fn review_all(
+    client: &mut PolicyClient,
+    identity: Option<&str>,
+    path: Option<&str>,
+) -> anyhow::Result<Review> {
+    let mut attempt = 1;
+    loop {
+        let mut grants = Vec::new();
+        let mut token = String::new();
+        let last = loop {
+            let reply = answer(
+                client
+                    .review_access(pb::ReviewAccessRequest {
+                        identity: identity.unwrap_or_default().to_owned(),
+                        path: path.unwrap_or_default().to_owned(),
+                        page_size: 0,
+                        page_token: token,
+                    })
+                    .await,
+            );
+            match reply {
+                Ok(mut reply) => {
+                    grants.append(&mut reply.grants);
+                    if reply.next_page_token.is_empty() {
+                        break Ok(reply);
+                    }
+                    token = std::mem::take(&mut reply.next_page_token);
+                }
+                Err(e) => break Err(e),
+            }
+        };
+        match last {
+            Ok(last) => {
+                return Ok(Review {
+                    grants,
+                    stored: last.stored(),
+                    enforced: last.enforced,
+                    config_fingerprint: last.config_fingerprint,
+                    revision: last.revision,
+                });
+            }
+            Err(e) if e.code == tonic::Code::Aborted && attempt < REVIEW_ATTEMPTS => {
+                eprintln!("The policies changed during the review; starting again.");
+                attempt += 1;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+impl Review {
+    /// Why it isn't the whole picture, if it isn't.
+    fn incomplete(&self) -> Option<&'static str> {
+        if !self.enforced {
+            return Some(
+                "the server is in dev mode, where everyone may do everything whatever the rules \
+                 say",
+            );
+        }
+        match self.stored {
+            pb::StoredPolicyState::Loaded => None,
+            pb::StoredPolicyState::Sealed => Some(
+                "the server is sealed, so the stored policies aren't in force: only the config \
+                 rules are in it",
+            ),
+            _ => Some(
+                "the stored policies don't verify: only the config rules are in it (re-apply \
+                 them: `ferritor policy apply --prune`)",
+            ),
+        }
+    }
+
+    /// What it was computed from, for stderr beside a table or CSV.
+    fn provenance(&self) -> String {
+        let stored = match self.stored {
+            pb::StoredPolicyState::Loaded => format!("stored policies revision {}", self.revision),
+            pb::StoredPolicyState::Sealed => "stored policies not in force (sealed)".to_owned(),
+            _ => "stored policies not in force (unverified)".to_owned(),
+        };
+        let config = if self.config_fingerprint.is_empty() {
+            "no config rules (dev mode)".to_owned()
+        } else {
+            format!("config rules {}", self.config_fingerprint)
+        };
+        format!(
+            "{} grants, at {}; {config}; {stored}",
+            self.grants.len(),
+            now_utc()
+        )
+    }
+
+    fn table(&self, out: &mut impl Write, by_path: bool) -> io::Result<()> {
+        for grant in &self.grants {
+            let mut row = vec![
+                grant.identity.as_str(),
+                grant.action.as_str(),
+                scope_of(grant),
+                grant.granted_by.as_str(),
+            ];
+            if by_path {
+                row.push(relation_of(grant));
+            }
+            writeln!(out, "{}", row.join("\t"))?;
+        }
+        Ok(())
+    }
+
+    fn csv(&self, out: &mut impl Write, by_path: bool) -> io::Result<()> {
+        let mut header = vec!["identity", "action", "scope", "granted_by", "source"];
+        if by_path {
+            header.push("relation");
+        }
+        writeln!(out, "{}", header.join(","))?;
+        for grant in &self.grants {
+            let mut row = vec![
+                csv_field(&grant.identity),
+                csv_field(&grant.action),
+                csv_field(scope_of(grant)),
+                csv_field(&grant.granted_by),
+                csv_field(source_name(grant.source())),
+            ];
+            if by_path {
+                row.push(csv_field(relation_of(grant)));
+            }
+            writeln!(out, "{}", row.join(","))?;
+        }
+        Ok(())
+    }
+
+    fn json(
+        &self,
+        out: &mut impl Write,
+        identity: &Option<String>,
+        path: &Option<String>,
+    ) -> anyhow::Result<()> {
+        let grants: Vec<serde_json::Value> = self
+            .grants
+            .iter()
+            .map(|grant| {
+                let mut entry = serde_json::json!({
+                    "identity": grant.identity,
+                    "action": grant.action,
+                    "scope": scope_of(grant),
+                    "granted_by": grant.granted_by,
+                    "source": source_name(grant.source()),
+                });
+                if path.is_some() {
+                    entry["relation"] = relation_of(grant).into();
+                }
+                entry
+            })
+            .collect();
+        let stored = match self.stored {
+            pb::StoredPolicyState::Loaded => "loaded",
+            pb::StoredPolicyState::Sealed => "sealed",
+            _ => "unverified",
+        };
+        let review = serde_json::json!({
+            "generated_at": now_utc(),
+            "filter": {"identity": identity, "path": path},
+            "enforced": self.enforced,
+            "config_fingerprint": self.config_fingerprint,
+            "stored": stored,
+            "revision": (self.stored == pb::StoredPolicyState::Loaded).then_some(self.revision),
+            "complete": self.incomplete().is_none(),
+            "grants": grants,
+        });
+        serde_json::to_writer_pretty(&mut *out, &review)?;
+        writeln!(out)?;
+        Ok(())
+    }
+}
+
+/// A grant's scope as the outputs spell it: `server` (an admin action),
+/// `*` (every path) or the prefix.
+fn scope_of(grant: &pb::AccessGrant) -> &str {
+    match grant.scope() {
+        pb::AccessScope::Server => "server",
+        pb::AccessScope::AllPaths => "*",
+        _ => grant.prefix.as_str(),
+    }
+}
+
+fn relation_of(grant: &pb::AccessGrant) -> &'static str {
+    match grant.relation() {
+        pb::AccessRelation::On => "on",
+        pb::AccessRelation::Below => "below",
+        pb::AccessRelation::Unspecified => "",
+    }
+}
+
+fn source_name(source: pb::PolicySource) -> &'static str {
+    match source {
+        pb::PolicySource::Config => "config",
+        _ => "stored",
+    }
+}
+
+/// A CSV field (RFC 4180): quoted when it holds a comma, a quote or a line
+/// break, quotes doubled. Every field here is a name ferritor checked
+/// (paths, identities, action and rule names: letters, digits, `.`, `_`,
+/// `-`, `/`, `:`, `*`), so none can start a spreadsheet formula's call.
+fn csv_field(field: &str) -> String {
+    if field.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_owned()
+    }
+}
+
+fn now_utc() -> String {
+    utc(time::OffsetDateTime::now_utc().unix_timestamp())
 }

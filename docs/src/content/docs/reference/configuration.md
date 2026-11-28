@@ -231,7 +231,9 @@ have rather than use another: keep them alike on every server.
 
 `[[policy]]`: the config rules, for the operators (see [policy](/guides/policy);
 the applications' grants are stored policies, managed over the API). Each
-may have a `name`, shown as `config:<name>`.
+may have a `name`, shown as `config:<name>` (an unnamed one is `config:<n>`, by
+position from 1): each name once, and none an unnamed rule's number, or the
+server refuses to start.
 
 A misspelled key in `ferritor.toml` refuses to start (unknown top-level keys,
 and unknown keys inside `[tls]`, `[rate_limit]`, `[identity]`, `[seal]`, `[metrics]`, `[[policy]]` and `[[generate_profile]]`). Environment variables get
