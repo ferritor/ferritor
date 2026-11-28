@@ -160,7 +160,8 @@ pipelines (metrics, application logs) needn't keep them.
   effect anyway (a write the database didn't confirm in time, a rewrap cut
   short). A failed call that still changed something says so in its details.
   A label change (`"label"`, or `labels_set` on a put) lists the keys set
-  and removed, never their values. A call runs to its end, and records its
+  and removed, never their values. A generate (`"generate"`, the `write`
+  action) gives the version and the profile, never the value. A call runs to its end, and records its
   outcome, even if its client disconnects or times out first.
 - **Failed authentication** (`"event": "authentication"`): a certificate that
   passed the handshake but names no caller now (expired, revoked, no valid

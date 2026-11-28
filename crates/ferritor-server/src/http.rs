@@ -122,6 +122,7 @@ pub fn router(secrets: Arc<Secrets>, readiness: Arc<Readiness>, policies: Arc<Po
         .route("/v1/secrets", get(list))
         .route("/v1/secrets/{*path}", get(read).put(write).delete(remove))
         .route("/v1/restore/{*path}", post(restore))
+        .route("/v1/generate/{*path}", post(generate))
         .route("/v1/versions/{*path}", get(versions))
         .route(
             "/v1/metadata/{*path}",
@@ -179,6 +180,7 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         write,
         remove,
         restore,
+        generate,
         versions,
         get_metadata,
         update_labels,
@@ -417,6 +419,22 @@ struct PathMetadataBody {
     /// `rotation_max_age_days`; null otherwise. A reminder only.
     #[schema(format = DateTime, required)]
     rotation_due: Option<String>,
+}
+
+/// How to generate a secret's value: a put's options, but no value.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+struct GenerateBody {
+    /// A generate profile of the server's config; absent or empty: `default`.
+    profile: Option<String>,
+    /// Check-and-set: store only if the latest version is still this one;
+    /// 0: only if the secret doesn't exist yet.
+    expected_version: Option<u32>,
+    /// Labels to set with it (needs the `label` action too): plain
+    /// metadata, not encrypted.
+    #[serde(default)]
+    #[schema(value_type = std::collections::HashMap<String, String>)]
+    labels: Labels,
 }
 
 /// Which deleted version to bring back.
@@ -691,6 +709,42 @@ async fn restore(
     Ok(Json(metadata(restored)?))
 }
 
+/// Generate a secret's value (`write`).
+///
+/// Stores a new version whose value the server made up from a generate
+/// profile, as a put would store it (`label` too with `labels`). Never returns the value: read it. 409 `unknown_profile` if
+/// this server has no such profile.
+#[utoipa::path(
+    post,
+    path = "/v1/generate/{path}",
+    operation_id = "generateSecret",
+    tag = "secrets",
+    params(("path" = String, Path, description = "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.")),
+    request_body = GenerateBody,
+    responses((status = 200, description = "The version generated.", body = Metadata), (status = "default", description = "An error: see `error.code`.", body = ErrorBody))
+)]
+async fn generate(
+    State(secrets): State<Arc<Secrets>>,
+    extensions: Extensions,
+    path: Result<Path<String>, PathRejection>,
+    body: Result<Json<GenerateBody>, JsonRejection>,
+) -> Result<Json<Metadata>, ApiError> {
+    let caller = caller(&secrets, &extensions, Action::Write)?;
+    let Path(path) = path.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
+    let Json(body) = body.map_err(|r| ApiError::rejected(r.status(), r.body_text()))?;
+    let generated = secrets
+        .generate(
+            &caller,
+            &path,
+            // Empty is `default`, as over gRPC.
+            body.profile.as_deref().filter(|p| !p.is_empty()),
+            body.expected_version,
+            &body.labels,
+        )
+        .await?;
+    Ok(Json(metadata(generated)?))
+}
+
 /// List the latest secret versions below a prefix (`list`).
 ///
 /// Needs `list` on the prefix, or on every path without one.
@@ -856,6 +910,7 @@ pub(crate) enum ErrorCode {
     VersionMismatch,
     LiveVersion,
     NoNamespace,
+    UnknownProfile,
     Busy,
     Aborted,
     MisdirectedRequest,
@@ -948,6 +1003,9 @@ impl From<Status> for ApiError {
             (Some(reason::LIVE_VERSION), _) => (StatusCode::CONFLICT, ErrorCode::LiveVersion),
             // Create the namespace first; retrying as is fails the same way.
             (Some(reason::NO_NAMESPACE), _) => (StatusCode::CONFLICT, ErrorCode::NoNamespace),
+            // Name another profile, or add it to this server's config;
+            // retrying as is fails the same way.
+            (Some(reason::UNKNOWN_PROFILE), _) => (StatusCode::CONFLICT, ErrorCode::UnknownProfile),
             // Repair the stored policies; retrying as is fails the same way.
             (Some(reason::POLICY_UNVERIFIED), _) => {
                 (StatusCode::SERVICE_UNAVAILABLE, ErrorCode::PolicyUnverified)

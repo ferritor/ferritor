@@ -444,6 +444,22 @@ pub async fn run(cli: &Cli) -> anyhow::Result<()> {
             )
             .await
         }
+        Command::Generate {
+            path,
+            profile,
+            expected_version,
+            labels,
+        } => {
+            generate(
+                secrets_client(&addr().await?).await?,
+                path,
+                profile.as_deref(),
+                *expected_version,
+                label_map(labels)?,
+                out,
+            )
+            .await
+        }
         Command::Delete { path } => delete(secrets_client(&addr().await?).await?, path, out).await,
         Command::Restore { path, version } => {
             restore(secrets_client(&addr().await?).await?, path, *version, out).await
@@ -1252,6 +1268,40 @@ async fn restore(
     Ok(())
 }
 
+/// `ferritor generate`: the version made, never the value.
+async fn generate(
+    mut client: SecretsClient,
+    path: &str,
+    profile: Option<&str>,
+    expected_version: Option<u32>,
+    labels: HashMap<String, String>,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    let reply = answer(
+        client
+            .generate_secret(pb::GenerateSecretRequest {
+                path: path.to_owned(),
+                profile: profile.unwrap_or_default().to_owned(),
+                expected_version,
+                labels,
+            })
+            .await,
+    )?;
+    let profile = profile.unwrap_or("default");
+    // Stored: report it, but a stdout that fails now doesn't make the
+    // generate a failure (a script would retry, making another value).
+    match reply.metadata {
+        Some(m) => writeln!(
+            out,
+            "{} version {} generated (profile {profile})",
+            m.path, m.version
+        )
+        .ok(),
+        None => writeln!(out, "{path} generated (profile {profile})").ok(),
+    };
+    Ok(())
+}
+
 async fn delete(mut client: SecretsClient, path: &str, out: &mut impl Write) -> anyhow::Result<()> {
     answer(
         client
@@ -1754,6 +1804,11 @@ pub fn hint(command: &Command, error: &anyhow::Error) -> Option<&'static str> {
             "a secret's path starts with its namespace, and that one doesn't exist (`ferritor \
              namespace list`). Check the path, or create it: `ferritor namespace create <name>` \
              (needs the namespace permission).",
+        ),
+        _ if reason == Some(reason::UNKNOWN_PROFILE) => Some(
+            "the server you reached has no generate profile of that name: profiles are each \
+             server's config ([[generate_profile]] in ferritor.toml; `default` is built in). Name \
+             another, or add it to every server's config and reload them (SIGHUP).",
         ),
         _ if reason == Some(reason::NAMESPACE_NOT_EMPTY) => Some(
             "nothing was deleted: a namespace goes only once it has no secret at all, deleted \

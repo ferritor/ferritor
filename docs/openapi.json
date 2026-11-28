@@ -20,6 +20,59 @@
     }
   ],
   "paths": {
+    "/v1/generate/{path}": {
+      "post": {
+        "tags": [
+          "secrets"
+        ],
+        "summary": "Generate a secret's value (`write`).",
+        "description": "Stores a new version whose value the server made up from a generate\nprofile, as a put would store it (`label` too with `labels`). Never returns the value: read it. 409 `unknown_profile` if\nthis server has no such profile.",
+        "operationId": "generateSecret",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "description": "A canonical secret path, slashes included (`billing/db`); its first segment is its namespace.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The version generated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Metadata"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error: see `error.code`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/health": {
       "get": {
         "tags": [
@@ -1013,6 +1066,7 @@
           "version_mismatch",
           "live_version",
           "no_namespace",
+          "unknown_profile",
           "busy",
           "aborted",
           "misdirected_request",
@@ -1042,6 +1096,39 @@
             "description": "For people; may change."
           }
         }
+      },
+      "GenerateBody": {
+        "type": "object",
+        "description": "How to generate a secret's value: a put's options, but no value.",
+        "properties": {
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Check-and-set: store only if the latest version is still this one;\n0: only if the secret doesn't exist yet.",
+            "minimum": 0
+          },
+          "labels": {
+            "type": "object",
+            "description": "Labels to set with it (needs the `label` action too): plain\nmetadata, not encrypted.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A generate profile of the server's config; absent or empty: `default`."
+          }
+        },
+        "additionalProperties": false
       },
       "Health": {
         "type": "object",

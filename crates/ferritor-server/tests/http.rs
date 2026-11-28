@@ -1911,13 +1911,14 @@ async fn the_largest_apply_fits_through_both_apis() {
 /// keep in step with both (the test below holds the description to this
 /// list, and this list to the running server; nothing catches a route the
 /// router serves but neither names).
-const ROUTES: [(&str, &str); 15] = [
+const ROUTES: [(&str, &str); 16] = [
     ("GET", "/v1/health"),
     ("GET", "/v1/secrets"),
     ("GET", "/v1/secrets/{path}"),
     ("PUT", "/v1/secrets/{path}"),
     ("DELETE", "/v1/secrets/{path}"),
     ("POST", "/v1/restore/{path}"),
+    ("POST", "/v1/generate/{path}"),
     ("GET", "/v1/versions/{path}"),
     ("GET", "/v1/metadata/{path}"),
     ("PATCH", "/v1/metadata/{path}"),
@@ -2502,4 +2503,64 @@ impl Clock for Frozen {
     fn now(&self) -> Instant {
         self.0
     }
+}
+
+/// A generate over the JSON API: a new version, never the value; an empty
+/// profile is `default`, as over gRPC; create-only refuses an existing
+/// path; a profile the server lacks is 409 `unknown_profile`.
+#[tokio::test]
+async fn generate_over_the_json_api() {
+    let env = Env::plaintext().await.unwrap();
+    let c = Client::Plain;
+    let addr = env.addr;
+    let (status, _, made) = c
+        .send(
+            addr,
+            Method::POST,
+            "/v1/generate/app/key",
+            Some(json!({"profile": "", "expected_version": 0})),
+        )
+        .await
+        .unwrap();
+    assert_eq!((status, &made["version"]), (StatusCode::OK, &json!(1)));
+    assert!(made.get("value").is_none(), "{made}");
+    let (status, _, read) = c
+        .send(addr, Method::GET, "/v1/secrets/app/key", None)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    let value = read["value"].as_str().unwrap();
+    assert_eq!(
+        STANDARD.decode(value).unwrap().len(),
+        32,
+        "the default profile"
+    );
+
+    let again = c
+        .send(
+            addr,
+            Method::POST,
+            "/v1/generate/app/key",
+            Some(json!({"expected_version": 0})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        error(&again),
+        (StatusCode::CONFLICT, "version_mismatch".to_owned())
+    );
+    let unknown = c
+        .send(
+            addr,
+            Method::POST,
+            "/v1/generate/app/other",
+            Some(json!({"profile": "gone"})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        error(&unknown),
+        (StatusCode::CONFLICT, "unknown_profile".to_owned())
+    );
+    env.destroy().await.unwrap();
 }

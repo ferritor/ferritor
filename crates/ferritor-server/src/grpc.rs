@@ -1837,6 +1837,15 @@ impl From<SecretsError> for Status {
             | E::InvalidLabels(_)
             | E::TooManyLabels { .. }
             | E::WatchSize { .. } => Status::invalid_argument(error_chain(&e)),
+            E::UnknownProfile(ref profile) => Status::with_error_details(
+                Code::FailedPrecondition,
+                error_chain(&e),
+                ErrorDetails::with_error_info(
+                    reason::UNKNOWN_PROFILE,
+                    messages::DOMAIN,
+                    HashMap::from([("profile".to_owned(), profile.clone())]),
+                ),
+            ),
             E::Watch(
                 full @ (crate::watch::SubscribeError::Full
                 | crate::watch::SubscribeError::IdentityFull(_)),
@@ -1912,7 +1921,7 @@ impl From<SecretsError> for Status {
                     ),
                 )
             }
-            E::Store(_) | E::Crypto(_) => {
+            E::Store(_) | E::Crypto(_) | E::Generate(_) => {
                 tracing::error!(error = %error_chain(&e), "internal error");
                 Status::internal("internal error")
             }
@@ -1994,6 +2003,23 @@ impl SecretsService for Secrets {
             .put_labeled(&caller, &req.path, &value, req.expected_version, &labels)
             .await?;
         Ok(Response::new(pb::PutSecretResponse {
+            metadata: Some(secret_metadata(metadata)),
+        }))
+    }
+
+    async fn generate_secret(
+        &self,
+        request: Request<pb::GenerateSecretRequest>,
+    ) -> Result<Response<pb::GenerateSecretResponse>, Status> {
+        let caller = caller(self.secrets.gate(), &request, Action::Write)?;
+        let req = request.into_inner();
+        let profile = (!req.profile.is_empty()).then_some(req.profile.as_str());
+        let labels: Labels = req.labels.into_iter().collect();
+        let metadata = self
+            .secrets
+            .generate(&caller, &req.path, profile, req.expected_version, &labels)
+            .await?;
+        Ok(Response::new(pb::GenerateSecretResponse {
             metadata: Some(secret_metadata(metadata)),
         }))
     }
