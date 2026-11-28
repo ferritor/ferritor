@@ -510,6 +510,13 @@ fn to_db(field: &'static str, value: u32) -> Result<i32> {
     })
 }
 
+/// A version as the column holds it, or `None` if it can't (above `i32`'s
+/// range): no such version was ever stored, so a lookup of it finds
+/// nothing, never an error.
+fn stored_version(version: u32) -> Option<i32> {
+    i32::try_from(version).ok()
+}
+
 fn u32_from_db(field: &'static str, value: i32) -> Result<u32> {
     u32::try_from(value).map_err(|_| DatastoreError::OutOfRange {
         field,
@@ -702,7 +709,13 @@ impl Datastore {
         version: Option<u32>,
     ) -> Result<Option<StoredSecret>> {
         bounded(self.timeout, async move {
-            let version = version.map(|v| to_db("version", v)).transpose()?;
+            let version = match version {
+                Some(v) => match stored_version(v) {
+                    Some(v) => Some(v),
+                    None => return Ok(None),
+                },
+                None => None,
+            };
             let row = sqlx::query!(
                 "SELECT v.version, v.ciphertext, v.wrapped_dek, v.kek_version, v.created_at
                  FROM paths p JOIN secret_versions v ON v.path_id = p.id
@@ -823,7 +836,13 @@ impl Datastore {
     ) -> Result<PendingDelete> {
         bounded(self.timeout, async move {
             let mut tx = self.lock_path(path).await?;
-            let version = to_db("version", version)?;
+            let Some(version) = stored_version(version) else {
+                return Ok(PendingDelete {
+                    tx,
+                    count: 0,
+                    timeout: self.timeout,
+                });
+            };
             let deleted = sqlx::query!(
                 "UPDATE secret_versions SET deleted_at = now()
                  WHERE path_id = (SELECT id FROM paths WHERE path = $1)
@@ -966,14 +985,16 @@ impl Datastore {
             let mut tx = self.lock_path(path).await?;
             // Two queries, not an optional condition (see `list`).
             let mut live = None;
-            let row: Option<(i32, OffsetDateTime)> = match version {
-                Some(version) => sqlx::query!(
+            let row: Option<(i32, OffsetDateTime)> = match version.map(stored_version) {
+                // Above what the column holds: never stored.
+                Some(None) => None,
+                Some(Some(version)) => sqlx::query!(
                     "UPDATE secret_versions SET deleted_at = NULL
                      WHERE path_id = (SELECT id FROM paths WHERE path = $1)
                        AND version = $2 AND deleted_at IS NOT NULL
                      RETURNING version, created_at",
                     path.as_str(),
-                    to_db("version", version)?,
+                    version,
                 )
                 .fetch_optional(&mut *tx)
                 .await?

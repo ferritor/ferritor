@@ -433,7 +433,8 @@ async fn a_deleted_secret_can_be_restored() {
             ("succeeded".to_owned(), json!({"version": 2})),
             ("failed".to_owned(), serde_json::Value::Null),
             ("failed".to_owned(), serde_json::Value::Null),
-            ("failed".to_owned(), serde_json::Value::Null),
+            // A restore of a version names it, failed or not.
+            ("failed".to_owned(), json!({"version": 2})),
             ("failed".to_owned(), serde_json::Value::Null),
         ]
     );
@@ -2310,6 +2311,21 @@ async fn one_version_can_be_deleted() {
         .unwrap();
     assert_eq!(page.secrets[0].version, 2, "the listing follows");
 
+    // Above what the column holds: never stored, so not found, never an
+    // internal error (for a read and a restore too).
+    let huge = u32::MAX;
+    assert!(matches!(
+        env.secrets.delete_version(&ANON, "app/db", huge).await,
+        Err(SecretsError::VersionNotFound { .. })
+    ));
+    assert!(matches!(
+        env.secrets.get(&ANON, "app/db", Some(huge)).await,
+        Err(SecretsError::VersionNotFound { .. })
+    ));
+    assert!(matches!(
+        env.secrets.restore(&ANON, "app/db", Some(huge)).await,
+        Err(SecretsError::NothingToRestore { .. })
+    ));
     for gone in [1, 3, 9] {
         assert!(matches!(
             env.secrets.delete_version(&ANON, "app/db", gone).await,
@@ -2384,6 +2400,25 @@ async fn one_version_can_be_deleted() {
         deletes,
         [1, 3, 2, 3, 3, 1, 2, 3]
             .map(|version| json!({"deleted": 1, "version": version}))
+            .to_vec()
+    );
+    // A failed one names its version too.
+    let failed: Vec<serde_json::Value> = env
+        .audit
+        .lines()
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|entry: &serde_json::Value| {
+            entry["event"] == "outcome"
+                && entry["operation"] == "delete"
+                && entry["result"] == "failed"
+        })
+        .map(|entry| entry["details"].clone())
+        .collect();
+    assert_eq!(
+        failed,
+        [u32::MAX, 1, 3, 9]
+            .map(|version| json!({"version": version}))
             .to_vec()
     );
     env.destroy().await.unwrap();

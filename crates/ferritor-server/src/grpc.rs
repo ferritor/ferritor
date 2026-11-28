@@ -277,9 +277,10 @@ impl System {
         let outcome = match result {
             Ok(done) => Outcome::Succeeded(details(done)),
             // The keys database's write may have landed.
-            Err(e @ NamespaceError::Keys(SealError::KeysTimeout)) => {
-                Outcome::Unknown(error_chain(e))
-            }
+            Err(e @ NamespaceError::Keys(SealError::KeysTimeout)) => Outcome::Unknown {
+                error: error_chain(e),
+                details: None,
+            },
             Err(e) => Outcome::Failed {
                 error: error_chain(e),
                 details: Some(json!({"namespace": name})),
@@ -301,8 +302,14 @@ impl System {
 fn failed(e: &SealError, writes: bool) -> Outcome {
     let error = error_chain(e);
     match e {
-        SealError::RekeyOutcomeUnknown => Outcome::Unknown(error),
-        SealError::KeysTimeout if writes => Outcome::Unknown(error),
+        SealError::RekeyOutcomeUnknown => Outcome::Unknown {
+            error,
+            details: None,
+        },
+        SealError::KeysTimeout if writes => Outcome::Unknown {
+            error,
+            details: None,
+        },
         // Refused, but the server just switched to the new root key.
         SealError::RekeyCommitted { generation } => Outcome::Failed {
             error,
@@ -943,7 +950,10 @@ impl SystemService for System {
                 "was_paused": was_paused,
             })),
             // One statement: it may have committed before the answer was lost.
-            Err(e) => Outcome::Unknown(error_chain(e)),
+            Err(e) => Outcome::Unknown {
+                error: error_chain(e),
+                details: None,
+            },
         };
         self.gate.outcome(
             &caller,
@@ -1247,7 +1257,10 @@ impl SystemService for System {
             })),
             // Batches commit one by one: a pass that stopped partway may
             // have moved some rows (harmless; the next pass carries on).
-            Err(e) => Outcome::Unknown(error_chain(e)),
+            Err(e) => Outcome::Unknown {
+                error: error_chain(e),
+                details: None,
+            },
         };
         self.gate
             .outcome(&caller, Action::Rewrap, Target::System, "rewrap", outcome);
@@ -1282,7 +1295,10 @@ impl SystemService for System {
             })),
             // Batches commit one by one: a pass that stopped partway may
             // have removed some rows.
-            Err(e) => Outcome::Unknown(error_chain(e)),
+            Err(e) => Outcome::Unknown {
+                error: error_chain(e),
+                details: None,
+            },
         };
         self.gate
             .outcome(&caller, Action::Purge, Target::System, "purge", outcome);
@@ -1314,7 +1330,10 @@ impl SystemService for System {
                 "kek_floor": done.kek_floor,
             })),
             // The keys database's write may have landed: retrying tells.
-            Err(e @ DestroyError::Keys(SealError::KeysTimeout)) => Outcome::Unknown(error_chain(e)),
+            Err(e @ DestroyError::Keys(SealError::KeysTimeout)) => Outcome::Unknown {
+                error: error_chain(e),
+                details: None,
+            },
             Err(e) => Outcome::Failed {
                 error: error_chain(e),
                 details: Some(json!({"namespace": namespace.as_str(), "version": version})),
@@ -2425,7 +2444,7 @@ mod tests {
         let kind = |e: SealError, writes: bool| match failed(&e, writes) {
             Outcome::Succeeded(_) => "succeeded",
             Outcome::Failed { .. } => "failed",
-            Outcome::Unknown(_) => "unknown",
+            Outcome::Unknown { .. } => "unknown",
         };
         assert_eq!(kind(SealError::RekeyOutcomeUnknown, true), "unknown");
         // A timed-out write may have been stored; a read changed nothing.

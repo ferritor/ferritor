@@ -158,7 +158,9 @@ pipelines (metrics, application logs) needn't keep them.
   operation, then `succeeded` with details (versions stored or trimmed,
   generations, phases, counts), `failed`, or `unknown` when it may have taken
   effect anyway (a write the database didn't confirm in time, a rewrap cut
-  short). A failed call that still changed something says so in its details.
+  short). A failed call that still changed something says so in its details,
+  and one aimed at a version (a restore, a one-version delete) names it,
+  failed or unknown alike.
   A label change (`"label"`, or `labels_set` on a put) lists the keys set
   and removed, never their values. A generate (`"generate"`, the `write`
   action) gives the version and the profile, never the value. A call runs to its end, and records its

@@ -617,8 +617,12 @@ pub enum Outcome {
         error: String,
         details: Option<serde_json::Value>,
     },
-    /// It may or may not have taken effect.
-    Unknown(String),
+    /// It may or may not have taken effect: the error, and what it was
+    /// meant to do if the operation says (a version), so the entry names it.
+    Unknown {
+        error: String,
+        details: Option<serde_json::Value>,
+    },
 }
 
 /// A flush barrier for shutdown: [`Drain::wait`] queues the chain's end and
@@ -1575,7 +1579,7 @@ impl Gate {
         let (result, details, error) = match outcome {
             Outcome::Succeeded(details) => ("succeeded", Some(details), None),
             Outcome::Failed { error, details } => ("failed", details, Some(error)),
-            Outcome::Unknown(error) => ("unknown", None, Some(error)),
+            Outcome::Unknown { error, details } => ("unknown", details, Some(error)),
         };
         if let Target::System = target {
             metrics().admin_outcome(operation, result);
@@ -2373,7 +2377,10 @@ mod tests {
             Action::Seal,
             Target::System,
             "seal",
-            Outcome::Unknown("x".to_owned()),
+            Outcome::Unknown {
+                error: "x".to_owned(),
+                details: None,
+            },
         );
         // Not yet ended: open, as a running server's chain is.
         assert_eq!(verified(&audit).chains[0].state, ChainState::Open);
@@ -2832,7 +2839,10 @@ mod tests {
             Action::Write,
             Target::System,
             "put",
-            Outcome::Unknown("x".to_owned()),
+            Outcome::Unknown {
+                error: "x".to_owned(),
+                details: None,
+            },
         );
         assert!(!drain.clone().wait(Duration::from_secs(5)).await);
         collector

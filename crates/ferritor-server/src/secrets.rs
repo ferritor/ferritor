@@ -271,14 +271,21 @@ impl Failure {
     }
 
     fn outcome(&self) -> Outcome {
+        self.outcome_details(None)
+    }
+
+    /// [`Failure::outcome`] naming what the write was meant to do (a
+    /// version), so a failed or unconfirmed entry says which.
+    fn outcome_with(&self, details: serde_json::Value) -> Outcome {
+        self.outcome_details(Some(details))
+    }
+
+    fn outcome_details(&self, details: Option<serde_json::Value>) -> Outcome {
         let error = crate::error_chain(&self.error);
         if self.at_commit {
-            Outcome::Unknown(error)
+            Outcome::Unknown { error, details }
         } else {
-            Outcome::Failed {
-                error,
-                details: None,
-            }
+            Outcome::Failed { error, details }
         }
     }
 }
@@ -960,7 +967,10 @@ impl Secrets {
         let result = self.restore_version(&path, version).await;
         let outcome = match &result {
             Ok(restored) => Outcome::Succeeded(json!({"version": restored.version})),
-            Err(failure) => failure.outcome(),
+            Err(failure) => match version {
+                Some(version) => failure.outcome_with(json!({"version": version})),
+                None => failure.outcome(),
+            },
         };
         self.gate.outcome(
             caller,
@@ -1063,7 +1073,7 @@ impl Secrets {
         .await;
         let outcome = match &result {
             Ok(()) => Outcome::Succeeded(json!({"deleted": 1, "version": version})),
-            Err(failure) => failure.outcome(),
+            Err(failure) => failure.outcome_with(json!({"version": version})),
         };
         self.gate.outcome(
             caller,
@@ -1505,7 +1515,7 @@ mod tests {
     fn only_a_failed_commit_is_an_unknown_outcome() {
         assert!(matches!(
             Failure::at_commit(DatastoreError::Timeout).outcome(),
-            Outcome::Unknown(_)
+            Outcome::Unknown { .. }
         ));
         assert!(matches!(
             Failure::from(DatastoreError::Timeout).outcome(),
