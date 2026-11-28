@@ -283,10 +283,17 @@ pub enum Relation {
     Below,
 }
 
-/// A review's grants at a time, by default and at most: each a short row,
-/// so a page stays well within a client's message limit.
+/// A review's grants at a time, by default and at most. A grant is at most
+/// about 1.6 KB encoded (an identity, a prefix and a rule name of up to 512
+/// bytes each), so the largest page stays under the 4 MiB a gRPC client
+/// accepts by default (`grpc`'s `a_full_review_page_fits_a_client`).
 pub const DEFAULT_REVIEW_PAGE: u32 = 1000;
-pub const MAX_REVIEW_PAGE: u32 = 5000;
+pub const MAX_REVIEW_PAGE: u32 = 2000;
+
+/// How often a review reads the config rules and the stored view again
+/// when a reload lands between them, before answering
+/// [`PoliciesError::ReviewChanged`].
+const STATE_ATTEMPTS: u32 = 3;
 
 /// What an access review keeps ([`Policies::review`]); neither: every
 /// grant.
@@ -1007,14 +1014,29 @@ impl Policies {
             n => n.min(MAX_REVIEW_PAGE),
         };
         let size = usize::try_from(size).unwrap_or(usize::MAX);
-        let config = self.gate.config_policy();
+        // The config rules and the stored view are swapped under locks of
+        // their own: read the config rules again after the view, and only a
+        // pair the config rules were in force for both reads of is one
+        // state (they're swapped whole, so the same `Arc` is the same rules).
+        let mut attempt = 1;
+        let (config, view) = loop {
+            let config = self.gate.config_policy();
+            let view = self.seal.policy_view();
+            if Arc::ptr_eq(&config, &self.gate.config_policy()) {
+                break (config, view);
+            }
+            if attempt == STATE_ATTEMPTS {
+                return Err(PoliciesError::ReviewChanged);
+            }
+            attempt += 1;
+        };
         let config_policy = config.as_policy();
         let config_fingerprint = match config_policy.map(crate::policy::Policy::info) {
             Some(info) => info.map_err(PoliciesError::Fingerprint)?.fingerprint,
             None => String::new(),
         };
         let mut entries = config_entries_of(config_policy);
-        let stored = match self.seal.policy_view() {
+        let stored = match view {
             PolicyView::Loaded(set) => {
                 entries.extend(set.policies.iter().map(stored_entry));
                 StoredState::Loaded {

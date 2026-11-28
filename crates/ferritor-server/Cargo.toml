@@ -78,6 +78,8 @@ rustix.workspace = true
 mimalloc.workspace = true
 
 [dev-dependencies]
+# The review page size test measures an encoded message.
+prost.workspace = true
 proptest.workspace = true
 # A fake collector receiving OTLP in the metrics test.
 opentelemetry-proto.workspace = true

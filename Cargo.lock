@@ -1567,6 +1567,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "proptest",
+ "prost",
  "rcgen",
  "reqwest",
  "ring",

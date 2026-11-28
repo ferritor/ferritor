@@ -425,7 +425,7 @@ couldn't answer.
 Who may do what: every grant of the config rules and (when in force) the
 stored policies, one per identity, action, scope and rule, in rule-name
 order ([access review](/guides/policy#access-review)). Both filters
-optional; `page_size` 0 means 1000, capped at 5000.
+optional; `page_size` 0 means 1000, capped at 2000.
 
 ```json
 {"grants": [{"identity": "apps/billing", "action": "read", "scope": "prefix",

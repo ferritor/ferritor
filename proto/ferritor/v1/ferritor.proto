@@ -1024,7 +1024,8 @@ message ReviewAccessRequest {
   // Only the grants on this secret or prefix, or below it; empty: every
   // grant.
   string path = 2;
-  // Grants per page: 0 means 1000, anything above 5000 is capped.
+  // Grants per page: 0 means 1000, anything above 2000 is capped (so a
+  // page fits a client's default 4 MiB message limit).
   uint32 page_size = 3;
   // The previous page's next_page_token; empty for the first. A token is
   // bound to the state its first page was computed from: if the stored

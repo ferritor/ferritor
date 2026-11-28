@@ -1595,7 +1595,7 @@ struct ReviewQuery {
     identity: Option<String>,
     /// Only the grants on this secret or prefix, or below it.
     path: Option<String>,
-    /// 0 or absent: 1000; capped at 5000.
+    /// 0 or absent: 1000; capped at 2000.
     #[serde(default)]
     page_size: u32,
     /// The previous page's `next_page_token`.
@@ -1920,6 +1920,12 @@ mod tests {
             policies::MAX_PAGE_SIZE
         );
         says(&query("/v1/policies", "page_size"), &policy_pages);
+        let review_pages = format!(
+            "0 or absent: {}; capped at {}",
+            policies::DEFAULT_REVIEW_PAGE,
+            policies::MAX_REVIEW_PAGE
+        );
+        says(&query("/v1/access-review", "page_size"), &review_pages);
 
         // A listing's age, as `Secrets::list` checks it.
         let age = query("/v1/secrets", "older_than_days");

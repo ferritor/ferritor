@@ -2494,6 +2494,34 @@ impl PolicyService for Policies {
 mod tests {
     use super::*;
 
+    /// The largest review page, every string as long as it can be (512-byte
+    /// identities, prefixes and rule names, the longest action, a full page
+    /// token), still fits the 4 MiB a tonic client accepts by default.
+    #[test]
+    fn a_full_review_page_fits_a_client() {
+        use prost::Message as _;
+        let long = "a".repeat(512);
+        let grant = pb::AccessGrant {
+            identity: long.clone(),
+            action: "destroy_kek".to_owned(),
+            scope: pb::AccessScope::Prefix.into(),
+            prefix: long.clone(),
+            granted_by: format!("config:{long}"),
+            source: pb::PolicySource::Config.into(),
+            relation: pb::AccessRelation::Below.into(),
+        };
+        let page = pb::ReviewAccessResponse {
+            grants: vec![grant; policies::MAX_REVIEW_PAGE as usize],
+            enforced: true,
+            config_fingerprint: "f".repeat(64),
+            stored: pb::StoredPolicyState::Loaded.into(),
+            revision: u64::MAX,
+            next_page_token: "0".repeat(4 * 1024),
+        };
+        let limit = 4 * 1024 * 1024;
+        assert!(page.encoded_len() < limit, "{} bytes", page.encoded_len());
+    }
+
     /// `unknown` only where the call may have taken effect anyway.
     #[test]
     fn a_failure_is_unknown_only_if_it_may_have_landed() {

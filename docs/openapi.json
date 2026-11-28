@@ -50,7 +50,7 @@
           {
             "name": "page_size",
             "in": "query",
-            "description": "0 or absent: 1000; capped at 5000.",
+            "description": "0 or absent: 1000; capped at 2000.",
             "required": false,
             "schema": {
               "type": "integer",
