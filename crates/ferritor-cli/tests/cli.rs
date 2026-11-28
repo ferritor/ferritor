@@ -1828,8 +1828,26 @@ async fn namespaces_from_the_cli() {
     server.stop().await.unwrap();
 }
 
-/// A file in a fresh directory, for `ferritor policy apply -f`.
-fn policy_file(name: &str, contents: &str) -> TestResult<PathBuf> {
+/// A file in a fresh directory, for `ferritor policy apply -f`: the
+/// directory is removed when this is dropped, failing test or not.
+struct PolicyFile {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl PolicyFile {
+    fn arg(&self) -> String {
+        self.path.display().to_string()
+    }
+}
+
+impl Drop for PolicyFile {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.dir).ok();
+    }
+}
+
+fn policy_file(name: &str, contents: &str) -> TestResult<PolicyFile> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
         "ferritor-cli-policy-{}-{}",
@@ -1839,7 +1857,7 @@ fn policy_file(name: &str, contents: &str) -> TestResult<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(name);
     std::fs::write(&path, contents)?;
-    Ok(path)
+    Ok(PolicyFile { dir, path })
 }
 
 /// `ferritor policy`: apply from a TOML file and from JSON on stdin (a dry run
@@ -1858,7 +1876,8 @@ async fn stored_policies_from_the_cli() {
     }
     server.create_namespaces().await.unwrap();
 
-    let toml = policy_file(
+    // Kept until the test ends: dropping it removes the file.
+    let toml_file = policy_file(
         "policies.toml",
         r#"
 [[policy]]
@@ -1870,7 +1889,7 @@ description = "billing app, read only"
 "#,
     )
     .unwrap();
-    let toml = toml.display().to_string();
+    let toml = toml_file.arg();
     let dry = server
         .ferritor(&["policy", "apply", "-f", &toml, "--dry-run"], &[])
         .await
@@ -1943,16 +1962,7 @@ description = "billing app, read only"
     ] {
         let file = policy_file("bad.toml", contents).unwrap();
         let refused = server
-            .ferritor(
-                &[
-                    "policy",
-                    "apply",
-                    "-f",
-                    &file.display().to_string(),
-                    "--prune",
-                ],
-                &[],
-            )
+            .ferritor(&["policy", "apply", "-f", &file.arg(), "--prune"], &[])
             .await
             .unwrap();
         assert!(!refused.success);
