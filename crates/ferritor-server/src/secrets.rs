@@ -271,14 +271,21 @@ impl Failure {
     }
 
     fn outcome(&self) -> Outcome {
+        self.outcome_details(None)
+    }
+
+    /// [`Failure::outcome`] naming what the write was meant to do (a
+    /// version), so a failed or unconfirmed entry says which.
+    fn outcome_with(&self, details: serde_json::Value) -> Outcome {
+        self.outcome_details(Some(details))
+    }
+
+    fn outcome_details(&self, details: Option<serde_json::Value>) -> Outcome {
         let error = crate::error_chain(&self.error);
         if self.at_commit {
-            Outcome::Unknown(error)
+            Outcome::Unknown { error, details }
         } else {
-            Outcome::Failed {
-                error,
-                details: None,
-            }
+            Outcome::Failed { error, details }
         }
     }
 }
@@ -960,7 +967,10 @@ impl Secrets {
         let result = self.restore_version(&path, version).await;
         let outcome = match &result {
             Ok(restored) => Outcome::Succeeded(json!({"version": restored.version})),
-            Err(failure) => failure.outcome(),
+            Err(failure) => match version {
+                Some(version) => failure.outcome_with(json!({"version": version})),
+                None => failure.outcome(),
+            },
         };
         self.gate.outcome(
             caller,
@@ -1021,6 +1031,58 @@ impl Secrets {
             outcome,
         );
         result.map(drop).map_err(|f| f.error)
+    }
+
+    /// Deletes one live version of `path`, the others staying as they are:
+    /// a soft delete like [`Secrets::delete`]'s (restorable within the
+    /// retention, then purged; still in any backup until then). Deleting
+    /// the latest makes the newest live one left the latest. The `delete`
+    /// action on the path; audited as `"delete"` with the version.
+    /// [`SecretsError::VersionNotFound`] if that version isn't live.
+    pub async fn delete_version(&self, caller: &Caller, path: &str, version: u32) -> Result<()> {
+        observed(
+            "delete",
+            self.delete_version_unobserved(caller, path, version),
+        )
+        .await
+    }
+
+    async fn delete_version_unobserved(
+        &self,
+        caller: &Caller,
+        path: &str,
+        version: u32,
+    ) -> Result<()> {
+        let path = Self::path(path)?;
+        self.authorize(caller, Action::Delete, Target::Path(&path))
+            .await?;
+        let result = async {
+            let epoch = self.unsealed_epoch()?;
+            let pending = self.store.begin_delete_version(&path, version).await?;
+            // Before "not found", as a whole delete: a seal wins.
+            self.unsealed_since(epoch)?;
+            if pending.count() == 0 {
+                return Err(SecretsError::VersionNotFound {
+                    path: path.clone(),
+                    version,
+                }
+                .into());
+            }
+            pending.commit().await.map_err(Failure::at_commit)
+        }
+        .await;
+        let outcome = match &result {
+            Ok(()) => Outcome::Succeeded(json!({"deleted": 1, "version": version})),
+            Err(failure) => failure.outcome_with(json!({"version": version})),
+        };
+        self.gate.outcome(
+            caller,
+            Action::Delete,
+            Target::Path(&path),
+            "delete",
+            outcome,
+        );
+        result.map_err(|f: Failure| f.error)
     }
 
     /// The delete itself, once authorized: how many versions it marked.
@@ -1453,7 +1515,7 @@ mod tests {
     fn only_a_failed_commit_is_an_unknown_outcome() {
         assert!(matches!(
             Failure::at_commit(DatastoreError::Timeout).outcome(),
-            Outcome::Unknown(_)
+            Outcome::Unknown { .. }
         ));
         assert!(matches!(
             Failure::from(DatastoreError::Timeout).outcome(),

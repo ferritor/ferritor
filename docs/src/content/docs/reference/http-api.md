@@ -259,6 +259,13 @@ Stores a new version.
 
 Deletes every version (restorable until purged). `204`, no body.
 
+### `DELETE /v1/versions/{path}?version=N` (`delete`)
+
+Deletes one version, the others staying: deleting the latest makes the
+newest live one left the latest; `404 not_found` unless it's live.
+Restorable until purged. `204`, no body. A route of its own: a server older
+than it answers `405` rather than deleting every version.
+
 ### `POST /v1/restore/{path}` (`write`)
 
 Brings a deleted version back: `{}` undoes a delete (the newest deleted

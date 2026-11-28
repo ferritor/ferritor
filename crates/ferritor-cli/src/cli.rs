@@ -223,8 +223,17 @@ pub enum Command {
         #[arg(long = "label", value_name = "KEY=VALUE", value_parser = parse_label)]
         labels: Vec<(String, String)>,
     },
-    /// Delete every version of a secret.
-    Delete { path: String },
+    /// Delete every version of a secret, or with --version one of them.
+    /// Restorable with `ferritor restore` until the server purges it (after
+    /// its deletion retention); until then it's also in any backup.
+    Delete {
+        path: String,
+        /// Only this version (from 1; see `ferritor versions`), the others
+        /// staying. Deleting the latest makes the newest live one left the
+        /// latest.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        version: Option<u32>,
+    },
     /// Bring a deleted version back (undo a delete, or a trim under the
     /// server's max_versions), within the server's deletion retention.
     /// Without --version it undoes a delete: it restores the newest deleted

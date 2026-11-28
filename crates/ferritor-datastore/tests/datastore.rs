@@ -1704,6 +1704,8 @@ enum Op {
     /// A put through a store keeping 2 live versions: it trims.
     PutTrimming(usize),
     Delete(usize),
+    /// One version by number (some never stored, or not live).
+    DeleteVersion(usize, u32),
     /// A version by number (some never stored), or the newest deleted.
     Restore(usize, Option<u32>),
     /// Every deleted version, of every case so far.
@@ -1717,6 +1719,9 @@ fn op() -> impl proptest::strategy::Strategy<Value = Op> {
         3 => path.clone().prop_map(Op::Put),
         2 => path.clone().prop_map(Op::PutTrimming),
         2 => path.clone().prop_map(Op::Delete),
+        // Low numbers again: deleting the current one, an older one, and
+        // one already deleted are the cases.
+        4 => (path.clone(), 1..5_u32).prop_map(|(p, v)| Op::DeleteVersion(p, v)),
         // Low numbers, which a short sequence has stored: restoring an
         // older and a newer deleted version, in either order, is the case
         // that tests a restore's current version.
@@ -1788,6 +1793,17 @@ async fn run_against_model(db: &TestDb, ns: &str, ops: &[Op]) -> TestResult<()> 
                 db.store.begin_delete(&paths[i]).await?.commit().await?;
                 model[i].stored.values_mut().for_each(|live| *live = false);
             }
+            Op::DeleteVersion(i, version) => {
+                let pending = db.store.begin_delete_version(&paths[i], version).await?;
+                let deleted = pending.count();
+                pending.commit().await?;
+                let m = &mut model[i];
+                let live = m.stored.get(&version).copied().unwrap_or(false);
+                if deleted != u64::from(live) {
+                    return Err(format!("{op:?}: deleted {deleted}, expected {live}").into());
+                }
+                m.stored.entry(version).and_modify(|l| *l = false);
+            }
             Op::Restore(i, version) => {
                 let pending = db.store.begin_restore(&paths[i], version).await?;
                 let restored = pending.restored().map(|m| m.version);
@@ -1853,7 +1869,8 @@ async fn run_against_model(db: &TestDb, ns: &str, ops: &[Op]) -> TestResult<()> 
     Ok(())
 }
 
-/// Random sequences of puts (trimming or not), deletes, restores and purges
+/// Random sequences of puts (trimming or not), deletes (whole or one
+/// version), restores and purges
 /// keep the store where a model of it says: version numbers, each path's
 /// current version (`paths.current_version`, checked against the versions
 /// themselves) and version count, and the listing. One database for every
@@ -2443,5 +2460,33 @@ async fn a_pause_waits_for_the_purge_batch_in_flight_and_stops_the_next() {
     assert_eq!(rows(&db, "app/gone").await.unwrap(), 1);
     db.store.set_task_paused(Task::Purge, false).await.unwrap();
     assert_eq!(db.store.purge_deleted(Duration::ZERO, 10).await.unwrap(), 1);
+    db.destroy().await.unwrap();
+}
+
+/// Two deletes of a path's last live versions at once take turns on its
+/// lock, so the second sees the first's: nothing is left current, never a
+/// deleted version (each alone, unserialized, would make the other's the
+/// newest live one).
+#[tokio::test]
+async fn concurrent_version_deletes_leave_nothing_current() {
+    let db = TestDb::new().await.unwrap();
+    for round in 0..20 {
+        let path = format!("app/race{round}");
+        db.put(&path).await.unwrap();
+        db.put(&path).await.unwrap();
+        let path = SecretPath::parse(&path).unwrap();
+        let delete = |version| {
+            let (store, path) = (db.store.clone(), path.clone());
+            tokio::spawn(async move {
+                let pending = store.begin_delete_version(&path, version).await?;
+                let count = pending.count();
+                pending.commit().await?;
+                Ok::<_, DatastoreError>(count)
+            })
+        };
+        let (one, two) = tokio::join!(delete(1), delete(2));
+        assert_eq!((one.unwrap().unwrap(), two.unwrap().unwrap()), (1, 1));
+        assert_eq!(current(&db, &path).await.unwrap(), None, "{path}");
+    }
     db.destroy().await.unwrap();
 }

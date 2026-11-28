@@ -911,7 +911,10 @@ fn stored_entry(policy: &Verified) -> Entry {
 fn failed(e: &PoliciesError, details: serde_json::Value) -> Outcome {
     let error = crate::error_chain(e);
     match e {
-        PoliciesError::KeysTimeout => Outcome::Unknown(error),
+        PoliciesError::KeysTimeout => Outcome::Unknown {
+            error,
+            details: None,
+        },
         _ => Outcome::Failed {
             error,
             details: Some(details),

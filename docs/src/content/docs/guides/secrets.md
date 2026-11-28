@@ -46,7 +46,12 @@ have that number.
   same transaction, which then go the way of any deleted version. It applies
   to existing secrets on their next put, and never touches the latest
   version. Each put's audit entry says how many it trimmed.
-- **Delete** is soft: every version is marked deleted and hidden.
+- **Delete** is soft: every version is marked deleted and hidden. With a
+  version (`ferritor delete app/db --version 2`), only that one, the others
+  staying: for a value that leaked or was wrong. Deleting the latest makes
+  the newest live one left the latest. A deleted version can be restored
+  until it's purged, and until then it's still in any backup of the data
+  database: deleting stops it being read, it doesn't destroy it.
 - **Restore** makes a deleted version live again, within the retention:
   - with a version: that one, alongside any live version (an older or a
     trimmed one);
@@ -214,6 +219,7 @@ ferritor get app/db --version 2
 ferritor list app                                  # the latest version of everything below app/
 ferritor versions app/db                           # the history
 ferritor delete app/db
+ferritor delete app/db --version 2                 # only that version
 ferritor restore app/db                            # undo a delete
 ferritor restore app/db --version 2                # bring back a deleted or trimmed version
 
@@ -233,7 +239,7 @@ script is more likely an accident. `ferritor list` fetches every page.
 `SecretsService` in `proto/ferritor/v1/ferritor.proto`: `GetSecret`, `PutSecret`
 (with `expected_version` and `labels`), `DeleteSecret`, `RestoreSecret`,
 `ListSecrets` (with a `labels` filter), `ListVersions`, `GetMetadata`,
-`UpdateLabels`, `GenerateSecret`. Listings are paginated: page size 0 means 100, anything
+`UpdateLabels`, `GenerateSecret`, `DeleteVersion`. Listings are paginated: page size 0 means 100, anything
 above 1000 is capped, and an empty `next_page_token` is the last page. A
 page token is opaque, and can never widen a listing beyond the prefix it
 came from.
@@ -280,7 +286,8 @@ only while its stream is up.
 On the same port as gRPC, sharing TLS, identity, the policy, the audit log
 and the seal rules: `GET`/`PUT`/`DELETE /v1/secrets/{path}`, `POST
 /v1/restore/{path}`, `POST /v1/generate/{path}`, `GET /v1/secrets`
-(listing), `GET /v1/versions/{path}` and `GET`/`PATCH /v1/metadata/{path}`. Values are base64, unknown fields and
+(listing), `GET`/`DELETE /v1/versions/{path}` and `GET`/`PATCH
+/v1/metadata/{path}`. Values are base64, unknown fields and
 query parameters are refused, and errors carry a `code` to match on.
 
 The full reference, with authentication (mutual TLS) and examples in curl,

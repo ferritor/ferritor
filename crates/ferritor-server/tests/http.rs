@@ -1911,7 +1911,7 @@ async fn the_largest_apply_fits_through_both_apis() {
 /// keep in step with both (the test below holds the description to this
 /// list, and this list to the running server; nothing catches a route the
 /// router serves but neither names).
-const ROUTES: [(&str, &str); 16] = [
+const ROUTES: [(&str, &str); 17] = [
     ("GET", "/v1/health"),
     ("GET", "/v1/secrets"),
     ("GET", "/v1/secrets/{path}"),
@@ -1920,6 +1920,7 @@ const ROUTES: [(&str, &str); 16] = [
     ("POST", "/v1/restore/{path}"),
     ("POST", "/v1/generate/{path}"),
     ("GET", "/v1/versions/{path}"),
+    ("DELETE", "/v1/versions/{path}"),
     ("GET", "/v1/metadata/{path}"),
     ("PATCH", "/v1/metadata/{path}"),
     ("GET", "/v1/policies"),
@@ -2562,5 +2563,56 @@ async fn generate_over_the_json_api() {
         error(&unknown),
         (StatusCode::CONFLICT, "unknown_profile".to_owned())
     );
+    env.destroy().await.unwrap();
+}
+
+/// `DELETE /v1/versions/{path}?version=N`: one version, 404 unless live, 400
+/// for version 0 or none; `DELETE /v1/secrets/{path}` still every version.
+#[tokio::test]
+async fn one_version_deleted_over_the_json_api() {
+    let env = Env::plaintext().await.unwrap();
+    let c = Client::Plain;
+    let addr = env.addr;
+    for value in [b"one", b"two"] {
+        c.send(addr, Method::PUT, "/v1/secrets/app/db", put_body(value))
+            .await
+            .unwrap();
+    }
+    let (status, _, _) = c
+        .send(addr, Method::DELETE, "/v1/versions/app/db?version=2", None)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, _, latest) = c
+        .send(addr, Method::GET, "/v1/secrets/app/db", None)
+        .await
+        .unwrap();
+    assert_eq!(latest["version"], 1);
+    let again = c
+        .send(addr, Method::DELETE, "/v1/versions/app/db?version=2", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        error(&again),
+        (StatusCode::NOT_FOUND, "not_found".to_owned())
+    );
+    let zero = c
+        .send(addr, Method::DELETE, "/v1/versions/app/db?version=0", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        error(&zero),
+        (StatusCode::BAD_REQUEST, "invalid_argument".to_owned())
+    );
+    let (status, _, _) = c
+        .send(addr, Method::DELETE, "/v1/secrets/app/db", None)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = c
+        .send(addr, Method::GET, "/v1/secrets/app/db", None)
+        .await
+        .unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
     env.destroy().await.unwrap();
 }

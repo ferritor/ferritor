@@ -159,7 +159,7 @@ labels.
 | `ferritor get` | `PATH`, `--version` | the latest value, or that version's, raw bytes |
 | `ferritor put` | `PATH`, `--expected-version`, `--label KEY=VALUE` (repeatable), `--allow-empty` | store the next version from stdin; `--expected-version` stores only if the latest is still that one (0: only if new); an empty value is refused unless `--allow-empty` |
 | `ferritor generate` | `PATH`, `--profile NAME` (`default`), `--expected-version`, `--label KEY=VALUE` (repeatable) | store the next version with a value the server makes up from a generate profile, as `put` would store it; prints the version, never the value (`get` reads it) ([generated secrets](/guides/secrets#generated-secrets)) |
-| `ferritor delete` | `PATH` | delete every version (restorable within the server's retention) |
+| `ferritor delete` | `PATH`, `--version` | delete every version, or with `--version` only that one (the newest live one left becomes the latest); restorable within the server's retention |
 | `ferritor restore` | `PATH`, `--version` | undo a delete, or bring back a deleted or trimmed version |
 | `ferritor versions` | `PATH` | its history, newest first: metadata only |
 | `ferritor list` | `PREFIX` (everything), `--label KEY=VALUE` (repeatable), `--overdue`, `--older-than <n>d` | the latest version of every secret below a prefix, every page. `--overdue`: only secrets with the rotation flag past the server's `rotation_max_age_days`; with `--older-than 60d`, older than 60 days instead (an age cutoff: the overdue ones included, not the due-soon window of the gauges); `--older-than` alone: any secret that old. With either, each line also gives when its version was created ([rotation](/guides/secrets#listing-by-age)) |

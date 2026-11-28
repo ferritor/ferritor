@@ -433,7 +433,8 @@ async fn a_deleted_secret_can_be_restored() {
             ("succeeded".to_owned(), json!({"version": 2})),
             ("failed".to_owned(), serde_json::Value::Null),
             ("failed".to_owned(), serde_json::Value::Null),
-            ("failed".to_owned(), serde_json::Value::Null),
+            // A restore of a version names it, failed or not.
+            ("failed".to_owned(), json!({"version": 2})),
             ("failed".to_owned(), serde_json::Value::Null),
         ]
     );
@@ -1412,6 +1413,30 @@ async fn grpc_secrets_round_trip_and_status_codes() {
              listing (the same prefix, or the same path)"
         )
     );
+    // One version: 0 refused, one not live NOT_FOUND.
+    assert_eq!(
+        rejection(
+            client
+                .delete_version(pb::DeleteVersionRequest {
+                    path: "app/db".to_owned(),
+                    version: 0,
+                })
+                .await
+        )
+        .map(|(code, _)| code),
+        Some(Code::InvalidArgument)
+    );
+    assert_eq!(
+        rejection(
+            client
+                .delete_version(pb::DeleteVersionRequest {
+                    path: "app/db".to_owned(),
+                    version: 99,
+                })
+                .await
+        ),
+        rejected(Code::NotFound, "version 99 of secret `app/db` not found")
+    );
     client
         .delete_secret(pb::DeleteSecretRequest {
             path: "app/db".to_owned(),
@@ -2238,5 +2263,163 @@ async fn a_generate_with_an_unknown_profile_stores_nothing() {
         env.secrets.metadata(&ANON, "app/x").await,
         Err(SecretsError::NotFound { .. })
     ));
+    env.destroy().await.unwrap();
+}
+
+/// Deleting one version leaves the others; deleting the latest makes the
+/// newest live one left the latest (and listings follow); a version not
+/// live is `VersionNotFound`; a restore brings it back; audited as
+/// `"delete"` with the version.
+#[tokio::test]
+async fn one_version_can_be_deleted() {
+    let env = Env::unsealed().await.unwrap();
+    for value in [&b"one"[..], b"two", b"three"] {
+        env.secrets.put(&ANON, "app/db", value).await.unwrap();
+    }
+    env.secrets
+        .delete_version(&ANON, "app/db", 1)
+        .await
+        .unwrap();
+    assert!(matches!(
+        env.secrets.get(&ANON, "app/db", Some(1)).await,
+        Err(SecretsError::VersionNotFound { version: 1, .. })
+    ));
+    assert_eq!(
+        env.secrets
+            .get(&ANON, "app/db", None)
+            .await
+            .unwrap()
+            .metadata
+            .version,
+        3,
+        "an older one: the latest stays"
+    );
+
+    env.secrets
+        .delete_version(&ANON, "app/db", 3)
+        .await
+        .unwrap();
+    let latest = env.secrets.get(&ANON, "app/db", None).await.unwrap();
+    assert_eq!(
+        (latest.metadata.version, &latest.value[..]),
+        (2, &b"two"[..])
+    );
+    let page = env
+        .secrets
+        .list(&ANON, "app", 0, "", &Labels::new())
+        .await
+        .unwrap();
+    assert_eq!(page.secrets[0].version, 2, "the listing follows");
+
+    // Above what the column holds: never stored, so not found, never an
+    // internal error (for a read and a restore too).
+    let huge = u32::MAX;
+    assert!(matches!(
+        env.secrets.delete_version(&ANON, "app/db", huge).await,
+        Err(SecretsError::VersionNotFound { .. })
+    ));
+    assert!(matches!(
+        env.secrets.get(&ANON, "app/db", Some(huge)).await,
+        Err(SecretsError::VersionNotFound { .. })
+    ));
+    assert!(matches!(
+        env.secrets.restore(&ANON, "app/db", Some(huge)).await,
+        Err(SecretsError::NothingToRestore { .. })
+    ));
+    for gone in [1, 3, 9] {
+        assert!(matches!(
+            env.secrets.delete_version(&ANON, "app/db", gone).await,
+            Err(SecretsError::VersionNotFound { version, .. }) if version == gone
+        ));
+    }
+    env.secrets.restore(&ANON, "app/db", Some(3)).await.unwrap();
+    assert_eq!(
+        env.secrets
+            .get(&ANON, "app/db", None)
+            .await
+            .unwrap()
+            .metadata
+            .version,
+        3
+    );
+
+    // A gap: with 2 deleted, deleting 3 makes 1 the latest, never 2.
+    env.secrets
+        .delete_version(&ANON, "app/db", 2)
+        .await
+        .unwrap();
+    env.secrets
+        .delete_version(&ANON, "app/db", 3)
+        .await
+        .unwrap();
+    env.secrets.restore(&ANON, "app/db", Some(1)).await.unwrap();
+    env.secrets.restore(&ANON, "app/db", Some(3)).await.unwrap();
+    env.secrets
+        .delete_version(&ANON, "app/db", 3)
+        .await
+        .unwrap();
+    assert_eq!(
+        env.secrets
+            .get(&ANON, "app/db", None)
+            .await
+            .unwrap()
+            .metadata
+            .version,
+        1
+    );
+    env.secrets.restore(&ANON, "app/db", Some(2)).await.unwrap();
+    env.secrets.restore(&ANON, "app/db", Some(3)).await.unwrap();
+    env.secrets
+        .delete_version(&ANON, "app/db", 1)
+        .await
+        .unwrap();
+
+    // The last live one: nothing live, but still stored.
+    for version in [2, 3] {
+        env.secrets
+            .delete_version(&ANON, "app/db", version)
+            .await
+            .unwrap();
+    }
+    let metadata = env.secrets.metadata(&ANON, "app/db").await.unwrap();
+    assert_eq!((metadata.current_version, metadata.versions), (None, 3));
+
+    let deletes: Vec<serde_json::Value> = env
+        .audit
+        .lines()
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|entry: &serde_json::Value| {
+            entry["event"] == "outcome"
+                && entry["operation"] == "delete"
+                && entry["result"] == "succeeded"
+        })
+        .map(|entry| entry["details"].clone())
+        .collect();
+    assert_eq!(
+        deletes,
+        [1, 3, 2, 3, 3, 1, 2, 3]
+            .map(|version| json!({"deleted": 1, "version": version}))
+            .to_vec()
+    );
+    // A failed one names its version too.
+    let failed: Vec<serde_json::Value> = env
+        .audit
+        .lines()
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|entry: &serde_json::Value| {
+            entry["event"] == "outcome"
+                && entry["operation"] == "delete"
+                && entry["result"] == "failed"
+        })
+        .map(|entry| entry["details"].clone())
+        .collect();
+    assert_eq!(
+        failed,
+        [u32::MAX, 1, 3, 9]
+            .map(|version| json!({"version": version}))
+            .to_vec()
+    );
     env.destroy().await.unwrap();
 }

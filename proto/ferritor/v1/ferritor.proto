@@ -170,6 +170,14 @@ service SecretsService {
   rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
   rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
   rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+  // Deletes one live version, the others staying as they are (a leaked or
+  // wrong value): soft, restorable within the server's deletion retention,
+  // then purged. Deleting the latest makes the newest live one left the
+  // latest. Needs the delete permission. NOT_FOUND unless that version is
+  // live; INVALID_ARGUMENT for version 0. A call of its own, not a field on
+  // DeleteSecret, so a server without it answers UNIMPLEMENTED rather than
+  // deleting every version.
+  rpc DeleteVersion(DeleteVersionRequest) returns (DeleteVersionResponse);
   // Make a deleted version live again: undo a delete (or a trim under the
   // server's max_versions). Only within the server's deletion retention: a
   // purged version is gone. A write: same permission, same per-path lock
@@ -703,6 +711,15 @@ message DeleteSecretRequest {
 }
 
 message DeleteSecretResponse {}
+
+message DeleteVersionRequest {
+  // A secret path; see SecretsService.
+  string path = 1;
+  // The version to delete, from 1.
+  uint32 version = 2;
+}
+
+message DeleteVersionResponse {}
 
 message RestoreSecretRequest {
   // A secret path; see SecretsService.

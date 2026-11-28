@@ -460,7 +460,9 @@ pub async fn run(cli: &Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Command::Delete { path } => delete(secrets_client(&addr().await?).await?, path, out).await,
+        Command::Delete { path, version } => {
+            delete(secrets_client(&addr().await?).await?, path, *version, out).await
+        }
         Command::Restore { path, version } => {
             restore(secrets_client(&addr().await?).await?, path, *version, out).await
         }
@@ -1302,15 +1304,37 @@ async fn generate(
     Ok(())
 }
 
-async fn delete(mut client: SecretsClient, path: &str, out: &mut impl Write) -> anyhow::Result<()> {
-    answer(
-        client
-            .delete_secret(pb::DeleteSecretRequest {
-                path: path.to_owned(),
-            })
-            .await,
-    )?;
-    writeln!(out, "deleted {path}")?;
+async fn delete(
+    mut client: SecretsClient,
+    path: &str,
+    version: Option<u32>,
+    out: &mut impl Write,
+) -> anyhow::Result<()> {
+    match version {
+        // Its own call: a server without it answers UNIMPLEMENTED (see the
+        // hint) rather than deleting every version.
+        Some(version) => {
+            answer(
+                client
+                    .delete_version(pb::DeleteVersionRequest {
+                        path: path.to_owned(),
+                        version,
+                    })
+                    .await,
+            )?;
+            writeln!(out, "deleted {path} version {version}")?;
+        }
+        None => {
+            answer(
+                client
+                    .delete_secret(pb::DeleteSecretRequest {
+                        path: path.to_owned(),
+                    })
+                    .await,
+            )?;
+            writeln!(out, "deleted {path}")?;
+        }
+    }
     Ok(())
 }
 
@@ -1640,6 +1664,21 @@ pub fn hint(command: &Command, error: &anyhow::Error) -> Option<&'static str> {
              --token-file holds a current token from an issuer in the server's [identity], \
              with its audience, and claims one of its mappings accepts.",
         ),
+        // A server older than this CLI: nothing was done.
+        (
+            Code::Unimplemented,
+            Command::Delete {
+                version: Some(_), ..
+            },
+        ) => Some(
+            "nothing was deleted: the server is older than this CLI and can't delete one \
+             version. Upgrade it, or delete the secret and restore the versions to keep \
+             (`ferritor restore --version`).",
+        ),
+        (Code::Unimplemented, Command::Generate { .. }) => Some(
+            "nothing was stored: the server is older than this CLI and can't generate a value. \
+             Upgrade it, or `ferritor put` a value you made.",
+        ),
         // Refused before anything happened.
         (Code::PermissionDenied, Command::Seal) => Some(
             "this did NOT seal the server: you aren't allowed to. If it must be sealed now, \
@@ -1878,6 +1917,37 @@ mod tests {
         .into()
     }
 
+    /// A server older than the CLI answers UNIMPLEMENTED to the newer
+    /// calls: the hint says nothing was done, never "retry".
+    #[test]
+    fn an_older_server_is_told_apart() {
+        let old = || -> anyhow::Error {
+            ServerError {
+                code: Code::Unimplemented,
+                message: "Operation is not implemented or not supported".to_owned(),
+                cause: None,
+                reason: None,
+                limit: None,
+                retry_after: None,
+            }
+            .into()
+        };
+        let one = Command::Delete {
+            path: "app/db".to_owned(),
+            version: Some(2),
+        };
+        let hinted = hint(&one, &old()).unwrap_or_default();
+        assert!(hinted.starts_with("nothing was deleted"), "{hinted}");
+        let generate = Command::Generate {
+            path: "app/db".to_owned(),
+            profile: None,
+            expected_version: None,
+            labels: Vec::new(),
+        };
+        let hinted = hint(&generate, &old()).unwrap_or_default();
+        assert!(hinted.starts_with("nothing was stored"), "{hinted}");
+    }
+
     fn verify() -> Command {
         Command::Rekey(Rekey::Verify {
             nonce: "n".to_owned(),
@@ -2098,6 +2168,7 @@ mod tests {
         };
         let delete = Command::Delete {
             path: "app/db".to_owned(),
+            version: None,
         };
         for code in [
             Code::Unavailable,
